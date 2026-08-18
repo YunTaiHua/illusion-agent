@@ -1137,6 +1137,11 @@ async def handle_line(
         )
         if result.reset_session:
             bundle.session_id = uuid4().hex[:12]
+            # 清除共享 session_name：reset 后是全新会话，上一会话的重命名名称
+            # 不应被 _update_session_meta 兜底写入新会话 meta.title（Web/Terminal
+            # 共用同一落盘逻辑，这里与 Web 端 _create_session/_set_active_session
+            # 的清除保持一致）
+            bundle.app_state.set(session_name="")
             # 构造新 CheckpointStore（延迟创建，不立即 mkdir/write_index/write_meta）
             # system_prompt 的持久化由 query_engine.submit_message 在第一条消息时负责，
             # index/meta 由 _update_session_meta 在第一条消息后负责。

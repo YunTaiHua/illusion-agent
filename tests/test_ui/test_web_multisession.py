@@ -226,6 +226,60 @@ class TestSessionRegistry:
         assert host._bundle.engine is not fake_engine
 
     @pytest.mark.asyncio
+    async def test_create_session_clears_stale_session_name(self, monkeypatch):
+        """新建会话清除工作区共享 app_state 的 session_name 残留。
+
+        回归：重命名会话后删除，残留名称会污染新会话——新会话首条消息
+        落盘时 _save_session_snapshot 会把它写入新会话的 meta.title，
+        导致新会话继承上一次的会话名称。新建会话必须重置该共享字段。
+        """
+        host = _make_host()
+        # 模拟上一会话重命名残留：共享 app_state 已写入 session_name
+        host._bundle.app_state.get.return_value = MagicMock(
+            session_name="旧会话名称", ui_language="zh-CN"
+        )
+        fake_engine = MagicMock()
+        fake_engine._tool_metadata = {}
+        fake_engine._bg_agent_tracker = MagicMock()
+        fake_engine.current_context_tokens.return_value = 0
+        fake_engine.messages = []
+        monkeypatch.setattr(
+            "illusion.ui.web.ws_host.build_session_engine",
+            lambda *a, **k: fake_engine,
+        )
+        monkeypatch.setattr(
+            "illusion.ui.web.ws_host.build_session_bundle",
+            lambda bundle, sid, engine: MagicMock(
+                engine=engine, session_id=sid, app_state=bundle.app_state, cwd=bundle.cwd
+            ),
+        )
+
+        await host._create_session()
+
+        # 共享 app_state 的 session_name 残留已被清除，不再污染新会话
+        host._bundle.app_state.set.assert_called_once_with(session_name="")
+
+    @pytest.mark.asyncio
+    async def test_set_active_session_clears_stale_session_name(self, monkeypatch):
+        """切换活跃会话清除共享 app_state 的 session_name 残留。
+
+        回归：重命名当前会话后切到"已创建但未输入首条消息"的空会话，
+        残留名称会污染该空会话（首条消息落盘时写入 meta.title）。
+        切换活跃会话必须重置该共享字段。
+        """
+        host = _make_host()
+        session = _make_session(host, "a")
+        # 模拟上一会话重命名残留
+        host._bundle.app_state.get.return_value = MagicMock(
+            session_name="旧会话名称", ui_language="zh-CN"
+        )
+
+        host._set_active_session("a")
+
+        # 切换时同步 session_id 并清除 session_name 残留
+        session.bundle.app_state.set.assert_called_once_with(session_id="a", session_name="")
+
+    @pytest.mark.asyncio
     async def test_dispose_session_removes_runtime(self, monkeypatch):
         """释放会话运行时：取消行任务并关闭引擎。"""
         host = _make_host()

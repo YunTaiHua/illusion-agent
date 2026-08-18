@@ -387,7 +387,7 @@ export default function App() {
    */
   const handleCustomSubmit = useCallback((value: string) => {
     if (customInputModal) {
-      // rename 走 web_query 通道（携带目标 session_id）
+      // rename 走 web_query 通道（携带目标 session_id，路由到目标会话所在工作区）
       if (customInputModal.command === 'rename') {
         const sid = customInputModal.targetSessionId;
         session.setBusyTrue();
@@ -395,6 +395,7 @@ export default function App() {
           type: 'web_query',
           command: 'rename',
           args: sid ? `${sid} ${value}` : value,
+          session_id: sid ?? undefined,
           request_id: `q-${Date.now()}`,
         });
         setCustomInputModal(null);
@@ -423,6 +424,10 @@ export default function App() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   // 删除弹窗退出动画阶段：关闭时先播放淡出，动画结束后再真正卸载
   const [deleteModalClosing, setDeleteModalClosing] = useState(false);
+  // 单个会话删除确认（侧边栏会话项操作菜单触发）：存储待删除的会话 ID，
+  // 用自定义 React 模态替代原生 window.confirm——原生 confirm 在 Electron
+  // 桌面壳中会阻塞渲染进程并遗留焦点异常，导致后续输入框无法聚焦
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
   // Agent 创建向导显示状态（/agent create 或 /agent new 触发）
   const [showAgentWizard, setShowAgentWizard] = useState(false);
@@ -595,6 +600,67 @@ export default function App() {
     setDeleteModalOpen(true);
   }, []);
 
+  /**
+   * 处理重命名单个会话（侧边栏会话项操作菜单触发）
+   *
+   * 直接打开文本输入模态框（复用 /rename 通道），携带目标会话 ID，
+   * 提交后由 handleCustomSubmit 的 rename 分支发送 web_query。
+   *
+   * @param sid - 会话 ID
+   */
+  const handleRenameSession = useCallback((sid: string) => {
+    setActiveMenu(null); // 收起输入框/工具栏下拉，避免遮挡
+    setCustomInputModal({
+      prompt: t(lang, 'rename_enter_name'),
+      command: 'rename',
+      targetSessionId: sid,
+    });
+  }, [lang]);
+
+  /**
+   * 处理删除单个会话（侧边栏会话项操作菜单触发）
+   *
+   * 打开自定义确认模态；确认后直接删除目标会话。若删除的是当前会话，
+   * 后端原子化新建空会话，与删除弹窗的批量删除路径保持一致。
+   * 注意：这里必须用 React 模态而非原生 window.confirm——原生 confirm
+   * 在 Electron 桌面壳中会阻塞渲染进程，关闭后遗留焦点异常，导致
+   * 跳转欢迎界面后输入框无法聚焦输入（最小化/最大化才恢复）。
+   *
+   * @param sid - 会话 ID
+   */
+  const handleDeleteOneSession = useCallback((sid: string) => {
+    setDeleteConfirm(sid);
+  }, []);
+
+  /** 确认删除单个会话（自定义确认模态的确定按钮） */
+  const handleConfirmDeleteOne = useCallback(() => {
+    if (!deleteConfirm) return;
+    setDeleteConfirm(null);
+    // 运行中的会话后端会跳过删除（保持任务进行），若本地先行移除会导致
+    // 会话"短暂消失又出现"，用户误以为删除失败——此处直接提示并中止
+    if (session.sessions.some((s) => s.value === deleteConfirm && s.busy)) {
+      showToast(t(lang, 'delete_session_busy'), 'info');
+      return;
+    }
+    setRewindDraft(null); // 删除会话（可能新建空会话）清空持久化回退草稿
+    session.deleteSessions([deleteConfirm]);
+  }, [deleteConfirm, session.sessions, session.deleteSessions, showToast, lang]);
+
+  /** 取消删除单个会话（自定义确认模态的取消/遮罩点击） */
+  const handleCancelDeleteOne = useCallback(() => {
+    setDeleteConfirm(null);
+  }, []);
+
+  // 删除确认模态键盘支持：Escape 取消（对齐 CustomInputModal 的键盘交互）
+  useEffect(() => {
+    if (!deleteConfirm) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') handleCancelDeleteOne();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [deleteConfirm, handleCancelDeleteOne]);
+
   /** 触发删除弹窗退出动画（真正卸载由 handleDeleteModalAnimationEnd 完成） */
   const requestDeleteModalClose = useCallback(() => {
     setDeleteModalClosing(true);
@@ -750,6 +816,8 @@ export default function App() {
         onNewSession={handleNewSession} onSelectSession={handleSelectSession}
         onListSessions={handleListSessions}
         onDeleteSessions={handleDeleteSessions}
+        onRenameSession={handleRenameSession}
+        onDeleteSession={handleDeleteOneSession}
         collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
         width={sidebarWidth} restoringSessionId={session.restoringSessionId}
         onOpenSettings={() => { setSetupInitialTab('settings'); setShowSetupForm(true); }} />
@@ -890,6 +958,32 @@ export default function App() {
             <div className="px-6 py-4 border-t border-border-light flex justify-end">
               <button onClick={() => setRewindConfirm(null)} className="px-4 py-2 text-sm text-content-secondary glass-option-hover rounded-lg transition-colors cursor-pointer border border-white/40">
                 {t(lang, 'cancel')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 单个会话删除确认（侧边栏会话项操作菜单触发）：
+          自定义 React 模态替代原生 window.confirm，避免 Electron 桌面壳中
+          原生对话框关闭后遗留的焦点异常导致后续输入框无法聚焦 */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/35 backdrop-blur-md animate-fade-in" onClick={handleCancelDeleteOne} />
+          <div className="relative bg-surface-card rounded-2xl border border-border-light shadow-card w-[380px] flex flex-col animate-scale-in modal-origin-center">
+            <div className="px-6 py-4 border-b border-border-light">
+              <h3 className="text-lg font-semibold text-content-primary">{t(lang, 'delete_session')}</h3>
+            </div>
+            <div className="px-6 py-4">
+              <p className="text-sm text-content-secondary leading-relaxed">{t(lang, 'confirm_delete_session')}</p>
+            </div>
+            <div className="px-6 py-4 border-t border-border-light flex justify-end gap-2">
+              <button onClick={handleCancelDeleteOne} className="px-4 py-2 text-sm text-content-secondary glass-option-hover rounded-lg transition-colors cursor-pointer border border-white/40">
+                {t(lang, 'cancel')}
+              </button>
+              <button onClick={handleConfirmDeleteOne} autoFocus
+                className="px-4 py-2 text-sm text-white bg-danger hover:bg-danger-hover rounded-lg transition-colors cursor-pointer">
+                {t(lang, 'confirm_delete')}
               </button>
             </div>
           </div>

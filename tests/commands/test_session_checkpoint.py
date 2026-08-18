@@ -176,3 +176,42 @@ def test_submit_message_no_file_history_when_session_id_empty(tmp_path: Path) ->
     source = inspect.getsource(QueryEngine.submit_message)
     assert "uuid.uuid4" not in source
     assert "or uuid" not in source
+
+
+@pytest.mark.asyncio
+async def test_update_session_meta_title_not_polluted_by_stale_session_name(tmp_path: Path) -> None:
+    """新会话首条消息落盘时，已清除的 session_name 不会污染 meta.title。
+
+    回归：删除会话后新会话继承上一次重命名名称的问题，根因是
+    _update_session_meta 的兜底 `title = existing.get("title") or app_state.session_name`。
+    Terminal/Web 端在新建/切换会话时清除共享 session_name 后，新会话落盘 title 应为空。
+    """
+    from unittest.mock import MagicMock
+
+    from illusion.engine.messages import ConversationMessage
+    from illusion.services.session_storage import read_meta, session_dir_for
+    from illusion.ui.runtime import _update_session_meta
+
+    cwd = str(tmp_path)
+    sid = "abc123def456"
+    store = MagicMock()
+    store.session_dir = session_dir_for(cwd, sid)
+    store.session_id = sid
+    engine = MagicMock()
+    engine.checkpoint_store = store
+    engine.messages = [ConversationMessage.from_user_text("hello")]
+    engine.goal_manager = None
+
+    bundle = MagicMock()
+    bundle.engine = engine
+    bundle.cwd = cwd
+    # 模拟已在新建/切换会话时清除：session_name 为空
+    bundle.app_state.get.return_value = MagicMock(session_name="", ui_language="zh-CN")
+    bundle.current_settings.return_value = MagicMock(active_model_name="claude-test")
+
+    _update_session_meta(bundle)
+
+    meta = read_meta(cwd, sid)
+    assert meta is not None
+    assert not meta.get("title")
+    assert meta.get("summary") == "hello"

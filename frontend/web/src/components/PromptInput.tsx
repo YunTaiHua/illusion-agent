@@ -404,6 +404,9 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
           placeholder={connected ? t(lang, 'input_placeholder') : t(lang, 'disconnected')}
           rows={1}
           disabled={!connected}
+          // 欢迎界面挂载时自动聚焦：删除会话/新建会话后输入框重新挂载，
+          // 显式聚焦避免焦点悬空导致用户无法直接输入
+          autoFocus={welcomeVisible}
           className="flex-1 resize-none bg-transparent text-base text-content-primary placeholder-content-disabled min-h-[36px] focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed leading-[1.8] py-2 pl-3 pr-2 [scrollbar-gutter:stable]"
           style={{ height: 'auto', maxHeight: `${MAX_TEXTAREA_HEIGHT}px`, overflowY: 'auto' }}
         />

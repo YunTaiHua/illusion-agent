@@ -892,6 +892,24 @@ class WebApiDispatcher:
         request_id = request.request_id or ""
         session_id = session.session_id
 
+        # rename 目标会话可能已从内存淘汰或位于其他工作区：_resolve_session 会
+        # 回退到活跃会话，导致 rename_handler 用错目录读 meta（报"会话不存在"）。
+        # 按 sid 定位目标所属工作区并改用该 bundle 执行（read_meta 依赖 context.cwd）。
+        if (
+            command == "rename"
+            and request.session_id
+            and session.session_id != request.session_id
+        ):
+            located = host._locate_session_workspace(request.session_id)
+            if located:
+                try:
+                    ws_bundle = host._workspace_bundle_for(located) or await host._get_or_build_bundle(located)
+                except Exception:
+                    log.exception("重命名定位工作区失败: cwd=%s", located)
+                else:
+                    bundle = ws_bundle
+                    session_id = request.session_id
+
         # rewind/context/max-tokens 需要多步选择，仍走 select_request 机制（保留旧 _handle_select_command）
         if command in ("rewind", "context", "max-tokens"):
             await host._handle_select_command(command, session)
@@ -927,7 +945,8 @@ class WebApiDispatcher:
             return
 
         # 执行型/查询型（compact/export/init 及无参查询）：复用 registry handler
-        result = await _run_command_via_registry(f"/{command} {args}".strip(), session.bundle)
+        # （rename 跨工作区时 bundle 已切换为目标会话所属工作区）
+        result = await _run_command_via_registry(f"/{command} {args}".strip(), bundle)
         if result is None:
             # 已通过 select_request 或其他机制处理
             return

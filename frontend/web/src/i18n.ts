@@ -84,6 +84,7 @@ const ZH: Record<string, string> = {
   welcome_need_workspace: '请先选择目录',
   resume_session: '会话列表',
   delete_session: '删除会话',
+  delete_session_busy: '会话正在运行中，无法删除',
   language: '语言',
   current: '当前',
   permission_request: '权限请求',
@@ -145,6 +146,8 @@ const ZH: Record<string, string> = {
   // rename 相关
   rename_select_session: '选择要重命名的会话',
   rename_enter_name: '输入新的会话名称',
+  rename_session: '重命名',
+  session_actions: '会话操作',
   // max-tokens 自定义输入相关
   maxTokensTitle: '最大令牌数',
   maxTokensCustomPrompt: '输入自定义最大令牌数:',
@@ -519,6 +522,7 @@ const EN: Record<string, string> = {
   welcome_need_workspace: 'Select a directory first',
   resume_session: 'Sessions',
   delete_session: 'Delete Session',
+  delete_session_busy: 'Session is running, cannot delete',
   language: 'Language',
   current: 'Current',
   permission_request: 'Permission Request',
@@ -580,6 +584,8 @@ const EN: Record<string, string> = {
   // rename
   rename_select_session: 'Select a session to rename',
   rename_enter_name: 'Enter new session name',
+  rename_session: 'Rename',
+  session_actions: 'Session actions',
   // max-tokens custom input
   maxTokensTitle: 'Max Tokens',
   maxTokensCustomPrompt: 'Enter custom max tokens:',

@@ -527,7 +527,9 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
 
   /** 发送请求（自动附带当前活跃会话 ID） */
   const sendRequest = useCallback((payload: Record<string, unknown>): void => {
-    const sid = activeSessionIdRef.current;
+    // 显式 session_id 支持：侧边栏操作目标会话可能不是活跃会话
+    // （如跨目录重命名），此时必须以目标会话 ID 路由到后端正确的工作区
+    const sid = (payload.session_id as string | undefined) ?? activeSessionIdRef.current;
     sendRaw(sid ? { ...payload, session_id: sid } : payload);
   }, [sendRaw]);
 

@@ -7,13 +7,15 @@
  * - 会话列表按目录空间分组显示（多目录并发）
  * - 运行中/等待输入会话的视觉区分
  * - 删除会话功能
+ * - 会话项操作菜单（重命名/删除单个会话，三个点按钮触发）
  * - 连接状态显示
  * - 底部设置入口（含当前工作区指示）
  *
  * @module Sidebar
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { t, type UiLanguage } from '../i18n';
 import type { WebWorkspaceItem } from '../types/protocol';
 import { FolderClosedIcon, FolderOpenIcon, NewChatIcon } from './icons';
@@ -72,6 +74,10 @@ interface SidebarProps {
   onListSessions: () => void;
   /** 删除会话回调 */
   onDeleteSessions: () => void;
+  /** 重命名单个会话回调（会话项操作菜单触发，参数为会话 ID） */
+  onRenameSession: (sessionId: string) => void;
+  /** 删除单个会话回调（会话项操作菜单触发，参数为会话 ID） */
+  onDeleteSession: (sessionId: string) => void;
   /** 是否折叠 */
   collapsed: boolean;
   /** 折叠/展开切换回调 */
@@ -92,21 +98,67 @@ function basenameOf(path: string): string {
 }
 
 /**
- * 会话列表项（带活跃指示条与运行状态视觉）
+ * 会话列表项（带活跃指示条、运行状态视觉与操作菜单）
+ *
+ * 每个会话项右侧带"三个点"操作按钮：点击弹出重命名/删除菜单。
+ * 浮层通过 Portal 渲染到 body 并固定定位，避免被滚动容器裁剪。
  */
-function SessionItem({ session, isRestoring, isActive, onSelect }: {
+function SessionItem({ session, isRestoring, isActive, lang, onSelect, onRename, onDelete }: {
   session: SidebarSession;
   isRestoring: boolean;
   isActive: boolean;
+  lang: UiLanguage;
   onSelect: (id: string, cwd?: string) => void;
+  onRename: (id: string) => void;
+  onDelete: (id: string) => void;
 }) {
+  // 操作菜单开关与浮层锚点位置（基于三个点按钮的视口坐标）
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+  const dotsRef = useRef<HTMLButtonElement>(null);
+
+  /** 操作菜单预估高度（重命名 + 删除两项，含 padding），用于视口底部翻转判断 */
+  const MENU_EST_HEIGHT = 90;
+
+  /** 打开操作菜单：以三个点按钮为锚点计算浮层位置；靠近视口底部时向上翻转 */
+  const openMenu = () => {
+    const el = dotsRef.current;
+    if (el) {
+      const rect = el.getBoundingClientRect();
+      const below = rect.bottom + 4;
+      const top = below + MENU_EST_HEIGHT > window.innerHeight
+        ? Math.max(8, rect.top - MENU_EST_HEIGHT - 4)
+        : below;
+      setMenuPos({ top, left: rect.right });
+    }
+    setMenuOpen(true);
+  };
+
+  // 菜单打开期间：滚动会话列表关闭（固定定位浮层不跟随滚动）、
+  // Escape 关闭、窗口 resize 关闭（固定定位位置失效）
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = () => setMenuOpen(false);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close();
+    };
+    document.addEventListener('scroll', close, true);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('resize', close);
+    return () => {
+      document.removeEventListener('scroll', close, true);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', close);
+    };
+  }, [menuOpen]);
+
   // 状态样式：
   // - 所有会话项预留 1px 透明边框（状态切换无布局跳动）
   // - 活跃（active）：主色淡背景 + 主色细边框（不再加重字重）
   // - 运行中（busy）：细边框 + 一小段主色系光束沿边框流动（BorderBeam 风格）
-  // - 无图标：缩进表达所属目录关系
+  // - 无图标：缩进表达所属目录关系；pr-8 预留右侧操作按钮位，悬停显隐无跳动
   const className = [
-    'session-item relative w-full text-left pl-9 pr-3 py-2.5 rounded-lg text-sm transition-colors cursor-pointer flex items-center gap-2 animate-fade',
+    'session-item relative w-full text-left pl-9 pr-8 py-2.5 rounded-lg text-sm transition-colors cursor-pointer flex items-center gap-2 animate-fade',
     isActive
       ? 'session-active text-content-primary'
       : 'text-content-secondary glass-option-hover hover:text-content-primary',
@@ -114,34 +166,89 @@ function SessionItem({ session, isRestoring, isActive, onSelect }: {
   ].filter(Boolean).join(' ');
 
   return (
-    <button
-      onClick={() => onSelect(session.value, session.cwd || undefined)}
-      className={className}
-      title={session.label}
-    >
-      {/* 运行中/恢复中 spinner：绝对定位占用缩进空白，文字位置保持不动。
-          运行中（busy）复用恢复中的动画样式 */}
-      {(isRestoring || session.busy) && (
-        <span className="absolute left-3 top-1/2 -translate-y-1/2 w-4 flex items-center justify-center">
-          <svg className="animate-spin w-3.5 h-3.5 text-primary" viewBox="0 0 24 24" fill="none">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-          </svg>
-        </span>
+    <div className="relative group">
+      <button
+        onClick={() => onSelect(session.value, session.cwd || undefined)}
+        className={className}
+        title={session.label}
+      >
+        {/* 运行中/恢复中 spinner：绝对定位占用缩进空白，文字位置保持不动。
+            运行中（busy）复用恢复中的动画样式 */}
+        {(isRestoring || session.busy) && (
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 w-4 flex items-center justify-center">
+            <svg className="animate-spin w-3.5 h-3.5 text-primary" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+          </span>
+        )}
+        <span className="truncate flex-1">{session.label}</span>
+      </button>
+      {/* 会话操作按钮（三个点）：点击弹出重命名/删除菜单；独立于会话选择，阻止冒泡 */}
+      <button
+        ref={dotsRef}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (menuOpen) setMenuOpen(false);
+          else openMenu();
+        }}
+        aria-label={t(lang, 'session_actions')}
+        title={t(lang, 'session_actions')}
+        className="absolute right-1.5 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center rounded-md text-content-disabled hover:text-content-primary glass-option-hover transition-colors cursor-pointer opacity-70 hover:opacity-100"
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+          <circle cx="8" cy="3.5" r="1.5" />
+          <circle cx="8" cy="8" r="1.5" />
+          <circle cx="8" cy="12.5" r="1.5" />
+        </svg>
+      </button>
+      {menuOpen && menuPos && createPortal(
+        <>
+          {/* 点击遮罩关闭 */}
+          <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
+          <div
+            className="fixed z-50 glass-surface rounded-xl overflow-hidden min-w-[150px] py-1 animate-scale-in shadow-card"
+            style={{ top: menuPos.top, left: menuPos.left - 150 }}
+          >
+            <button
+              onClick={() => { setMenuOpen(false); onRename(session.value); }}
+              className="w-full text-left px-4 py-2 text-sm text-content-primary glass-option-hover hover:text-content-primary transition-colors cursor-pointer flex items-center gap-2.5"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+              </svg>
+              {t(lang, 'rename_session')}
+            </button>
+            <button
+              onClick={() => { setMenuOpen(false); onDelete(session.value); }}
+              className="w-full text-left px-4 py-2 text-sm text-danger glass-option-hover transition-colors cursor-pointer flex items-center gap-2.5"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="3 6 5 6 21 6" />
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                <line x1="10" y1="11" x2="10" y2="17" />
+                <line x1="14" y1="11" x2="14" y2="17" />
+              </svg>
+              {t(lang, 'delete_session')}
+            </button>
+          </div>
+        </>,
+        document.body,
       )}
-      <span className="truncate flex-1">{session.label}</span>
-    </button>
+    </div>
   );
 }
 
 /** 单个目录分组（组头 + 组内会话列表，支持折叠与前 5 条展开） */
-function WorkspaceGroupSection({ group, lang, collapsedByDefault, restoringSessionId, onSelectSession, onNewSession }: {
+function WorkspaceGroupSection({ group, lang, collapsedByDefault, restoringSessionId, onSelectSession, onNewSession, onRenameSession, onDeleteSession }: {
   group: WorkspaceGroup;
   lang: UiLanguage;
   collapsedByDefault: boolean;
   restoringSessionId?: string | null;
   onSelectSession: (id: string, cwd?: string) => void;
   onNewSession: (cwd?: string) => void;
+  onRenameSession: (id: string) => void;
+  onDeleteSession: (id: string) => void;
 }) {
   const [expanded, setExpanded] = useState(!collapsedByDefault);
   const [listExpanded, setListExpanded] = useState(false);
@@ -194,7 +301,10 @@ function WorkspaceGroupSection({ group, lang, collapsedByDefault, restoringSessi
               session={s}
               isRestoring={restoringSessionId === s.value}
               isActive={s.active}
+              lang={lang}
               onSelect={onSelectSession}
+              onRename={onRenameSession}
+              onDelete={onDeleteSession}
             />
           ))}
           {group.sessions.length > 5 && (
@@ -215,7 +325,7 @@ function WorkspaceGroupSection({ group, lang, collapsedByDefault, restoringSessi
 }
 
 export default function Sidebar({
-  lang, connected, sessions, workspaces, activeWorkspaceCwd, onNewSession, onSelectSession, onListSessions, onDeleteSessions, collapsed, onToggle, width = 280, restoringSessionId, onOpenSettings,
+  lang, connected, sessions, workspaces, activeWorkspaceCwd, onNewSession, onSelectSession, onListSessions, onDeleteSessions, onRenameSession, onDeleteSession, collapsed, onToggle, width = 280, restoringSessionId, onOpenSettings,
 }: SidebarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -325,6 +435,8 @@ export default function Sidebar({
                 restoringSessionId={restoringSessionId}
                 onSelectSession={onSelectSession}
                 onNewSession={onNewSession}
+                onRenameSession={onRenameSession}
+                onDeleteSession={onDeleteSession}
               />
             ))}
           </div>

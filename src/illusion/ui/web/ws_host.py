@@ -2151,15 +2151,17 @@ class WebBackendHost:
     def _set_active_session(self, session_id: str) -> None:
         """切换活跃会话（仅改指针，不触碰任何引擎状态）。"""
         self._active_session_id = session_id
-        # 同步会话所在 bundle 的 app_state session_id（状态快照来源 bundle）
+        # 同步会话所在 bundle 的 app_state session_id（状态快照来源 bundle）；
+        # 同时清除共享 session_name：切换后上一会话的重命名名称不再属于当前会话，
+        # 残留会在 _update_session_meta 兜底时污染"已创建但未输入首条消息"的空会话
         session = self._sessions.get(session_id)
         if session is not None:
-            session.bundle.app_state.set(session_id=session_id)
+            session.bundle.app_state.set(session_id=session_id, session_name="")
             state = self._workspaces.get(_cwd_key(session.bundle.cwd))
             if state is not None:
                 state.last_used = time.time()
         elif self._bundle is not None:
-            self._bundle.app_state.set(session_id=session_id)
+            self._bundle.app_state.set(session_id=session_id, session_name="")
 
     async def _create_session(self, cwd: str | None = None) -> SessionRuntime:
         """创建一个全新的会话运行时（独立引擎 + 独立 CheckpointStore）。
@@ -2186,6 +2188,12 @@ class WebBackendHost:
             bundle=build_session_bundle(ws_bundle, session_id, engine),
             workspace_cwd=ws_bundle.cwd,
         )
+        # 清除工作区共享 app_state 中残留的重命名名称：session_name 是
+        # 工作区级共享字段，被删除/已切换会话的重命名残留值会在新会话
+        # 首条消息落盘时被写入新会话的 meta.title（_save_session_snapshot
+        # 的兜底逻辑），导致新会话继承上一次的会话名称。新建会话即清除。
+        if ws_bundle.app_state.get().session_name:
+            ws_bundle.app_state.set(session_name="")
         self._sessions[session_id] = session
         self._maybe_evict_sessions()
         return session
