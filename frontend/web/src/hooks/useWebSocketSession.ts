@@ -240,7 +240,7 @@ export interface WebSocketSessionState {
   setModelSwitching: (v: boolean) => void;
   // === 多会话管理 ===
   /** 会话列表（含 busy/phase/active/cwd 状态，供侧边栏按目录分组渲染） */
-  sessions: { value: string; label: string; busy: boolean; phase: string; active: boolean; cwd: string }[];
+  sessions: { value: string; label: string; busy: boolean; phase: string; active: boolean; cwd: string; createdAt: number; turnCount: number; summary: string; title: string }[];
   /** 注册的工作区列表（默认目录恒在首位，web_workspaces 事件驱动） */
   workspaces: WebWorkspaceItem[];
   /** 当前资源快照所属的工作区目录（null 表示尚未收到） */
@@ -387,7 +387,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   // === 会话视图状态 ===
   const [sessionViews, setSessionViews] = useState<Record<string, SessionViewState>>({});
   const [sessionList, setSessionList] = useState<
-    { value: string; label: string; busy: boolean; phase: string; active: boolean; cwd: string }[]
+    { value: string; label: string; busy: boolean; phase: string; active: boolean; cwd: string; createdAt: number; turnCount: number; summary: string; title: string }[]
   >([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   // === 工作区（目录空间）状态 ===
@@ -1176,6 +1176,10 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
           phase: o.phase ?? 'idle',
           active: o.active === true,
           cwd: String(o.cwd ?? ''),
+          createdAt: Number(o.created_at ?? 0),
+          turnCount: Number(o.turn_count ?? 0),
+          summary: String(o.summary ?? ''),
+          title: String(o.title ?? ''),
         }));
         setSessionList(items);
         // 同步各会话视图的静态信息：busy 不覆盖本地实时状态

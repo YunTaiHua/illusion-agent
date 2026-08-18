@@ -36,6 +36,14 @@ export interface SidebarSession {
   phase: string;
   /** 是否为活跃会话（左侧渐变指示条） */
   active: boolean;
+  /** 创建时间戳（秒，来自后端 created_at；用于仅显示日期） */
+  createdAt: number;
+  /** 轮次数量（来自后端 turn_count） */
+  turnCount: number;
+  /** 会话摘要（自动生成，标题缺失时兜底展示） */
+  summary: string;
+  /** 自定义会话名称（存在时优先展示） */
+  title: string;
 }
 
 /** 目录分组渲染结构 */
@@ -95,6 +103,29 @@ function basenameOf(path: string): string {
   if (!path) return '';
   const parts = path.split(/[\\/]/).filter(Boolean);
   return parts[parts.length - 1] ?? path;
+}
+
+/**
+ * 会话创建时间短格式：始终保持 YYYY/M/D（空间充裕，直接带上年份）。
+ * createdAt 为秒级时间戳。
+ */
+function formatShortDate(createdAtSeconds: number): string {
+  if (!createdAtSeconds) return '';
+  const d = new Date(createdAtSeconds * 1000);
+  if (Number.isNaN(d.getTime())) return '';
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+/**
+ * 会话创建时间的具体时刻（HH:MM），紧随日期之后展示；createdAt 为秒级时间戳。
+ */
+function formatClock(createdAtSeconds: number): string {
+  if (!createdAtSeconds) return '';
+  const d = new Date(createdAtSeconds * 1000);
+  if (Number.isNaN(d.getTime())) return '';
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
 }
 
 /**
@@ -158,18 +189,27 @@ function SessionItem({ session, isRestoring, isActive, lang, onSelect, onRename,
   // - 运行中（busy）：细边框 + 一小段主色系光束沿边框流动（BorderBeam 风格）
   // - 无图标：缩进表达所属目录关系；pr-8 预留右侧操作按钮位，悬停显隐无跳动
   const className = [
-    'session-item relative w-full text-left pl-9 pr-8 py-2.5 rounded-lg text-sm transition-colors cursor-pointer flex items-center gap-2 animate-fade',
+    'session-item relative w-full text-left pl-9 pr-8 py-2 rounded-lg text-sm transition-colors cursor-pointer flex items-center gap-2 animate-fade',
     isActive
       ? 'session-active text-content-primary'
       : 'text-content-secondary glass-option-hover hover:text-content-primary',
     session.busy ? 'session-running' : '',
   ].filter(Boolean).join(' ');
 
+  // 显示标题：优先自定义名称，其次会话摘要，兜底原标签（含具体时间，通常不触发）
+  const displayTitle = session.title || session.summary || session.label;
+  // 元信息：日期 + 具体时间 + 轮数；dateTimeStr 合并日期与时刻（同一时间源，同空同现）
+  const dateStr = formatShortDate(session.createdAt);
+  const timeStr = formatClock(session.createdAt);
+  const dateTimeStr = [dateStr, timeStr].filter(Boolean).join(' ');
+  const roundsStr = t(lang, 'session_rounds').replace('{count}', String(session.turnCount));
+
   return (
     <div className="relative group">
       <button
         onClick={() => onSelect(session.value, session.cwd || undefined)}
         className={className}
+        // 悬浮提示保留原有完整信息（含具体时间），与可见的"仅日期"互为补充
         title={session.label}
       >
         {/* 运行中/恢复中 spinner：绝对定位占用缩进空白，文字位置保持不动。
@@ -182,9 +222,18 @@ function SessionItem({ session, isRestoring, isActive, lang, onSelect, onRename,
             </svg>
           </span>
         )}
-        <span className="truncate flex-1">{session.label}</span>
+        {/* 两行布局：首行标题截断占据剩余宽度；次行元信息（日期 时间 轮数）不截断固定靠右，
+            不与标题争抢宽度，右侧 pr-8 为操作按钮预留位 */}
+        <span className="flex-1 min-w-0 flex flex-col leading-tight">
+          <span className="truncate mt-px">{displayTitle}</span>
+          <span className="flex items-center gap-2 text-[11px] text-content-disabled mt-0.5">
+            {dateTimeStr && <span className="shrink-0 tabular-nums">{dateTimeStr}</span>}
+            <span className="shrink-0 tabular-nums">{roundsStr}</span>
+          </span>
+        </span>
       </button>
-      {/* 会话操作按钮（三个点）：点击弹出重命名/删除菜单；独立于会话选择，阻止冒泡 */}
+      {/* 会话操作按钮（三个点）：默认隐藏，悬停会话项时显现（与目录项图标一致）；
+          点击弹出重命名/删除菜单；独立于会话选择，阻止冒泡 */}
       <button
         ref={dotsRef}
         onClick={(e) => {
@@ -194,7 +243,7 @@ function SessionItem({ session, isRestoring, isActive, lang, onSelect, onRename,
         }}
         aria-label={t(lang, 'session_actions')}
         title={t(lang, 'session_actions')}
-        className="absolute right-1.5 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center rounded-md text-content-disabled hover:text-content-primary glass-option-hover transition-colors cursor-pointer opacity-70 hover:opacity-100"
+        className={`absolute right-1.5 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center rounded-md text-content-disabled hover:text-content-primary glass-option-hover transition cursor-pointer ${menuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
       >
         <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
           <circle cx="8" cy="3.5" r="1.5" />

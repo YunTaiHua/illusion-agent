@@ -148,6 +148,7 @@ const ZH: Record<string, string> = {
   rename_enter_name: '输入新的会话名称',
   rename_session: '重命名',
   session_actions: '会话操作',
+  session_rounds: '{count} 轮',
   // max-tokens 自定义输入相关
   maxTokensTitle: '最大令牌数',
   maxTokensCustomPrompt: '输入自定义最大令牌数:',
@@ -586,6 +587,7 @@ const EN: Record<string, string> = {
   rename_enter_name: 'Enter new session name',
   rename_session: 'Rename',
   session_actions: 'Session actions',
+  session_rounds: '{count} turns',
   // max-tokens custom input
   maxTokensTitle: 'Max Tokens',
   maxTokensCustomPrompt: 'Enter custom max tokens:',
