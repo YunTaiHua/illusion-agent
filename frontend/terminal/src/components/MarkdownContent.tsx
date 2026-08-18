@@ -25,7 +25,7 @@ import {MarkdownTable} from './MarkdownTable.js';
 import type {ThemeConfig} from '../theme/ThemeContext.js';
 import {useTheme} from '../theme/ThemeContext.js';
 import {useTerminalSize} from '../hooks/useTerminalSize.js';
-import {stringWidth, padAligned, wrapText} from '../utils/markdown.js';
+import {stringWidth, padAligned, wrapText, isUnifiedDiff} from '../utils/markdown.js';
 
 /** 行内代码颜色 */
 const INLINE_CODE_COLOR = '#b1b9f9';
@@ -298,21 +298,25 @@ function tokensToElements(
 				}
 
 				// Code lines: fully closed borders, wrap long lines only
+				// 仅当代码块为统一 diff 时才按 + / - / @@ 着色，避免把普通代码/列表误染
+				const isDiff = isUnifiedDiff(codeLines);
 				if (codeWidth > 0) {
 					for (let li = 0; li < codeLines.length; li++) {
 						const line = codeLines[li] || ' ';
 						const lineNum = numWidth > 1
 							? String(li + 1).padStart(numWidth, '0')
 							: String(li + 1);
-						const trimmed = line.trimStart();
 
 						let color = theme.colors.subtle;
-						if (trimmed.startsWith('+') && !trimmed.startsWith('+++')) {
-							color = theme.colors.success;
-						} else if (trimmed.startsWith('-') && !trimmed.startsWith('---')) {
-							color = theme.colors.error;
-						} else if (trimmed.startsWith('@@')) {
-							color = theme.colors.info;
+						if (isDiff) {
+							const trimmed = line.trimStart();
+							if (trimmed.startsWith('+') && !trimmed.startsWith('+++')) {
+								color = theme.colors.success;
+							} else if (trimmed.startsWith('-') && !trimmed.startsWith('---')) {
+								color = theme.colors.error;
+							} else if (trimmed.startsWith('@@')) {
+								color = theme.colors.info;
+							}
 						}
 
 						const wrapped = wrapText(line, codeWidth, {hard: true});

@@ -149,3 +149,36 @@ export function wrapForPrefix(text: string, terminalWidth: number, prefix: strin
 	}
 	return wrapped.length > 0 ? wrapped : [''];
 }
+
+/**
+ * 判断一组文本行是否为统一 diff（unified diff）格式
+ *
+ * 仅当出现 diff 结构标记时才判定为 diff：
+ * - `@@ -x,y +x,y @@` 块头
+ * - `--- a/...` 与 `+++ b/...` 文件头成对出现
+ *
+ * 用于限制 diff 着色范围，避免把普通文本（如无序列表 `- item`、bash 输出、
+ * 普通代码块）误渲染为红/绿色。
+ *
+ * @param lines - 文本行数组
+ * @returns 是否为统一 diff 格式
+ */
+export function isUnifiedDiff(lines: string[]): boolean {
+	let hasFrom = false;
+	let hasTo = false;
+	for (const line of lines) {
+		const trimmed = line.trimStart();
+		if (/^@@\s+-\d+/.test(trimmed)) {
+			return true;
+		}
+		if (trimmed.startsWith('--- ')) {
+			hasFrom = true;
+		} else if (trimmed.startsWith('+++ ')) {
+			hasTo = true;
+		}
+		if (hasFrom && hasTo) {
+			return true;
+		}
+	}
+	return false;
+}

@@ -398,6 +398,58 @@ function MessageBubble({ item, toolInputMap, lang = 'zh-CN', onRewind, onRegener
 export default memo(MessageBubble);
 
 /**
+ * 判断文本是否为统一 diff（unified diff）格式
+ *
+ * 仅当出现 diff 结构标记（@@ 块头、--- 与 +++ 文件头成对）时才判定为 diff，
+ * 避免把普通文本（如无序列表、bash 输出）误染成红/绿色。
+ */
+function isUnifiedDiffText(text: string): boolean {
+  const lines = text.split(/\r?\n/);
+  let hasFrom = false;
+  let hasTo = false;
+  for (const line of lines) {
+    const trimmed = line.trimStart();
+    if (/^@@\s+-\d+/.test(trimmed)) return true;
+    if (trimmed.startsWith('--- ')) hasFrom = true;
+    else if (trimmed.startsWith('+++ ')) hasTo = true;
+    if (hasFrom && hasTo) return true;
+  }
+  return false;
+}
+
+/**
+ * 统一 diff 文本渲染组件
+ *
+ * 按行渲染并为 diff 行着色（与 terminal 端行为一致）：
+ * - `+` 新增：绿色
+ * - `-` 删除：红色
+ * - `@@` 块头：蓝色
+ * 上下文行、`---`/`+++` 文件头保持默认色。
+ */
+function DiffLines({ text }: { text: string }) {
+  return (
+    <>
+      {text.split(/\r?\n/).map((line, i) => {
+        const trimmed = line.trimStart();
+        let color = '';
+        if (trimmed.startsWith('+') && !trimmed.startsWith('+++')) {
+          color = 'text-diff-add';
+        } else if (trimmed.startsWith('-') && !trimmed.startsWith('---')) {
+          color = 'text-diff-del';
+        } else if (trimmed.startsWith('@@')) {
+          color = 'text-diff-hunk';
+        }
+        return (
+          <div key={i} className={`whitespace-pre-wrap break-words ${color}`}>
+            {line || '\u00A0'}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+/**
  * 工具结果气泡组件
  *
  * 显示工具执行结果，支持展开/折叠查看详情。
@@ -405,6 +457,9 @@ export default memo(MessageBubble);
  * 完成态默认折叠（标题行 + 摘要）；展开后先显示执行期间保留的流式进度
  * （agent 子任务的思考过程——仅供人查看，不进入 LLM 上下文），再显示
  * 工具结果正文。流式阶段由 PendingToolBubble 展示同一份进度，完成后无缝衔接。
+ *
+ * 结果正文对 edit 等统一 diff 文本按新增/删除行着色；含 ANSI 转义码时
+ * 仍走 renderAnsi，避免冲突。
  *
  * memo 化：历史工具结果的 text/name/toolInput 引用稳定时跳过重渲染。
  *
@@ -423,6 +478,9 @@ const ToolResultBubble = memo(function ToolResultBubble({ name, text, isError, t
   // 任务完成后直接用最终结果替换：流式阶段已累积展示思考过程，
   // 完成后仅以最终结果（text）作为正文，不再保留/判断思考过程
   const hasContent = !!text;
+  // 统一 diff 且无 ANSI 转义码时按行着色渲染；错误结果与 terminal 一致整行走错误色，
+  // 不启用 diff 着色（text 可能为空，需先守卫避免崩溃）
+  const isDiff = !!text && !isError && !text.includes('\x1b[') && isUnifiedDiffText(text);
 
   return (
     <div data-tool-row className="py-1.5">
@@ -443,7 +501,7 @@ const ToolResultBubble = memo(function ToolResultBubble({ name, text, isError, t
       {open && hasContent && (
         <div className={`mt-1 ml-3.5 p-2.5 font-mono text-xs leading-relaxed max-h-96 overflow-y-auto scrollbar-hidden rounded-lg select-text ${isError ? 'text-danger bg-danger/5 border border-danger/20' : 'text-content-primary bg-surface-card-alt border border-border-light'}`}>
           {text && (
-            <div className="whitespace-pre-wrap break-words">{renderAnsi(text)}</div>
+            isDiff ? <DiffLines text={text} /> : <div className="whitespace-pre-wrap break-words">{renderAnsi(text)}</div>
           )}
         </div>
       )}

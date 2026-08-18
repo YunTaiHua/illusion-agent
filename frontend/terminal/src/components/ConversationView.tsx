@@ -23,7 +23,7 @@ import type {PendingToolCall} from '../types.js';
 import type {ThemeConfig} from '../theme/ThemeContext.js';
 import {useTheme} from '../theme/ThemeContext.js';
 import type {TranscriptItem} from '../types.js';
-import {stringWidth, wrapText} from '../utils/markdown.js';
+import {stringWidth, wrapText, isUnifiedDiff} from '../utils/markdown.js';
 import {renderAssistantText, stripThinkTags, extractThinkContent, hasThinkTags, stripToolCallArtifacts, mergeReasoning} from '../utils/thinking.js';
 import {MarkdownContent} from './MarkdownContent.js';
 import {WelcomeBanner} from './WelcomeBanner.js';
@@ -448,22 +448,26 @@ function ToolResultBlock({
 	const continuationPrefix = '      ';
 	const firstWidth = Math.max(MIN_WRAP_WIDTH, terminalWidth - stringWidth(firstPrefix) - WIDTH_SAFETY_EXTRA);
 	const continuationWidth = Math.max(MIN_WRAP_WIDTH, terminalWidth - stringWidth(continuationPrefix) - WIDTH_SAFETY_EXTRA);
+	// 仅当结果为统一 diff 时才按 + / - / @@ 着色，避免把无序列表等普通文本误染
+	const isDiff = isUnifiedDiff(lines);
 
 	return (
 		<Box flexDirection="column">
 			{display.map((line, i) => {
 				let lineColor: string | undefined = undefined;
 				let lineDim = !isError;
-				const trimmedLine = line.trimStart();
-				if (trimmedLine.startsWith('+') && !trimmedLine.startsWith('+++')) {
-					lineColor = theme.colors.success;
-					lineDim = false;
-				} else if (trimmedLine.startsWith('-') && !trimmedLine.startsWith('---')) {
-					lineColor = theme.colors.error;
-					lineDim = false;
-				} else if (trimmedLine.startsWith('@@')) {
-					lineColor = theme.colors.info;
-					lineDim = false;
+				if (isDiff) {
+					const trimmedLine = line.trimStart();
+					if (trimmedLine.startsWith('+') && !trimmedLine.startsWith('+++')) {
+						lineColor = theme.colors.success;
+						lineDim = false;
+					} else if (trimmedLine.startsWith('-') && !trimmedLine.startsWith('---')) {
+						lineColor = theme.colors.error;
+						lineDim = false;
+					} else if (trimmedLine.startsWith('@@')) {
+						lineColor = theme.colors.info;
+						lineDim = false;
+					}
 				}
 				const width = i === 0 ? firstWidth : continuationWidth;
 				const displayLine = truncateToDisplayWidth(line, width);

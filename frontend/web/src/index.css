@@ -331,11 +331,28 @@ pre code.hljs,
   overflow-x: auto;
 }
 
-/* diff 新增/删除：只保留字体颜色，去掉整块背景色 */
+/* diff 新增/删除：只保留字体颜色（语义变量，明暗自适应），去掉整块背景色 */
 .hljs-addition,
 .hljs-deletion {
   background-color: transparent;
 }
+.hljs-addition {
+  color: var(--success);
+}
+.hljs-deletion {
+  color: var(--error);
+}
+/* diff 代码块块头（@@ / +++ / ---）颜色与工具结果 diff 一致（diff 语言别名 patch 同样覆盖） */
+.prose pre code.language-diff .hljs-meta,
+.prose pre code.language-patch .hljs-meta {
+  color: var(--info-color);
+}
+
+/* 工具结果 diff 行着色（web 端 edit 工具结果按新增/删除/块头着色，
+   颜色走语义变量，自动适配明暗主题） */
+.text-diff-add { color: var(--success); }
+.text-diff-del { color: var(--error); }
+.text-diff-hunk { color: var(--info-color); }
 
 /* ========== 暗色模式代码高亮覆盖 ==========
    基础主题是 highlight.js 的 github.css（浅色配色，如 #0550ae 深蓝），
@@ -374,11 +391,6 @@ pre code.hljs,
   color: #c9d1d9;
 }
 
-/* diff 新增：绿色（与字符串区分，语义化） */
-:root.dark .hljs-addition {
-  color: #7ee787;
-}
-
 /* 标题 / 函数名 / 类名：淡紫 */
 :root.dark .hljs-title,
 :root.dark .hljs-title.function_,
@@ -415,11 +427,6 @@ pre code.hljs,
 :root.dark .hljs-link,
 :root.dark .hljs-bullet {
   color: #79c0ff;
-}
-
-/* diff / 删除：浅红 */
-:root.dark .hljs-deletion {
-  color: #ffdcd7;
 }
 
 :root.dark .hljs-emphasis {
