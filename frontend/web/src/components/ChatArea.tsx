@@ -157,8 +157,8 @@ const TaskCompleteSection = memo(function TaskCompleteSection({ streaming, lang,
           </svg>
         </button>
       </h3>
-      {/* 标题下方的分隔直线 */}
-      <div className="border-t border-border-light" />
+      {/* 标题下方的分隔直线：浅色下 --border-medium 比 border-border-light 清晰可见 */}
+      <div className="border-t border-border-medium" />
       {/* 展开/折叠微动画（简洁 fade：纯透明度 150ms） */}
       {hasContent && open && (
         <div className="animate-fade">
@@ -521,7 +521,7 @@ export default function ChatArea({
 
   return (
     <div className="flex-1 min-h-0 relative flex flex-col">
-      <div className="flex-1 min-h-0 overflow-y-auto" ref={scrollRef} onScroll={handleScroll} style={{ scrollbarGutter: 'stable' }}>
+      <div className="flex-1 min-h-0 overflow-y-auto mr-1.5" ref={scrollRef} onScroll={handleScroll} style={{ scrollbarGutter: 'stable' }}>
       {!connected && !hasContent && (
         <div className="flex items-center justify-center h-full text-content-disabled text-sm font-medium">
           {t(lang, 'connecting')}

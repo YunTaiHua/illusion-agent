@@ -297,12 +297,12 @@ body {
   border-top: 0.5px solid var(--border-light);
 }
 .prose pre::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 .prose pre::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb, var(--border-medium));
-  border-radius: 4px;
+  border-radius: 3px;
 }
 
 /* <pre> 内的 <code> — 继承容器背景，只负责排版 */
@@ -626,8 +626,8 @@ pre code.hljs,
 
 /* ========== 滚动条样式 ========== */
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
@@ -636,7 +636,7 @@ pre code.hljs,
 
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb, var(--border-medium));
-  border-radius: 5px;
+  border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {

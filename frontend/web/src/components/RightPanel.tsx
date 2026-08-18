@@ -391,8 +391,8 @@ function formatTokens(n: number): string {
  * - 主题按钮：循环切换浅色/深色/跟随系统
  * - 上下文占比：以百分数展示上下文窗口使用量（点击展开右栏查看明细）
  *
- * 定位：absolute top，right 对齐滚动条左侧并留出 6px 间距（全局滚动条宽 10px），
- * 避免被滚动条遮挡、也不随内容变化产生 UI 抖动（对应 scrollbarGutter: stable 预留位置）。
+ * 定位：absolute top，right 对齐主视图滚动条左侧并留出间距
+ * （主视图滚动条经 margin 内移 6px，按钮组右移相应避开，避免被遮挡）。
  *
  * @param props.lang - 当前 UI 语言
  * @param props.status - 后端状态（读 context_window / context_tokens）
@@ -423,7 +423,7 @@ export function RightPanelControls({
     : t(lang, 'context_window');
 
   return (
-    <div className="absolute top-3 right-[16px] z-20 flex flex-col items-center gap-2 select-none">
+    <div className="absolute top-3 right-[20px] z-20 flex flex-col items-center gap-2 select-none">
       {/* 展开/收起右栏 */}
       <button
         onClick={onToggle}

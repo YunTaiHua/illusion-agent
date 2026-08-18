@@ -785,7 +785,7 @@ export default function App() {
           </div>
         )}
         {/* 顶部右侧按钮组（展开右栏/主题/上下文占比）：仅右栏折叠态且非欢迎/非恢复中显示；
-            展开后不再显示，控制回归右栏面板头部；right=[16px] 对齐滚动条左侧留出间距 */}
+            展开后不再显示，控制回归右栏面板头部；right=[20px] 避开内移后的主视图滚动条 */}
         {rightPanelCollapsed && !welcomeVisible && !session.restoringSessionId && (
           <RightPanelControls lang={lang} status={session.status} onToggle={toggleRightPanel} />
         )}

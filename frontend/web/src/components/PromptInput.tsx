@@ -11,7 +11,7 @@
  * @module PromptInput
  */
 
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { t, type UiLanguage } from '../i18n';
 import type { WebWorkspaceItem } from '../types/protocol';
 
@@ -30,6 +30,9 @@ export const WEB_COMMANDS = [
   '/agent', '/turns', '/output-style', '/language', '/max-tokens', '/rename',
   '/goal',
 ];
+
+/** 输入框最大高度（px）：内容超过后输入框内部滚动，不再继续撑大 */
+const MAX_TEXTAREA_HEIGHT = 240;
 
 /**
  * 内联选项接口
@@ -139,16 +142,13 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
   useImperativeHandle(ref, () => ({
     setDraft: (text: string) => {
       setValue(text);
-      // 聚焦输入框并移到末尾，同时按内容自适应高度（onInput 不会因程序化赋值触发）
+      // 回填草稿：聚焦、光标移到末尾，按内容撑高并滚动到底部
       requestAnimationFrame(() => {
         const ta = textareaRef.current;
         if (ta) {
           ta.focus();
-          const len = text.length;
-          ta.setSelectionRange(len, len);
-          ta.style.height = 'auto';
-          ta.style.height = Math.min(ta.scrollHeight, 140) + 'px';
-          // 光标置于末尾：回填长草稿时滚动到底部，避免光标超出可视区
+          ta.setSelectionRange(text.length, text.length);
+          // 高度由 useLayoutEffect 按 value 自动撑高，此处只需保证视口在底部
           ta.scrollTop = ta.scrollHeight;
         }
       });
@@ -163,11 +163,12 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
   // 此时禁用发送，避免在未指定工作区时发空会话消息（handleKeyDown/发送按钮共用）
   const noWorkspaceOnWelcome = welcomeVisible === true && !activeCwd;
 
-  // 消息发送后输入框清空时，重置高度（onInput 不会因程序化赋值触发）
-  useEffect(() => {
-    if (value === '' && textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-    }
+  // 输入内容（含回填/清空等程序化赋值）变化时，按 scrollHeight 自动撑高并限高
+  useLayoutEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = `${Math.min(ta.scrollHeight, MAX_TEXTAREA_HEIGHT)}px`;
   }, [value]);
 
   // 点击外部关闭内联选项
@@ -303,10 +304,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
           setValue(newValue);
           requestAnimationFrame(() => {
             target.selectionStart = target.selectionEnd = start + 1;
-            target.style.height = 'auto';
-            target.style.height = Math.min(target.scrollHeight, 140) + 'px';
-            // 插入换行后光标可能超出可视区（textarea 内部滚动）：光标在末尾附近时滚到底部，
-            // 避免用户手动滚动才能看到新行
+            // 高度由 useLayoutEffect 撑高；光标在末尾附近时滚到底部，便于看到新行
             if (start + 1 >= newValue.length - 1) {
               target.scrollTop = target.scrollHeight;
             }
@@ -406,13 +404,8 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
           placeholder={connected ? t(lang, 'input_placeholder') : t(lang, 'disconnected')}
           rows={1}
           disabled={!connected}
-          className="flex-1 resize-none bg-transparent text-base text-content-primary placeholder-content-disabled min-h-[36px] max-h-[140px] focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed leading-[1.8] py-2 pl-3 pr-2 scrollbar-hidden"
-          style={{ height: 'auto', overflowY: 'auto' }}
-          onInput={(e) => {
-            const el = e.currentTarget;
-            el.style.height = 'auto';
-            el.style.height = Math.min(el.scrollHeight, 140) + 'px';
-          }}
+          className="flex-1 resize-none bg-transparent text-base text-content-primary placeholder-content-disabled min-h-[36px] focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed leading-[1.8] py-2 pl-3 pr-2 [scrollbar-gutter:stable]"
+          style={{ height: 'auto', maxHeight: `${MAX_TEXTAREA_HEIGHT}px`, overflowY: 'auto' }}
         />
       </div>
 
