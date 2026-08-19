@@ -9,9 +9,6 @@ import pytest
 import illusion.commands.helpers as helpers_module
 from illusion.commands.registry import CommandContext, create_default_command_registry
 from illusion.commands.types import CommandResult
-from illusion.config.paths import (
-    get_feedback_log_path,
-)
 from illusion.config.settings import Settings, load_settings, save_settings
 from illusion.engine.messages import ConversationMessage, TextBlock
 from illusion.engine.query_engine import QueryEngine
@@ -338,7 +335,7 @@ async def test_version_context_and_share_commands(tmp_path: Path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_auth_feedback_and_project_context_commands(tmp_path: Path, monkeypatch):
+async def test_auth_and_project_context_commands(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("ILLUSION_CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.setenv("ILLUSION_DATA_DIR", str(tmp_path / "data"))
     registry = create_default_command_registry()
@@ -348,11 +345,6 @@ async def test_auth_feedback_and_project_context_commands(tmp_path: Path, monkey
     login_result = await login_command.handler(login_args, context)
     assert "Stored API key" in login_result.message or "API Key 已保存" in login_result.message
     assert load_settings().api_key == "sk-test-123456"
-
-    feedback_command, feedback_args = registry.lookup("/feedback this workflow feels good")
-    feedback_result = await feedback_command.handler(feedback_args, context)
-    assert "Saved feedback" in feedback_result.message
-    assert "this workflow feels good" in get_feedback_log_path().read_text(encoding="utf-8")
 
     logout_command, logout_args = registry.lookup("/logout")
     logout_result = await logout_command.handler(logout_args, context)

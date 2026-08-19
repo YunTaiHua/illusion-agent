@@ -14,7 +14,7 @@
     - agent.py: /agent
     - settings.py: /config, /language, /output-style, /privacy-settings, /doctor, /thinking, /effort, /max-tokens, /turns, /permissions
     - auth.py: /login, /logout
-    - misc.py: /exit, /version, /copy, /export, /share, /feedback, /help, /hooks, /reload-plugins, /skills, /continue
+    - misc.py: /exit, /version, /copy, /export, /share, /help, /hooks, /reload-plugins, /skills, /continue
     - mcp.py: /mcp
     - plugin.py: /plugin
     - model.py: /model
@@ -194,7 +194,6 @@ def create_default_command_registry() -> CommandRegistry:
         copy_handler,
         exit_handler,
         export_handler,
-        feedback_handler,
         hooks_handler,
         make_help_handler,
         reload_plugins_handler,
@@ -261,7 +260,6 @@ def create_default_command_registry() -> CommandRegistry:
     registry.register(SlashCommand("agent", "View completed agent summary or create a new agent", agent_handler, usage="/agent [list|create|<task_id>]"))
     registry.register(SlashCommand("login", "Show auth status or store an API key", login_handler))
     registry.register(SlashCommand("logout", "Clear the stored API key", logout_handler))
-    registry.register(SlashCommand("feedback", "Save CLI feedback to the local feedback log", feedback_handler))
     registry.register(SlashCommand("skills", "List or show available skills", skills_handler, usage="/skills [name|number]"))
     registry.register(SlashCommand("config", "Show or update configuration", config_handler))
     registry.register(SlashCommand("mcp", "Show MCP status", mcp_handler))

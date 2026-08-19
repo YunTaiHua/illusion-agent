@@ -2,7 +2,7 @@
 杂项斜杠命令
 ============
 
-/exit, /version, /copy, /export, /share, /feedback,
+/exit, /version, /copy, /export, /share,
 /help, /hooks, /reload-plugins, /skills, /continue
 """
 
@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -18,18 +17,10 @@ import httpx
 from illusion import __version__
 from illusion.commands.helpers import copy_to_clipboard, last_message_text
 from illusion.commands.types import CommandContext, CommandResult
-from illusion.config.paths import get_feedback_log_path
 from illusion.config.settings import load_settings
 from illusion.plugins.loader import load_plugins
 from illusion.services import export_session_markdown
 from illusion.skills.loader import load_skill_registry
-from illusion.utils.log_cleanup import cleanup_old_files
-
-# 反馈日志保留天数（用户主动反馈，保留期比一般日志更长）
-_FEEDBACK_LOG_TTL_DAYS = 30
-# 反馈日志体积兜底阈值（10MB）：feedback 追加写入会持续刷新 mtime，
-# 仅按年龄清理永不触发，需叠加体积阈值避免无限增长
-_FEEDBACK_LOG_MAX_SIZE_BYTES = 10 * 1024 * 1024
 
 
 async def exit_handler(_: str, context: CommandContext) -> CommandResult:
@@ -65,27 +56,6 @@ async def share_handler(_: str, context: CommandContext) -> CommandResult:
     """创建可分享的转录快照"""
     path = export_session_markdown(cwd=context.cwd, messages=context.engine.messages)
     return CommandResult(message=f"Created shareable transcript snapshot at {path}")
-
-
-async def feedback_handler(args: str, context: CommandContext) -> CommandResult:
-    """保存 CLI 反馈"""
-    del context
-    path = get_feedback_log_path()
-    if not args.strip():
-        return CommandResult(message=f"Feedback log: {path}\nUsage: /feedback TEXT")
-    # 写入前清理超龄/超大的反馈日志（统一走 log_cleanup 工具）。
-    # feedback 追加写入会持续刷新 mtime，故叠加体积阈值兜底，
-    # 避免单个 feedback.log 无限增长。
-    cleanup_old_files(
-        path.parent,
-        path.name,
-        max_age_days=_FEEDBACK_LOG_TTL_DAYS,
-        max_size_bytes=_FEEDBACK_LOG_MAX_SIZE_BYTES,
-    )
-    timestamp = datetime.now(UTC).isoformat()
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(f"[{timestamp}] {args.strip()}\n")
-    return CommandResult(message=f"Saved feedback to {path}")
 
 
 def make_help_handler(registry: Any) -> Any:

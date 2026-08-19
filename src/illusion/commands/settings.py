@@ -12,7 +12,6 @@ from illusion.commands.helpers import coerce_setting_value
 from illusion.commands.types import CommandContext, CommandResult
 from illusion.config.paths import (
     get_config_dir,
-    get_feedback_log_path,
     get_project_config_dir,
 )
 from illusion.config.settings import Settings, load_settings, save_settings
@@ -107,7 +106,6 @@ async def privacy_settings_handler(_: str, context: CommandContext) -> CommandRe
         f"- user_config_dir: {get_config_dir()}",
         f"- project_config_dir: {get_project_config_dir(context.cwd)}",
         f"- session_dir: {session_dir}",
-        f"- feedback_log: {get_feedback_log_path()}",
         f"- api_base_url: {settings.base_url or '(default Anthropic-compatible endpoint)'}",
         "- network: enabled only for API endpoint and explicit web/MCP calls",
         "- storage: local files under ~/.illusion and project .illusion",

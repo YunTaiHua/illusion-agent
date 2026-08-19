@@ -577,7 +577,6 @@ COMMAND_DESCRIPTIONS_ZH: dict[str, str] = {
     "init": "初始化项目 IllusionAgent 文件",
     "login": "查看认证状态或保存 API Key",
     "logout": "清除已保存 API Key",
-    "feedback": "保存 CLI 反馈到本地日志",
     "skills": "列出或显示可用技能",
     "config": "显示或更新配置",
     "max-tokens": "显示或更新最大输出令牌数",
@@ -647,8 +646,6 @@ _COMMAND_EXACT: dict[str, str] = {
     # 认证
     "Stored API key in ~/.illusion/settings.json": "API Key 已保存到 ~/.illusion/settings.json",
     "Cleared stored API key.": "已清除已保存 API Key。",
-    # 反馈
-    "Usage: /feedback TEXT": "用法：/feedback 文本",
     # 计划审批
     "Plan approved. Starting implementation.": "计划已批准，开始实施。",
     "User rejected the plan.": "用户拒绝了该计划。",
@@ -797,8 +794,6 @@ _COMMAND_SUBSTITUTIONS: list[tuple[str, str | Callable[[re.Match[str]], str]]] =
     (r"^Saved issue context to (.+)$", r"已保存 issue 上下文到 \1"),
     (r"^No PR comments context\. File path: (.+)$", r"无 PR 评论上下文。文件路径：\1"),
     (r"^Added PR comment to (.+)$", r"已添加 PR 评论到 \1"),
-    # 反馈
-    (r"^Saved feedback to (.+)$", r"已保存反馈到 \1"),
     # 初始化
     (r"^Initialized project files:$", r"已初始化项目文件："),
     (r"^\*\*Illusion Agent project initialization complete\.\*\*$", r"✨ **Illusion Agent 项目初始化完成**"),
@@ -871,7 +866,6 @@ _COMMAND_SUBSTITUTIONS: list[tuple[str, str | Callable[[re.Match[str]], str]]] =
     (r"^- user_config_dir: (.+)$", r"- 用户配置目录：\1"),
     (r"^- project_config_dir: (.+)$", r"- 项目配置目录：\1"),
     (r"^- session_dir: (.+)$", r"- 会话目录：\1"),
-    (r"^- feedback_log: (.+)$", r"- 反馈日志：\1"),
     (r"^- api_base_url: (.+)$", r"- API 基础 URL：\1"),
     # 沙箱
     (r"^Sandbox status: (.+)$", r"沙箱状态：\1"),

@@ -14,11 +14,9 @@ IllusionAgent 配置和数据目录路径解析模块
     - get_logs_dir: 获取日志目录
     - get_sessions_dir: 获取会话存储目录
     - get_tasks_dir: 获取后台任务输出目录
-    - get_feedback_dir: 获取反馈存储目录
     - get_project_config_dir: 获取项目级配置目录
     - get_cron_dir: 获取 cron 数据目录
     - get_cron_registry_path: 获取 cron 注册表文件路径
-    - get_feedback_log_path: 获取反馈日志文件路径
     - get_mcp_log_path: 获取 MCP 服务器日志文件路径
 
 使用示例：
@@ -188,31 +186,6 @@ def get_tasks_dir() -> Path:
         tasks_dir = tasks_root
     tasks_dir.mkdir(parents=True, exist_ok=True)
     return tasks_dir
-
-
-def get_feedback_dir() -> Path:
-    """返回反馈存储目录
-    
-    用于存储用户反馈相关的数据文件。
-    
-    Returns:
-        Path: 反馈目录路径
-    """
-    feedback_dir = get_data_dir() / "feedback"
-    feedback_dir.mkdir(parents=True, exist_ok=True)
-    return feedback_dir
-
-
-def get_feedback_log_path() -> Path:
-    """返回反馈日志文件路径
-
-    位于统一日志目录（~/.illusion/logs/）下，便于 log_cleanup 工具
-    统一清理管理，避免反馈日志散落在 data 目录中无人维护。
-
-    Returns:
-        Path: 反馈日志文件路径
-    """
-    return get_logs_dir() / "feedback.log"
 
 
 def get_mcp_log_path(server_name: str) -> Path:
