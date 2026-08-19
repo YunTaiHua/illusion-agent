@@ -26,8 +26,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sys
 from contextlib import AsyncExitStack
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
 import httpx2
@@ -53,6 +53,12 @@ if TYPE_CHECKING:
     from typing import Self
 
 logger = logging.getLogger(__name__)
+
+# MCP 服务器 stderr 日志保留天数
+_MCP_LOG_TTL_DAYS = 7
+# MCP 服务器 stderr 日志体积兜底阈值（10MB）：MCP 子进程持续写 stderr
+# 会刷新 mtime，仅按年龄清理永不触发，需叠加体积阈值避免无限增长
+_MCP_LOG_MAX_SIZE_BYTES = 10 * 1024 * 1024
 
 
 class McpClientManager:
@@ -392,17 +398,30 @@ class McpClientManager:
         """
         stack = AsyncExitStack()
         try:
-            # 确定 stderr 输出目标：如果配置了 log_file 则重定向到文件
-            errlog = sys.stderr
+            # 确定 stderr 输出目标：默认重定向到统一日志目录下的文件，
+            # 若用户配置了 log_file 则使用用户指定路径
             if config.log_file:
-                from pathlib import Path
                 log_path = Path(config.log_file)
-                # mkdir + open 是阻塞操作，通过 to_thread 在工作线程中执行
-                def _open_log_file(p: Path) -> TextIO:
-                    p.parent.mkdir(parents=True, exist_ok=True)
-                    return open(p, "a", encoding="utf-8")
-                errlog = await asyncio.to_thread(_open_log_file, log_path)
-                stack.callback(errlog.close)
+            else:
+                from illusion.config.paths import get_mcp_log_path
+                log_path = get_mcp_log_path(name)
+            # 先清理超龄/超大的旧 MCP 日志（统一走 log_cleanup 工具）。
+            # MCP 子进程持续写 stderr 会刷新 mtime，故叠加体积阈值兜底。
+            # 仅对默认日志目录下的 mcp_*.log 做批量清理；用户自定义路径
+            # 只清理该单文件，避免误删用户目录下的其他文件。
+            from illusion.utils.log_cleanup import cleanup_old_files
+            cleanup_old_files(
+                log_path.parent,
+                "mcp_*.log" if config.log_file is None else log_path.name,
+                max_age_days=_MCP_LOG_TTL_DAYS,
+                max_size_bytes=_MCP_LOG_MAX_SIZE_BYTES,
+            )
+            # mkdir + open 是阻塞操作，通过 to_thread 在工作线程中执行
+            def _open_log_file(p: Path) -> TextIO:
+                p.parent.mkdir(parents=True, exist_ok=True)
+                return open(p, "a", encoding="utf-8")
+            errlog = await asyncio.to_thread(_open_log_file, log_path)
+            stack.callback(errlog.close)
 
             # 创建 STDIO 客户端连接
             read_stream, write_stream = await stack.enter_async_context(

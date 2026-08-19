@@ -19,6 +19,7 @@ IllusionAgent 配置和数据目录路径解析模块
     - get_cron_dir: 获取 cron 数据目录
     - get_cron_registry_path: 获取 cron 注册表文件路径
     - get_feedback_log_path: 获取反馈日志文件路径
+    - get_mcp_log_path: 获取 MCP 服务器日志文件路径
 
 使用示例：
     >>> from illusion.config.paths import get_config_dir, get_data_dir
@@ -204,11 +205,31 @@ def get_feedback_dir() -> Path:
 
 def get_feedback_log_path() -> Path:
     """返回反馈日志文件路径
-    
+
+    位于统一日志目录（~/.illusion/logs/）下，便于 log_cleanup 工具
+    统一清理管理，避免反馈日志散落在 data 目录中无人维护。
+
     Returns:
         Path: 反馈日志文件路径
     """
-    return get_feedback_dir() / "feedback.log"
+    return get_logs_dir() / "feedback.log"
+
+
+def get_mcp_log_path(server_name: str) -> Path:
+    """返回 MCP 服务器 stderr 日志文件路径
+
+    位于统一日志目录（~/.illusion/logs/）下，便于 log_cleanup 工具
+    统一清理管理。server_name 会被规范化为安全的文件名组件，
+    避免用户配置的服务器名包含路径分隔符等特殊字符。
+
+    Args:
+        server_name: MCP 服务器名称（settings.json 中 mcpServers 的 key）
+
+    Returns:
+        Path: MCP 日志文件路径（形如 ``~/.illusion/logs/mcp_{safe_name}.log``）
+    """
+    safe_name = _sanitize_path_component(server_name)
+    return get_logs_dir() / f"mcp_{safe_name}.log"
 
 
 def get_cron_dir() -> Path:

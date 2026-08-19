@@ -24,6 +24,12 @@ logger = logging.getLogger(__name__)  # 日志器
 # 渠道守护进程看门狗退避：runner 异常退出后自动重启的间隔
 SUPERVISOR_BACKOFF_SECONDS = (5.0, 10.0, 30.0)
 
+# 渠道守护进程日志保留天数
+_SERVE_LOG_TTL_DAYS = 7
+# 渠道守护进程日志体积兜底阈值（10MB）：RotatingFileHandler 已限制单文件
+# 10MB × 5 备份约 60MB，此阈值用于兜底清理孤儿滚动备份
+_SERVE_LOG_MAX_SIZE_BYTES = 10 * 1024 * 1024
+
 # 模块级 runner 注册表：name -> {runner, task, stop_event}
 # 支持运行时动态启停单渠道 runner（通过 IPC start_channel/stop_channel 消息）
 _runner_registry: dict[str, dict[str, Any]] = {}
@@ -89,7 +95,7 @@ def run_channel_serve() -> None:
     连接归零时自动退出。
     """
     from illusion.config.i18n import t
-    from illusion.config.paths import get_channels_data_dir
+    from illusion.config.paths import get_channels_data_dir, get_logs_dir
 
     cfg = load_channels_config()
     settings = _load_settings_safely()
@@ -106,7 +112,19 @@ def run_channel_serve() -> None:
     # （见 channels/__init__.py 的 DEVNULL 说明），日志统一由本 handler 落盘。
     # 轮转策略：单文件最大 10MB，保留 5 个备份（总计约 60MB），避免无限增长
     from logging.handlers import RotatingFileHandler
-    log_path = get_channels_data_dir() / "serve.log"
+
+    from illusion.utils.log_cleanup import cleanup_old_files
+    # 先清理超龄/超大的旧渠道守护进程日志（顺序在创建 handler 之前：
+    # Windows 上被打开的文件无法删除，若 handler 先打开文件则清理会失败）。
+    # glob 用 "channel_serve.log*" 以一并覆盖 RotatingFileHandler 的滚动备份
+    # （channel_serve.log.1/.2/.3/.4/.5），并叠加体积阈值兜底。
+    cleanup_old_files(
+        get_logs_dir(),
+        "channel_serve.log*",
+        max_age_days=_SERVE_LOG_TTL_DAYS,
+        max_size_bytes=_SERVE_LOG_MAX_SIZE_BYTES,
+    )
+    log_path = get_logs_dir() / "channel_serve.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)

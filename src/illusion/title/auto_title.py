@@ -55,7 +55,7 @@ _TITLE_LOG_NAME = "title"  # 对应 ~/.illusion/logs/title.log
 _LOG_MAX_BYTES = 5 * 1024 * 1024  # 单文件上限 5MB
 _LOG_BACKUP_COUNT = 3  # 滚动备份数
 _LOG_TTL_DAYS = 7  # 日志保留天数
-_LOG_MAX_SIZE_BYTES = _LOG_MAX_BYTES * 10
+_LOG_MAX_SIZE_BYTES = 10 * 1024 * 1024  # 体积兜底阈值 10MB
 
 _activity_logger: logging.Logger | None = None
 

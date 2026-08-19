@@ -153,7 +153,7 @@ def maybe_spawn_channel_daemon(
         return None, ref
 
     # spawn 子进程。stdout/stderr 重定向到 DEVNULL，避免与守护进程内部的
-    # RotatingFileHandler（写 serve.log）形成"双写者"：父进程若把 stdout 指向
+    # RotatingFileHandler（写 channel_serve.log）形成"双写者"：父进程若把 stdout 指向
     # 同一日志文件，子进程会持有一个绕过轮转的 fd，导致 Windows 上旧的滚动
     # 备份被永久锁定且无法删除、轮转也可能因覆盖被锁文件而失败。
     # 日志统一由守护进程内的 RotatingFileHandler 落盘（裁剪见 serve.py）。

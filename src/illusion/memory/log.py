@@ -34,7 +34,7 @@ _LOG_TTL_DAYS = 7  # 记忆活动日志保留天数
 # 年龄清理（mtime 超 TTL）对"持续写入、mtime 不断刷新"的活动文件永不触发，
 # 故额外按单文件体积兜底：任一文件（活动文件或滚动备份）达到该阈值即删除，
 # 防止异常情况下（如轮转失效）单个日志无限增长。
-_MAX_SIZE_BYTES = _MAX_BYTES * 10
+_MAX_SIZE_BYTES = 10 * 1024 * 1024  # 体积兜底阈值 10MB
 
 _loggers: dict[str, logging.Logger] = {}
 
