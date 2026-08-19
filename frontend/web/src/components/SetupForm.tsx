@@ -284,6 +284,8 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
       base_url: DEFAULT_ENDPOINTS[fmt] ?? d.base_url,
       models: d.models.length > 0 ? d.models : [DEFAULT_MODELS[fmt] ?? ''],
       oauth_authorized: false,
+      // openai 格式不支持 auth_token（OpenAI SDK 无该参数），强制切回 api_key
+      auth_type: fmt === 'openai' ? 'api_key' : d.auth_type,
     }));
   }, []);
 
@@ -1312,7 +1314,11 @@ function EnvEditor({ lang, draft, onDraftChange, onFormatChange, onUpdateModel, 
             <div className={labelClass}>{t(lang, 'setupFieldAuthType')}</div>
             <GlassDropdown
               value={draft.auth_type}
-              options={[{ value: 'api_key', label: t(lang, 'setupAuthApiKey') }, { value: 'auth_token', label: t(lang, 'setupAuthAuthToken') }]}
+              options={[
+                { value: 'api_key', label: t(lang, 'setupAuthApiKey') },
+                // 仅 anthropic 格式支持 auth_token（Bearer Token）；openai 格式只有 api_key
+                ...(draft.api_format === 'anthropic' ? [{ value: 'auth_token', label: t(lang, 'setupAuthAuthToken') }] : []),
+              ]}
               onChange={(v) => onDraftChange({ ...draft, auth_type: v as 'api_key' | 'auth_token' })}
             />
           </div>
