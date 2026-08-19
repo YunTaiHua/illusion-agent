@@ -39,7 +39,6 @@ from illusion.tools.list_sessions_tool import ListSessionsTool
 from illusion.tools.lsp_tool import LspTool
 from illusion.tools.mcp_auth_tool import McpAuthTool
 from illusion.tools.mcp_tool import McpToolAdapter
-from illusion.tools.notebook_edit_tool import NotebookEditTool
 from illusion.tools.powershell_tool import PowerShellTool
 from illusion.tools.read_mcp_resource_tool import ReadMcpResourceTool
 from illusion.tools.repl_tool import ReplTool
@@ -80,7 +79,6 @@ def create_default_tool_registry(
         FileReadTool(),
         FileWriteTool(),
         FileEditTool(),
-        NotebookEditTool(),
         LspTool(),
         McpAuthTool(),
         GlobTool(),

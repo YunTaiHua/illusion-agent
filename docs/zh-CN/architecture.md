@@ -19,7 +19,7 @@ illusion-agent/
 │   ├── prompts/            # 提示词系统
 │   ├── skills/             # 技能系统
 │   ├── tasks/              # 任务管理
-│   ├── tools/              # 工具集 (31 个基础工具 + 4 个渠道工具)
+│   ├── tools/              # 工具集 (30 个基础工具 + 4 个渠道工具)
 │   ├── ui/                 # 用户界面
 │   │   ├── web/            # Web 后端 (FastAPI + WebSocket)
 │   │   └── ...
@@ -49,9 +49,9 @@ illusion-agent/
 
 ### 工具系统
 
-提供 31 个基础工具，涵盖：
+提供 30 个基础工具，涵盖：
 
-- **文件操作**: `file_read`, `file_write`, `file_edit`, `notebook_edit`
+- **文件操作**: `file_read`, `file_write`, `file_edit`
 - **命令执行**: `bash`, `powershell`, `repl`
 - **搜索**: `glob`, `grep`, `web_fetch`, `web_search`
 - **任务管理**: `task_output`, `task_stop`

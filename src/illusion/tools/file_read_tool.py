@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import mimetypes
 import os
 from pathlib import Path
@@ -93,7 +92,6 @@ Usage:
 - You can optionally specify a line offset and limit (especially handy for long files), but it's recommended to read the whole file by not providing these parameters
 - Results are returned using cat -n format, with line numbers starting at 1
 - This tool allows Illusion Agent to read images (eg PNG, JPG, etc). When reading an image file the contents are presented visually as Illusion Agent is a multimodal LLM.
-- This tool can read Jupyter notebooks (.ipynb files) and returns all cells with their outputs, combining code, text, and visualizations.
 - This tool can only read files, not directories. To read a directory, use an ls command via the Bash tool.
 - You will regularly be asked to read screenshots. If the user provides a file_path to a screenshot, ALWAYS use this tool to view the file at the path. This tool will work with all temporary file paths.
 - If you read a file that exists but has empty contents you will receive a system reminder warning in place of file contents."""
@@ -122,10 +120,6 @@ Usage:
 
         # 获取文件状态缓存
         cache: FileStateCache | None = context.metadata.get("file_state_cache")
-
-        # 检测是否为 Jupyter notebook
-        if path.suffix.lower() == ".ipynb":
-            return await self._read_notebook_file(path, arguments, cache)
 
         # 检测是否为图片文件
         if _is_image_file(path):
@@ -164,119 +158,6 @@ Usage:
                 "media_size": file_size,
             },
         )
-
-    async def _read_notebook_file(
-        self,
-        path: Path,
-        arguments: FileReadToolInput,
-        cache: FileStateCache | None,
-    ) -> ToolResult:
-        """读取 Jupyter notebook 文件，解析所有单元格及其输出。
-
-        Args:
-            path: notebook 文件路径
-            arguments: 读取参数
-            cache: 文件状态缓存（可选）
-
-        Returns:
-            ToolResult: 读取结果
-        """
-        try:
-            raw = await asyncio.to_thread(path.read_text, encoding="utf-8")
-            nb = json.loads(raw)
-        except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            return ToolResult(output=f"Failed to parse notebook {path}: {e}", is_error=True)
-
-        cells = nb.get("cells", [])
-        if not cells:
-            return ToolResult(output=f"System reminder: The notebook at {path} exists but has no cells.")
-
-        # 应用 offset/limit 到单元格级别
-        selected_cells = cells[arguments.offset : arguments.offset + arguments.limit]
-        if not selected_cells:
-            return ToolResult(
-                output=f"System reminder: No cells in selected range (offset={arguments.offset}, limit={arguments.limit}) for {path}"
-            )
-
-        output_parts: list[str] = []
-        for cell in selected_cells:
-            idx = cells.index(cell)
-            cell_type = cell.get("cell_type", "code")
-            source = "".join(cell.get("source", ""))
-            if isinstance(source, list):
-                source = "".join(source)
-
-            if cell_type == "markdown":
-                output_parts.append(f"## Cell {idx} (markdown)\n{source}")
-            elif cell_type == "code":
-                exec_count = cell.get("execution_count")
-                status = f"executed, count={exec_count}" if exec_count is not None else "not executed"
-                output_parts.append(f"## Cell {idx} (code) [{status}]")
-                if source.strip():
-                    output_parts.append(source)
-                else:
-                    output_parts.append("(empty cell)")
-
-                # 格式化输出
-                outputs = cell.get("outputs", [])
-                if outputs:
-                    output_parts.append("\n**Outputs:**")
-                    for out in outputs:
-                        out_type = out.get("output_type", "")
-                        if out_type == "stream":
-                            text = "".join(out.get("text", ""))
-                            if isinstance(text, list):
-                                text = "".join(text)
-                            name = out.get("name", "stdout")
-                            output_parts.append(f"[{name}]:\n{text}")
-                        elif out_type == "execute_result":
-                            data = out.get("data", {})
-                            text = data.get("text/plain", "")
-                            if isinstance(text, list):
-                                text = "".join(text)
-                            output_parts.append(f"[result]: {text}")
-                        elif out_type == "error":
-                            ename = out.get("ename", "Error")
-                            evalue = out.get("evalue", "")
-                            traceback = out.get("traceback", [])
-                            if isinstance(traceback, list):
-                                traceback_text = "\n".join(traceback)
-                            else:
-                                traceback_text = str(traceback)
-                            output_parts.append(f"[error]: {ename}: {evalue}\n{traceback_text}")
-                        elif out_type == "display_data":
-                            data = out.get("data", {})
-                            text = data.get("text/plain", "")
-                            if isinstance(text, list):
-                                text = "".join(text)
-                            if text:
-                                output_parts.append(f"[display]: {text}")
-                            if "image/png" in data:
-                                output_parts.append("[display]: <image/png>")
-                elif exec_count is not None:
-                    output_parts.append("\n**Outputs:** (none)")
-            else:
-                source = "".join(cell.get("source", ""))
-                if isinstance(source, list):
-                    source = "".join(source)
-                output_parts.append(f"## Cell {idx} ({cell_type})\n{source}")
-
-            output_parts.append("")  # 单元格间空行
-
-        # 写入缓存
-        if cache is not None:
-            try:
-                mtime = await asyncio.to_thread(os.path.getmtime, path)
-                cache.set(str(path), FileState(
-                    content=raw,
-                    timestamp=mtime,
-                    offset=arguments.offset,
-                    limit=arguments.limit,
-                ))
-            except OSError:
-                pass  # 无法获取 mtime，跳过缓存
-
-        return ToolResult(output="\n".join(output_parts).strip())
 
     async def _read_text_file(
         self,

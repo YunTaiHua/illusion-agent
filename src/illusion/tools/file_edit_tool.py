@@ -113,13 +113,6 @@ Usage:
         except ValueError as exc:
             return ToolResult(output=str(exc), is_error=True)
 
-        # 拒绝 notebook 文件 — 模型应使用 NotebookEdit
-        if path.suffix.lower() == ".ipynb":
-            return ToolResult(
-                output=".ipynb files must be edited with the notebook_edit tool, not edit_file.",
-                is_error=True,
-            )
-
         # 获取文件状态缓存
         cache: FileStateCache | None = context.metadata.get("file_state_cache")
 

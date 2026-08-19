@@ -187,28 +187,13 @@ async def test_ask_user_question_flow_across_registry(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_notebook_and_cron_flow_across_registry(tmp_path: Path, monkeypatch):
+async def test_cron_flow_across_registry(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("ILLUSION_DATA_DIR", str(tmp_path / "data"))
     registry = create_default_tool_registry()
     cache = FileStateCache()
     context = ToolExecutionContext(cwd=tmp_path, metadata={"tool_registry": registry, "file_state_cache": cache})
 
-    notebook = registry.get("notebook_edit")
     cron = registry.get("cron")
-
-    (tmp_path / "nb").mkdir(parents=True, exist_ok=True)
-    nb_content = '{"cells": [{"cell_type": "code", "source": ["pass"], "metadata": {}, "outputs": [], "execution_count": null}], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}\n'
-    (tmp_path / "nb" / "demo.ipynb").write_text(nb_content, encoding="utf-8")
-    await registry.get("read_file").execute(
-        registry.get("read_file").input_model(path=str(tmp_path / "nb" / "demo.ipynb")),
-        context,
-    )
-    notebook_result = await notebook.execute(
-        notebook.input_model(notebook_path=str(tmp_path / "nb" / "demo.ipynb"), new_source="print('flow ok')\n", edit_mode="insert", cell_type="code"),
-        context,
-    )
-    assert notebook_result.is_error is False
-    assert "flow ok" in (tmp_path / "nb" / "demo.ipynb").read_text(encoding="utf-8")
 
     # 使用统一 cron 工具创建任务
     create_result = await cron.execute(

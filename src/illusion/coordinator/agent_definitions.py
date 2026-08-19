@@ -600,7 +600,7 @@ _BUILTIN_AGENTS: list[AgentDefinition] = [
             "moderate exploration, or \"very thorough\" for comprehensive analysis across "
             "multiple locations and naming conventions."  # 使用说明
         ),
-        disallowed_tools=["edit_file", "write_file", "notebook_edit"],  # 禁止的工具
+        disallowed_tools=["edit_file", "write_file"],  # 禁止的工具
         system_prompt=_EXPLORE_SYSTEM_PROMPT,  # 系统提示词
         omit_claude_md=True,  # 跳过CLAUDE.md
         subagent_type="explore",  # 代理类型
@@ -614,7 +614,7 @@ _BUILTIN_AGENTS: list[AgentDefinition] = [
             "need to plan the implementation strategy for a task. Returns step-by-step plans, "
             "identifies critical files, and considers architectural trade-offs."  # 使用说明
         ),
-        disallowed_tools=["edit_file", "write_file", "notebook_edit"],  # 禁止的工具
+        disallowed_tools=["edit_file", "write_file"],  # 禁止的工具
         system_prompt=_PLAN_SYSTEM_PROMPT,  # 系统提示词
         model="inherit",  # 模型
         omit_claude_md=True,  # 跳过CLAUDE.md
@@ -643,7 +643,7 @@ _BUILTIN_AGENTS: list[AgentDefinition] = [
             "changed, and approach taken. The agent runs builds, tests, linters, and checks "
             "to produce a PASS/FAIL/PARTIAL verdict with evidence."  # 使用说明
         ),
-        disallowed_tools=["edit_file", "write_file", "notebook_edit"],  # 禁止的工具
+        disallowed_tools=["edit_file", "write_file"],  # 禁止的工具
         system_prompt=_VERIFICATION_SYSTEM_PROMPT,  # 系统提示词
         critical_system_reminder=_VERIFICATION_CRITICAL_REMINDER,  # 关键提醒
         color="red",  # 颜色

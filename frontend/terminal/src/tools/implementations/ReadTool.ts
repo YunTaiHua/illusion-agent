@@ -52,11 +52,6 @@ export const readTool: Tool = {
 			return `Read PDF${size}`;
 		}
 
-		if (outputType === 'notebook') {
-			const lineCount = metadata?.line_count ?? '?';
-			return `Read ${lineCount} cells`;
-		}
-
 		if (result.includes('Unchanged since last read')) {
 			return 'Unchanged since last read';
 		}

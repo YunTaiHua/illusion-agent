@@ -21,7 +21,6 @@ from illusion.tools.file_write_tool import FileWriteTool, FileWriteToolInput
 from illusion.tools.glob_tool import GlobTool, GlobToolInput
 from illusion.tools.grep_tool import GrepTool, GrepToolInput
 from illusion.tools.lsp_tool import LspTool, LspToolInput
-from illusion.tools.notebook_edit_tool import NotebookEditTool, NotebookEditToolInput
 from illusion.tools.skill_tool import SkillTool, SkillToolInput
 from illusion.tools.todo_write_tool import TodoWriteTool, TodoWriteToolInput
 from illusion.utils.file_state_cache import FileStateCache
@@ -141,24 +140,6 @@ async def test_skill_todo_and_config_tools(tmp_path: Path, monkeypatch):
         ToolExecutionContext(cwd=tmp_path),
     )
     assert config_result.output == "Updated ui_language"
-
-
-@pytest.mark.asyncio
-async def test_notebook_edit_tool(tmp_path: Path):
-    context = _make_context(tmp_path)
-    nb_content = '{"cells": [{"cell_type": "code", "source": ["pass"], "metadata": {}, "outputs": [], "execution_count": null}], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}\n'
-    (tmp_path / "demo.ipynb").write_text(nb_content, encoding="utf-8")
-    await FileReadTool().execute(
-        FileReadToolInput(path=str(tmp_path / "demo.ipynb")),
-        context,
-    )
-    result = await NotebookEditTool().execute(
-        NotebookEditToolInput(notebook_path=str(tmp_path / "demo.ipynb"), new_source="print('nb ok')\n", edit_mode="insert", cell_type="code"),
-        context,
-    )
-    assert result.is_error is False
-    assert "demo.ipynb" in result.output
-    assert "nb ok" in (tmp_path / "demo.ipynb").read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio

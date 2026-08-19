@@ -35,7 +35,6 @@ from illusion.tools.exit_worktree_tool import ExitWorktreeTool, ExitWorktreeTool
 from illusion.tools.file_edit_tool import FileEditTool, FileEditToolInput
 from illusion.tools.file_read_tool import FileReadTool, FileReadToolInput
 from illusion.tools.file_write_tool import FileWriteTool, FileWriteToolInput
-from illusion.tools.notebook_edit_tool import NotebookEditTool, NotebookEditToolInput
 from illusion.tools.skill_tool import SkillTool, SkillToolInput
 from illusion.utils import ripgrep
 from illusion.utils.file_state_cache import FileStateCache
@@ -58,8 +57,8 @@ def test_file_read_tool_uses_asyncio_to_thread():
 
 
 def test_file_read_tool_helpers_are_async():
-    """FileReadTool 的三个读取助手应转为 async 方法。"""
-    for name in ("_read_image_file", "_read_notebook_file", "_read_text_file"):
+    """FileReadTool 的读取助手应转为 async 方法。"""
+    for name in ("_read_image_file", "_read_text_file"):
         method = getattr(FileReadTool, name)
         assert inspect.iscoroutinefunction(method), f"{name} 应为 async 方法"
 
@@ -162,15 +161,6 @@ def test_lsp_tool_open_file_uses_to_thread_for_read():
     assert "asyncio.to_thread(file_path.read_text" in src
 
 
-def test_notebook_edit_tool_uses_to_thread():
-    """NotebookEditTool.execute 应使用 asyncio.to_thread 包装同步 I/O 调用。"""
-    src = _src(NotebookEditTool.execute)
-    assert "asyncio.to_thread(_load_notebook" in src
-    assert "asyncio.to_thread(_save_notebook" in src
-    assert "asyncio.to_thread(_update_cache" in src
-    assert "asyncio.to_thread(path.exists)" in src
-
-
 def test_config_tool_uses_to_thread():
     """ConfigTool.execute 应使用 asyncio.to_thread 包装 load_settings/save_settings。"""
     src = _src(ConfigTool.execute)
@@ -235,35 +225,6 @@ async def test_file_edit_tool_still_edits_file(tmp_path: Path):
     )
     assert result.is_error is False
     assert "BETA" in target.read_text(encoding="utf-8")
-
-
-@pytest.mark.asyncio
-async def test_notebook_edit_tool_still_works(tmp_path: Path):
-    """NotebookEditTool 异步化后仍能正确插入单元格。"""
-    nb_path = tmp_path / "demo.ipynb"
-    nb_content = (
-        '{"cells": [{"cell_type": "code", "source": ["pass"], "metadata": {}, '
-        '"outputs": [], "execution_count": null}], "metadata": {}, '
-        '"nbformat": 4, "nbformat_minor": 5}\n'
-    )
-    nb_path.write_text(nb_content, encoding="utf-8")
-    ctx = _make_context(tmp_path)
-    # 先 Read 一次填充缓存
-    await FileReadTool().execute(
-        FileReadToolInput(path=str(nb_path)),
-        ctx,
-    )
-    result = await NotebookEditTool().execute(
-        NotebookEditToolInput(
-            notebook_path=str(nb_path),
-            new_source="print('ok')\n",
-            edit_mode="insert",
-            cell_type="code",
-        ),
-        ctx,
-    )
-    assert result.is_error is False
-    assert "print('ok')" in nb_path.read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio

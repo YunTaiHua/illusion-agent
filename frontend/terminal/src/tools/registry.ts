@@ -17,7 +17,6 @@ import {grepTool, globTool} from './implementations/SearchTool.js';
 import {agentTool} from './implementations/AgentTool.js';
 import {webSearchTool, webFetchTool} from './implementations/WebTool.js';
 import {lspTool} from './implementations/LspTool.js';
-import {notebookTool} from './implementations/NotebookTool.js';
 import {skillTool} from './implementations/SkillTool.js';
 import {taskOutputTool, taskStopTool} from './implementations/TaskTool.js';
 import {enterPlanModeTool, exitPlanModeTool} from './implementations/PlanTool.js';
@@ -80,9 +79,6 @@ function ensureInitialized(): void {
 
 	// LSP
 	registerAliases(lspTool, ['lsp']);
-
-	// Notebook
-	registerAliases(notebookTool, ['notebook_edit']);
 
 	// Skill
 	registerAliases(skillTool, ['skill']);

@@ -37,7 +37,6 @@ _MUTATING_TOOLS_SOURCE: frozenset[str] = frozenset(
     {
         "write_file",
         "edit_file",
-        "notebook_edit",
         "mcp_auth",
         "send_message",
         "cron",

@@ -39,9 +39,8 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   web_search: 'WebSearch',
   web_fetch: 'WebFetch',
 
-  // LSP / Notebook / Skill
+  // LSP / Skill
   lsp: 'LSP',
-  notebook_edit: 'EditNotebook',
   skill: 'Skill',
 
   // 任务管理类

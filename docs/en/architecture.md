@@ -17,7 +17,7 @@ illusion-agent/
 │   ├── prompts/            # Prompt system
 │   ├── skills/             # Skill system
 │   ├── tasks/              # Task management
-│   ├── tools/              # Toolset (31 base tools + 4 channel tools)
+│   ├── tools/              # Toolset (30 base tools + 4 channel tools)
 │   ├── ui/                 # User interface
 │   │   ├── web/            # Web backend (FastAPI + WebSocket)
 │   │   └── ...
@@ -47,9 +47,9 @@ Supports multiple AI providers:
 
 ### Tool System
 
-Provides 31 base tools, covering:
+Provides 30 base tools, covering:
 
-- **File Operations**: `file_read`, `file_write`, `file_edit`, `notebook_edit`
+- **File Operations**: `file_read`, `file_write`, `file_edit`
 - **Command Execution**: `bash`, `powershell`, `repl`
 - **Search**: `glob`, `grep`, `web_fetch`, `web_search`
 - **Task Management**: `task_output`, `task_stop`
