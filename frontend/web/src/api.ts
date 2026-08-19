@@ -56,6 +56,13 @@ export interface SettingsResponse {
     /** 自定义记忆目录（绝对路径或 ~/ 开头），未设置时为 null */
     directory: string | null;
   };
+  /** 会话自动标题配置 */
+  title: {
+    /** 是否启用自动标题 */
+    enabled: boolean;
+    /** 标题生成子代理模型（env_N.model_M），未设置时为 null（继承当前） */
+    model: string | null;
+  };
   /** 沙箱配置（可删改） */
   sandbox: SandboxSettings;
   /** 权限模式（default / plan / full_auto / yolo） */
@@ -141,6 +148,14 @@ export interface UpdateMemoryPayload {
   dream_model?: string;
   /** 自定义记忆目录（空字符串清除） */
   directory?: string;
+}
+
+/** PATCH /api/settings/title 请求体（字段可选，只更新提供的字段） */
+export interface UpdateTitlePayload {
+  /** 是否启用自动标题 */
+  enabled?: boolean;
+  /** 标题生成子代理模型（空字符串清除 = 继承当前） */
+  model?: string;
 }
 
 /** OAuth device flow 启动响应 */
@@ -456,6 +471,12 @@ export const settingsApi = {
   /** 修改记忆配置（enabled / extract_model / dream_model / directory，只更新提供的字段） */
   updateMemory: (payload: UpdateMemoryPayload) =>
     request<{ success: boolean }>('/api/settings/memory', {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  /** 修改会话自动标题配置（enabled / model，只更新提供的字段） */
+  updateTitle: (payload: UpdateTitlePayload) =>
+    request<{ success: boolean }>('/api/settings/title', {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),

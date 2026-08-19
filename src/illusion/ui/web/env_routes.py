@@ -85,6 +85,18 @@ class UpdateMemoryRequest(BaseModel):
     directory: str | None = None
 
 
+class UpdateTitleRequest(BaseModel):
+    """修改会话自动标题配置请求体。
+
+    字段均可选，只更新提供的字段：
+        - enabled: 是否启用自动标题
+        - model: 标题生成子代理模型（env_N.model_M），空串清除（继承当前）
+    """
+
+    enabled: bool | None = None
+    model: str | None = None
+
+
 class UpdateThemeRequest(BaseModel):
     """修改 Web 端主题请求体。
 
@@ -388,6 +400,10 @@ def register_env_routes(app: FastAPI, host_config: Any | None = None) -> None:
                 "dream_model": settings.memory.dream_model,
                 "directory": settings.memory.directory,
             },
+            "title": {
+                "enabled": settings.title.enabled,
+                "model": settings.title.model,
+            },
             "sandbox": _sandbox_settings_payload(settings.sandbox),
             "permission": _permission_risk_payload(),
         }
@@ -480,6 +496,30 @@ def register_env_routes(app: FastAPI, host_config: Any | None = None) -> None:
             )
             save_settings(new_settings)
         return {"success": True, "memory": {**updates}}
+
+    @app.patch("/api/settings/title")
+    async def update_title(req: UpdateTitleRequest) -> dict[str, Any]:
+        """修改会话自动标题配置。
+
+        - enabled: 启用/禁用自动标题
+        - model: 标题生成子代理模型；空串清除（置为 None，继承当前会话模型）
+        """
+        settings = load_settings()
+        updates: dict[str, Any] = {}
+
+        if req.enabled is not None:
+            updates["enabled"] = req.enabled
+
+        if req.model is not None:
+            raw = (req.model or "").strip()
+            updates["model"] = raw or None
+
+        if updates:
+            new_settings = settings.model_copy(
+                update={"title": settings.title.model_copy(update=updates)}
+            )
+            save_settings(new_settings)
+        return {"success": True, "title": {**updates}}
 
     @app.patch("/api/settings/theme")
     async def update_theme(req: UpdateThemeRequest) -> dict[str, Any]:

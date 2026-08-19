@@ -11,6 +11,7 @@
   - [Permission Configuration](#permission-configuration)
   - [Environment Variables](#environment-variables)
   - [Memory System Configuration](#memory-system-configuration)
+  - [Auto Title Configuration](#auto-title-configuration)
   - [Sandbox Configuration](#sandbox-configuration)
 
 ---
@@ -112,6 +113,10 @@ Uses `env_N` grouped format. Each `env_N` is an independent environment config (
     "enabled": true,
     "max_files": 5,
     "max_entrypoint_lines": 200
+  },
+  "title": {
+    "enabled": false,
+    "model": "env_1.model_1"
   },
   "sandbox": {
     "enabled_platforms": [],
@@ -401,6 +406,30 @@ LongCat uses `Authorization: Bearer` authentication, configured via the `auth_to
 | `enabled` | true | Enable memory function |
 | `max_files` | 5 | Maximum number of memory files |
 | `max_entrypoint_lines` | 200 | Maximum lines for MEMORY.md entry file |
+
+---
+
+### Auto Title Configuration
+
+After the first turn, a lightweight sub-agent runs in the background to generate a concise session title from the user's first real message, writing it to the `title` field of the session's `meta.json` (shown in `/resume`, `/delete` lists and the web sidebar). It does not block the ongoing conversation.
+
+```json
+{
+  "title": {
+    "enabled": false,
+    "model": "env_1.model_1"
+  }
+}
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `enabled` | false | Whether to enable auto title (off by default) |
+| `model` | empty (inherit current) | Model used by the title sub-agent (`env_N.model_M`); empty inherits the current session model |
+
+- Runs only on the first turn, using only the user's first real message; if the first message is a `/goal` command, it falls back to the current goal objective.
+- If the session was already renamed manually (meta already has a `title`), auto title will not overwrite it.
+- Title generation is a background task that automatically retries on occasional empty results; activity is logged to `~/.illusion/logs/title.log`.
 
 ---
 

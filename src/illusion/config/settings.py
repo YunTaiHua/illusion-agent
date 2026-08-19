@@ -17,6 +17,7 @@ Settings 模型和加载逻辑模块
     - EnvConfig: 单个环境的配置（api_format, base_url, api_key, model_N 等）
     - PermissionSettings: 权限模式配置
     - MemorySettings: 记忆系统配置
+    - TitleSettings: 会话自动标题配置
     - SandboxSettings: 沙箱运行时配置
 
 使用示例：
@@ -108,6 +109,23 @@ class MemorySettings(BaseModel):
     extract_interval: int = 1  # 默认每 1 轮触发后台提取
     dream_min_hours: int = 24  # Auto Dream 最小间隔 24 小时
     dream_min_sessions: int = 5  # Auto Dream 最小会话数 5
+
+
+class TitleSettings(BaseModel):
+    """会话自动标题配置
+
+    与记忆提取/整合类似，回合结束后在后台运行一个轻量子代理，
+    根据对话内容为会话生成一个简洁标题，写入 meta.json 的 title 字段。
+    后台执行不阻塞主对话。
+
+    Attributes:
+        enabled: 是否启用自动标题（默认关闭）
+        model: 标题生成子代理使用的模型（env_N.model_M 格式），
+            None 继承当前会话模型
+    """
+
+    enabled: bool = False  # 默认关闭自动标题
+    model: str | None = None  # 标题生成模型（env_N.model_M），None 继承当前
 
 
 class GoalSettings(BaseModel):
@@ -303,6 +321,7 @@ class Settings(BaseModel):
     permission: PermissionSettings = Field(default_factory=PermissionSettings)
     hooks: dict[str, Any] = Field(default_factory=dict)
     memory: MemorySettings = Field(default_factory=MemorySettings)
+    title: TitleSettings = Field(default_factory=TitleSettings)
     goal: GoalSettings = Field(default_factory=GoalSettings)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     enabled_plugins: dict[str, bool] = Field(default_factory=dict)

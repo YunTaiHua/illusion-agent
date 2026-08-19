@@ -11,6 +11,7 @@
   - [权限配置](#权限配置)
   - [环境变量](#环境变量)
   - [记忆系统配置](#记忆系统配置)
+  - [会话自动标题配置](#会话自动标题配置)
   - [沙箱配置](#沙箱配置)
 
 ---
@@ -113,6 +114,10 @@
     "enabled": true,
     "max_files": 5,
     "max_entrypoint_lines": 200
+  },
+  "title": {
+    "enabled": false,
+    "model": "env_1.model_1"
   },
   "sandbox": {
     "enabled_platforms": [],
@@ -402,6 +407,30 @@ LongCat 使用 `Authorization: Bearer` 认证方式，需要通过 `auth_token` 
 | `enabled` | true | 启用记忆功能 |
 | `max_files` | 5 | 最大记忆文件数 |
 | `max_entrypoint_lines` | 200 | MEMORY.md 入口文件最大行数 |
+
+---
+
+### 会话自动标题配置
+
+首回合结束后在后台运行一个轻量子代理，根据用户首条真实消息生成简洁会话标题，写入会话 `meta.json` 的 `title` 字段（`/resume`、`/delete` 列表与 web 侧边栏据此显示）。后台执行不阻塞对话进行。
+
+```json
+{
+  "title": {
+    "enabled": false,
+    "model": "env_1.model_1"
+  }
+}
+```
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `enabled` | false | 是否启用自动标题（默认关闭） |
+| `model` | 空（继承当前） | 标题生成子代理使用的模型（`env_N.model_M` 格式），留空继承当前会话模型 |
+
+- 仅首回合触发，且只取用户首条真实消息；若首条为 `/goal` 命令，回退使用当前 goal 的 objective。
+- 若会话已手动重命名（meta 已有 title），自动标题不会覆盖用户命名。
+- 标题生成为后台任务，偶发为空时自动重试；活动记录于 `~/.illusion/logs/title.log`。
 
 ---
 

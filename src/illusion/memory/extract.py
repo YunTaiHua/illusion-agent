@@ -245,9 +245,11 @@ def maybe_schedule_extract(engine: Any) -> None:
         from illusion.config.settings import load_settings
         from illusion.memory.manager import is_memory_enabled
 
-        # 子代理守卫：提取/整合子代理自身是 QueryEngine，其回合结束
+        # 子代理守卫：提取/整合/标题生成子代理自身是 QueryEngine，其回合结束
         # 不得再触发提取，防止无限级联
-        if getattr(engine, "_is_memory_subagent", False):
+        if getattr(engine, "_is_memory_subagent", False) or getattr(
+            engine, "_is_title_subagent", False
+        ):
             return
         if not is_memory_enabled(engine.cwd):
             return

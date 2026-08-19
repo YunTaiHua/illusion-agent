@@ -28,7 +28,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -92,6 +92,10 @@ class QueryEngine:
         ...     system_prompt="你是一个助手"
         ... )
     """
+
+    # 后台标题生成完成回调：Web 宿主按会话注入，None 表示未注入。
+    # 标题生成后调用，用于刷新会话列表使自动命名即时显现。
+    _title_on_generated: Callable[[str], Awaitable[None]] | None = None
 
     def __init__(
         self,
@@ -718,6 +722,14 @@ class QueryEngine:
             maybe_schedule_extract(self)
         except Exception:
             logger.exception("Memory reinforcement scheduling failed")
+
+        # 会话自动标题：回合结束后后台生成简洁标题（不阻塞主循环）
+        try:
+            from illusion.title.auto_title import maybe_schedule_title
+
+            maybe_schedule_title(self)
+        except Exception:
+            logger.exception("Auto title scheduling failed")
 
     def _build_query_context(self, *, max_turns: int | None = None) -> QueryContext:
         """以引擎当前状态构建 QueryContext（三条执行路径共享）。"""

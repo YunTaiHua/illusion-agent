@@ -203,6 +203,10 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
   const [memDreamModel, setMemDreamModel] = useState('');
   /** 自定义记忆目录输入值（空 = 使用默认目录） */
   const [memDir, setMemDir] = useState('');
+  /** 自动标题启用开关 */
+  const [titleEnabled, setTitleEnabled] = useState(false);
+  /** 标题生成模型（空 = 继承当前） */
+  const [titleModel, setTitleModel] = useState('');
   /** 沙箱配置（可删改） */
   const [sandbox, setSandbox] = useState<SandboxSettings | null>(null);
   /** 沙箱保存错误 */
@@ -240,6 +244,8 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
         setMemExtractModel(s.memory?.extract_model ?? '');
         setMemDreamModel(s.memory?.dream_model ?? '');
         setMemDir(s.memory?.directory ?? '');
+        setTitleEnabled(s.title?.enabled ?? false);
+        setTitleModel(s.title?.model ?? '');
         // 沙箱配置（默认值由后端保证返回）
         setSandbox(s.sandbox ?? null);
         // 权限风险分级配置（LOW/MEDIUM/HIGH 三层级）
@@ -382,6 +388,16 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
           directory: memDir.trim(),
         });
       }
+      // 3.6 自动标题配置改动（启用开关 / 标题模型任一变化即提交）
+      if (settings && (
+        titleEnabled !== settings.title?.enabled ||
+        (titleModel.trim() || '') !== (settings.title?.model ?? '')
+      )) {
+        await settingsApi.updateTitle({
+          enabled: titleEnabled,
+          model: titleModel.trim(),
+        });
+      }
       // 4. 渠道配置（兼容旧配置：enabled 但无运行目录的渠道自动填充默认工作区，
       //    避免后端启用校验（enabled 必填目录）拒绝整个保存；其余清空为 null）
       const defaultWs = workspaces.find((w) => w.is_default)?.path;
@@ -417,7 +433,7 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
       setSaving(false);
       setSaveError(err instanceof Error ? err.message : String(err));
     }
-  }, [settings, uiLang, workDir, memEnabled, memAutoExtract, memExtractModel, memDreamModel, memDir, channels, firstLogin, showAddEnv, draft, draftValid, createEnvFromDraft, onSetUiLanguage, onSaved, sandbox]);
+  }, [settings, uiLang, workDir, memEnabled, memAutoExtract, memExtractModel, memDreamModel, memDir, titleEnabled, titleModel, channels, firstLogin, showAddEnv, draft, draftValid, createEnvFromDraft, onSetUiLanguage, onSaved, sandbox]);
 
   /** 删除环境（即时 API） */
   const handleDeleteEnv = useCallback(async (envKey: string) => {
@@ -573,6 +589,10 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
               onMemDreamModelChange={setMemDreamModel}
               memDir={memDir}
               onMemDirChange={setMemDir}
+              titleEnabled={titleEnabled}
+              onTitleEnabledChange={setTitleEnabled}
+              titleModel={titleModel}
+              onTitleModelChange={setTitleModel}
               modelOptions={modelOptions}
               envs={envs}
               activeEnvKey={activeEnvKey}
@@ -807,6 +827,12 @@ interface SettingsTabProps {
   /** 自定义记忆目录输入值（空 = 使用默认目录） */
   memDir: string;
   onMemDirChange: (v: string) => void;
+  /** 自动标题启用开关 */
+  titleEnabled: boolean;
+  onTitleEnabledChange: (v: boolean) => void;
+  /** 标题生成模型（空 = 继承当前） */
+  titleModel: string;
+  onTitleModelChange: (v: string) => void;
   /** 模型下拉选项（env_N.model_N 引用） */
   modelOptions: DropdownOption[];
   envs: EnvInfo[];
@@ -1124,6 +1150,43 @@ function SettingsTab(p: SettingsTabProps) {
             options={p.modelOptions}
             onChange={p.onMemDreamModelChange}
             placeholder={t(lang, 'setupFieldMemoryModelHint')}
+          />
+        </div>
+      </div>
+
+      {/* 自动标题配置 */}
+      <div className="space-y-3 rounded-lg border border-border-light p-4 bg-surface-card-alt/50">
+        <div className={labelClass}>{t(lang, 'setupFieldTitle')}</div>
+        {/* 启用开关 */}
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-content-primary">{t(lang, 'setupFieldTitleEnabled')}</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={p.titleEnabled}
+            onClick={() => p.onTitleEnabledChange(!p.titleEnabled)}
+            className={`relative w-10 h-5.5 rounded-full transition-colors cursor-pointer ${
+              p.titleEnabled ? 'bg-primary' : 'bg-border-light'
+            }`}
+            style={{ height: 22 }}
+          >
+            <span
+              className={`absolute top-0.5 w-4.5 h-4.5 rounded-full bg-white shadow transition-all ${
+                p.titleEnabled ? 'left-[22px]' : 'left-0.5'
+              }`}
+              style={{ width: 18, height: 18, top: 2 }}
+            />
+          </button>
+        </div>
+        <div className="text-[11px] text-content-disabled">{t(lang, 'setupFieldTitleEnabledHint')}</div>
+        {/* 标题生成模型 */}
+        <div>
+          <div className={labelClass}>{t(lang, 'setupFieldTitleModel')}</div>
+          <GlassDropdown
+            value={p.titleModel}
+            options={p.modelOptions}
+            onChange={p.onTitleModelChange}
+            placeholder={t(lang, 'setupFieldTitleModelHint')}
           />
         </div>
       </div>

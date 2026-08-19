@@ -964,6 +964,18 @@ class WebBackendHost:
         line_complete 提前后 busy 在回合结束瞬间释放，其余收尾事件
         （列表刷新/状态快照）随后发送，顺序无副作用。
         """
+        # 绑定自动标题完成回调：_process_line 与 _submit_line_as_text 都经由
+        # 本方法收尾，故在此统一绑定；后台标题任务约数秒后才完成，远晚于
+        # 本方法执行，保证标题一生成即刷新侧边栏，不必等下一轮。
+        if getattr(session.engine, "_title_on_generated", None) is None:
+            async def _on_title_generated(_title: str) -> None:
+                sr = self._sessions.get(session.session_id)
+                if sr is None:
+                    return
+                if _title:
+                    self._refresh_session_display(sr)
+                await self._push_sessions()
+            session.engine._title_on_generated = _on_title_generated
         await self._emit(BackendEvent(type="line_complete"), session_id=session.session_id)
         await self._update_phase(session, "idle")
         # 清 busy 再推送列表：避免列表推送携带过期的 busy=true
