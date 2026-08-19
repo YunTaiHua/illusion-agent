@@ -388,9 +388,11 @@ export default function App() {
   const handleCustomSubmit = useCallback((value: string) => {
     if (customInputModal) {
       // rename 走 web_query 通道（携带目标 session_id，路由到目标会话所在工作区）
+      // 重命名是轻量元数据操作，且目标会话可能是非活跃会话；此处不调用
+      // setBusyTrue——该函数固定对活跃会话置 busy，会误把活跃会话钉在运行态，
+      // 而后端 web_query_result 只重置目标会话 busy，导致活跃会话永久显示运行中。
       if (customInputModal.command === 'rename') {
         const sid = customInputModal.targetSessionId;
-        session.setBusyTrue();
         session.sendRequest({
           type: 'web_query',
           command: 'rename',
