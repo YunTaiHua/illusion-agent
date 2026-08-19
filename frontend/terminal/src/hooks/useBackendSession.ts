@@ -682,7 +682,7 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 
 			// 然后设置新内容
 			const newItems = (event.items as TranscriptItem[]).filter((item: TranscriptItem) => {
-				if (item.role === 'user' && item.text.startsWith('/')) {
+				if (item.role === 'user' && item.is_command) {
 					return false;
 				}
 				// 跳过后台任务完成通知（<task-notification> XML）

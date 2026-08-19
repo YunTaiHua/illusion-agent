@@ -86,14 +86,15 @@ def test_count_turns() -> None:
     ]
     assert count_turns(messages) == 2
 
-    # 包含斜杠命令
+    # 以 / 开头的 user 消息：命令本身不进 messages（handle_line 拦截），
+    # 出现即真实用户输入（如未知命令落入文本通道），应计入轮次
     messages = [
-        {"role": "user", "text": "/help"},
-        {"role": "assistant", "text": "Here are the commands..."},
+        {"role": "user", "text": "/feedback完全删掉"},
+        {"role": "assistant", "text": "Done"},
         {"role": "user", "text": "Hello"},
         {"role": "assistant", "text": "Hi there"},
     ]
-    assert count_turns(messages) == 1
+    assert count_turns(messages) == 2
 
     # 包含空消息
     messages = [

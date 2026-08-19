@@ -1036,7 +1036,14 @@ class WebBackendHost:
             await self._emit(
                 BackendEvent(
                     type="transcript_item",
-                    item=TranscriptItem(role="user", text=transcript_line or line),
+                    item=TranscriptItem(
+                        role="user",
+                        text=transcript_line or line,
+                        # 命令产物标记：按命令注册表判定而非文本前缀——用户消息
+                        # 也可能以 / 开头，前缀判断会误吞真实消息。cron 委托场景
+                        # line 为任务 prompt（非命令），因此 is_command=False
+                        is_command=session.bundle.commands.lookup(line) is not None,
+                    ),
                 ),
                 session_id=session.session_id,
             )
@@ -1424,14 +1431,14 @@ class WebBackendHost:
         if mode not in ("both", "conversation", "code"):
             return True
         messages = session.engine.messages
-        # 计算 target 之后需回退的真实用户轮次（排除 / 命令、后台任务完成通知与 goal 注入消息）
+        # 计算 target 之后需回退的真实用户轮次（排除后台任务完成通知与 goal 注入消息；
+        # 命令不会进入 engine.messages，真实 / 前缀消息须计入）
         turns = sum(
             1
             for i, msg in enumerate(messages)
             if i >= target_idx
             and msg.role == "user"
             and msg.text.strip()
-            and not msg.text.strip().startswith("/")
             and not is_task_notification(msg.text)
             and not is_goal_system_message(msg.text)
         )
@@ -1621,15 +1628,16 @@ class WebBackendHost:
         ).lower().startswith("zh")
         engine = session.engine
         messages = engine.messages
-        # 摘要：第一条真实用户消息（排除 / 命令、后台任务完成通知与 goal 注入消息）
+        # 摘要：第一条真实用户消息（排除后台任务完成通知与 goal 注入消息；命令
+        # 不会进入 engine.messages，真实 / 前缀消息须计入摘要）
         summary = ""
         for msg in messages:
             if msg.role == "user" and msg.text.strip():
-                if msg.text.strip().startswith("/") or is_task_notification(msg.text) or is_goal_system_message(msg.text):
+                if is_task_notification(msg.text) or is_goal_system_message(msg.text):
                     continue
                 summary = msg.text.strip()[:80]
                 break
-        # 回退：首条消息为 /goal 命令时（命令与 goal 注入消息均被排除）摘要为空，
+        # 回退：首条真实用户消息不存在（如 goal 注入消息开局）时摘要为空，
         # 用当前 goal 的 objective 兜底，避免会话标题显示"新会话"
         if not summary:
             goal_manager = engine.goal_manager
@@ -1642,7 +1650,6 @@ class WebBackendHost:
             if m.role == "user"
             and not any(isinstance(b, ToolResultBlock) for b in m.content)
             and m.text.strip()
-            and not m.text.strip().startswith("/")
             and not is_task_notification(m.text)
             and not is_goal_system_message(m.text)
         )
@@ -2757,7 +2764,6 @@ class WebBackendHost:
                 (i, msg)
                 for i, msg in enumerate(messages)
                 if msg.role == "user" and msg.text.strip()
-                and not msg.text.strip().startswith("/")
                 and not is_task_notification(msg.text)
                 and not is_goal_system_message(msg.text)
             ]

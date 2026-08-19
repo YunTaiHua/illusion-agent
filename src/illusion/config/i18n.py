@@ -314,7 +314,6 @@ MESSAGES: dict[str, dict[str, str]] = {
     "feishu_cmd_model_usage": {"zh-CN": "用法: /model [show | set 名称]", "en-US": "Usage: /model [show | set NAME]"},
     "feishu_cmd_model_show": {"zh-CN": "当前飞书会话模型: {model}", "en-US": "Current Feishu session model: {model}"},
     "feishu_cmd_model_set": {"zh-CN": "飞书会话模型已切换为 {model}", "en-US": "Feishu session model set to {model}"},
-    "feishu_cmd_unknown": {"zh-CN": "未知命令: {cmd}。输入 /help 查看可用命令。", "en-US": "Unknown command: {cmd}. Type /help for commands."},
     # --- 微信渠道 ---
     "channel_weixin_label": {"zh-CN": "微信 / WeChat", "en-US": "WeChat"},
     "weixin_qr_fetching": {"zh-CN": "正在获取二维码...", "en-US": "Fetching QR code..."},

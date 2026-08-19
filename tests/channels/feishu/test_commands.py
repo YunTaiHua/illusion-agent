@@ -93,10 +93,13 @@ async def test_non_command_returns_false(handler):
 
 
 @pytest.mark.asyncio
-async def test_unknown_command(handler):
-    """未知斜杠命令提示帮助。"""
+async def test_unknown_command_passes_to_agent(handler):
+    """未知斜杠命令放行给 agent（不回复、不吞掉）。
+
+    与 PC 端 handle_line 语义一致：注册表未命中的 / 前缀输入是真实用户
+    消息。历史上这里回复"未知命令"，导致渠道端 /xxx 消息无法到达 LLM。
+    """
     msg = _msg("/foobar")
     result = await handler.try_handle(msg)
-    assert result is True
-    sent = handler.channel.send_text.call_args[0][1]
-    assert "未知" in sent or "Unknown" in sent
+    assert result is False
+    handler.channel.send_text.assert_not_called()

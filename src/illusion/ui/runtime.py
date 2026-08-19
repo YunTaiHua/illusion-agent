@@ -1030,12 +1030,15 @@ def _update_session_meta(bundle: RuntimeBundle) -> None:
     summary = ""
     for msg in bundle.engine.messages:
         if msg.role == "user" and msg.text.strip():
-            # 跳过后台任务完成通知与 goal harness 注入消息（避免成为会话摘要）
-            if is_task_notification(msg.text) or is_goal_system_message(msg.text) or msg.text.strip().startswith("/"):
+            # 跳过后台任务完成通知与 goal harness 注入消息（避免成为会话摘要）。
+            # 命令从不进入 engine.messages（handle_line 命令分支直接拦截），
+            # 因此 messages 中以 / 开头的 user 消息必为真实用户输入，
+            # 不能再按 / 前缀排除——否则真斜杠消息会被误吞。
+            if is_task_notification(msg.text) or is_goal_system_message(msg.text):
                 continue
             summary = msg.text.strip()[:80]
             break
-    # 回退：首条消息为 /goal 命令时（命令与 goal 注入消息均被排除）摘要为空，
+    # 回退：首条真实用户消息不存在（如 goal 注入消息开局）时摘要为空，
     # 用当前 goal 的 objective 兜底，避免会话列表标题为空
     if not summary and bundle.engine.goal_manager is not None:
         snap = bundle.engine.goal_manager.snapshot
@@ -1051,7 +1054,6 @@ def _update_session_meta(bundle: RuntimeBundle) -> None:
         and m.text.strip()
         and not is_task_notification(m.text)
         and not is_goal_system_message(m.text)
-        and not m.text.strip().startswith("/")
     )
     # goal 自动续跑轮次计入轮数（<goal_round> 注入消息本身在上面被排除；
     # 按消息计数而非 manager.rounds_started，clear/恢复后历史轮次仍准确）

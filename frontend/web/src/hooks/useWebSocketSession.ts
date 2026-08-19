@@ -562,7 +562,8 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
    * 后端会先回执 user transcript_item 再进入流式，正常路径下本方法仅承担
    * "即时展示"角色；一旦回执在偶发竞态/丢包中丢失，该本地项仍保留，
    * 保证用户消息绝不"被吞"或导致界面卡住。回执到达时按文本去重（见
-   * transcript_item 处理器），不会出现重复。仅处理普通文本（非斜杠指令）。
+   * transcript_item 处理器），不会出现重复。仅处理文本通道的真实用户消息
+   * （含以 / 开头的非命令文本，如未命中命令注册表的中文输入）。
    *
    * @param line - 用户输入的原始文本
    */
@@ -570,8 +571,9 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     const sid = activeSessionIdRef.current;
     if (!sid) return;
     const trimmed = line.trim();
-    // 斜杠指令由下拉/命令弹窗承载或走 web_query，不做乐观渲染
-    if (!trimmed || trimmed.startsWith('/')) return;
+    // 文本通道的真实用户消息一律乐观渲染（含以 / 开头的非命令文本）；
+    // 命令由通道 1 分发（web_query/apply_select_command），不会走到这里
+    if (!trimmed) return;
     optimisticUserRef.current[sid] = trimmed;
     ensureView(sid);
     pushStatic(sid, { role: 'user', text: trimmed });
@@ -922,9 +924,10 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
 
         // 转录
         if (evt.type === 'transcript_item' && evt.item) {
-          // 过滤 / 开头的 user 消息：这些是 apply_select_command → _process_line 产生的
-          // 命令产物（如 /context set 512000），不是真实用户输入，不应显示在会话中
-          if (evt.item.role === 'user' && evt.item.text.startsWith('/')) return;
+          // 过滤命令产物：后端按命令注册表打 is_command 标记（如 /context set 512000），
+          // 不能按文本以 / 开头判断——用户消息也可能以 / 开头（如 "/xxx 帮我看看"），
+          // 按前缀过滤会误吞真实消息
+          if (evt.item.role === 'user' && evt.item.is_command) return;
           // 过滤后台任务完成通知（<task-notification> XML）：注入给 LLM 的系统消息，
           // 不应作为真实用户消息显示
           if (evt.item.role === 'user' && evt.item.text.startsWith('<task-notification>')) return;
@@ -1042,10 +1045,10 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
             suppressTranscriptRef.current = false;
             return;
           }
-          // 过滤 / 开头 user 消息与后台任务完成通知（<task-notification> XML）
+          // 过滤命令产物（is_command 标记）与后台任务完成通知（<task-notification> XML）
           const items = (evt.items as TranscriptItem[]).filter((item) => {
             if (item.role !== 'user') return true;
-            if (item.text.startsWith('/')) return false;
+            if (item.is_command) return false;
             if (item.text.startsWith('<task-notification>')) return false;
             return true;
           });
@@ -1098,7 +1101,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
         if (evt.type === 'web_restore_completed') {
           pendingToolCallsRef.current[sid] = [];
           optimisticUserRef.current[sid] = null;
-          const items = stripReplayItems((evt.items ?? []).filter((i) => !(i.role === 'user' && i.text.startsWith('/'))));
+          const items = stripReplayItems((evt.items ?? []).filter((i) => !(i.role === 'user' && i.is_command)));
           // 只合并会话专属键：全局键（model/effort 等）由 state_snapshot 权威驱动，
           // 避免恢复快照影子化后续全局设置变更
           const restoreState = evt.state ?? {};

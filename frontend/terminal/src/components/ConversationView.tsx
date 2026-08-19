@@ -75,7 +75,7 @@ export function ConversationView({
 	const {columns: terminalWidth} = useTerminalSize();
 	const filtered = useMemo(() => staticItems.filter((item) => {
 		if (!isEmptyItem(item)) {
-			if (item.role === 'user' && item.text.startsWith('/')) {
+			if (item.role === 'user' && item.is_command) {
 				return false;
 			}
 			return true;

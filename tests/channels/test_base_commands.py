@@ -55,9 +55,20 @@ async def test_non_command_returns_false(handler):
 
 
 @pytest.mark.asyncio
-async def test_unknown_command(handler):
-    """未知命令提示帮助。"""
+async def test_unknown_command_passes_to_agent(handler):
+    """未知斜杠命令放行给 agent（不回复、不吞掉）。
+
+    与 PC 端 handle_line 语义一致：注册表未命中的 / 前缀输入是真实用户
+    消息。历史上这里回复"未知命令"，导致渠道端 /xxx 消息无法到达 LLM。
+    """
     result = await handler.try_handle(_msg("/foobar"))
-    assert result is True
-    sent = handler.channel.send_text.call_args[0][1]
-    assert "未知" in sent or "Unknown" in sent
+    assert result is False
+    handler.channel.send_text.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_slash_prefixed_chinese_message_passes_to_agent(handler):
+    """以 / 开头的真实用户消息（如"/feedback完全删掉…"）放行给 agent。"""
+    result = await handler.try_handle(_msg("/feedback完全删掉，帮我看看"))
+    assert result is False
+    handler.channel.send_text.assert_not_called()

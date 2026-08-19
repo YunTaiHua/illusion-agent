@@ -92,22 +92,25 @@ def test_title_system_prompt_contains_core_rules():
     assert "same language" in prompt
 
 
-def test_user_messages_filters_commands_and_goal_injection():
+def test_user_messages_filters_goal_injection_only():
+    # 命令不进 engine.messages（handle_line 拦截）；messages 中以 / 开头的
+    # user 消息都是真实用户输入（如未知命令落入文本通道），应被收集
     engine = FakeEngine(
         ".",
         [
             ConversationMessage.from_user_text("你好"),
-            ConversationMessage.from_user_text("/resume 1"),
-            ConversationMessage.from_user_text("<goal_round>1</goal_round> 目标"),
+            ConversationMessage.from_user_text("/feedback完全删掉"),
+            ConversationMessage.from_user_text("<goal_round>1/2</goal_round> 目标"),
         ],
     )
-    assert _user_messages(engine) == ["你好"]
+    assert _user_messages(engine) == ["你好", "/feedback完全删掉"]
 
 
 def test_extract_title_source_falls_back_to_goal():
-    # 首条为 /goal 命令：无真实用户消息，回退到 goal objective
+    # 首条为 goal harness 注入消息（<goal_round>，非真实用户输入）：
+    # 无真实用户消息，回退到 goal objective
     goal = SimpleNamespace(snapshot=SimpleNamespace(objective="实现登录功能"))
-    engine = FakeEngine(".", [ConversationMessage.from_user_text("/goal 实现登录功能")], goal_manager=goal)
+    engine = FakeEngine(".", [ConversationMessage.from_user_text("<goal_round>1/2</goal_round> 目标")], goal_manager=goal)
     assert _extract_title_source(engine) == "实现登录功能"
 
 
@@ -166,10 +169,11 @@ async def test_schedule_skipped_past_first_turn(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_schedule_skipped_when_no_source(tmp_path, monkeypatch):
-    # 仅 /goal 但 goal objective 尚未落地 → 素材为空，留待后续回合
+    # 仅 goal harness 注入消息（非真实用户输入）且 goal objective 尚未落地
+    # → 素材为空，留待后续回合
     _enable_title(monkeypatch, tmp_path)
     captured = _capture_tasks(monkeypatch)
-    engine = FakeEngine(str(tmp_path), [ConversationMessage.from_user_text("/goal foo")], goal_manager=None)
+    engine = FakeEngine(str(tmp_path), [ConversationMessage.from_user_text("<goal_round>1/2</goal_round> 目标")], goal_manager=None)
     maybe_schedule_title(engine)
     assert captured == []
 

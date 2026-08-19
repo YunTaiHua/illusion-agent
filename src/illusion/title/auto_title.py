@@ -183,8 +183,9 @@ def _user_messages(engine: Any) -> list[str]:
         if any(isinstance(b, ToolResultBlock) for b in msg.content):
             continue
         text = msg.text.strip()
-        if not text or text.startswith("/"):
+        if not text:
             continue
+        # 命令不进 engine.messages；真实 / 前缀消息可作为标题素材
         if is_task_notification(text) or is_goal_system_message(text):
             continue
         texts.append(text)

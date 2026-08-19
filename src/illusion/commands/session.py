@@ -340,7 +340,6 @@ async def rewind_handler(args: str, context: CommandContext) -> CommandResult:
             if (
                 msg.role == "user"
                 and msg.text.strip()
-                and not msg.text.strip().startswith("/")
                 and not is_task_notification(msg.text)
                 and not is_goal_system_message(msg.text)
             ):

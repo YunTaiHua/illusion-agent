@@ -99,7 +99,8 @@ def last_message_text(messages: list[ConversationMessage]) -> str:
 def rewind_turns(messages: list[ConversationMessage], turns: int) -> list[ConversationMessage]:
     """回退指定数量的对话回合
 
-    回退到上一个非空的、非斜杠命令的 user 消息。
+    回退到上一个非空的 user 消息（命令从不进入 engine.messages，
+    以 / 开头的消息即为真实用户输入，属于可回退轮次）。
     当 pop 到的 user 消息包含 tool_result 时，继续 pop 前面的 assistant 消息
     （含 tool_use），以保持回合完整性，避免产生孤立的 tool_use。
 
@@ -118,9 +119,10 @@ def rewind_turns(messages: list[ConversationMessage], turns: int) -> list[Conver
             break
         while updated:
             popped = updated.pop()
-            if popped.role == "user" and popped.text.strip() and not popped.text.strip().startswith("/"):
+            if popped.role == "user" and popped.text.strip():
                 # 如果此 user 消息包含 tool_result，说明它是工具调用回合的一部分
                 # 需要继续 pop 前面的 assistant 消息（含 tool_use），保持回合完整性
+                # 注：命令不进 engine.messages，真实 / 前缀消息也属于可回退轮次
                 has_tool_result = any(isinstance(b, ToolResultBlock) for b in popped.content)
                 if has_tool_result and updated:
                     prev = updated[-1]

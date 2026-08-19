@@ -93,7 +93,10 @@ class BaseCommandHandler:
         elif cmd == "detach":
             await self._cmd_detach(msg, key)
         else:
-            await self._reply(msg, t("feishu_cmd_unknown", cmd=f"/{cmd}"))
+            # 未知命令不吞掉：放行给 agent 作为普通用户消息处理（与 PC 端
+            # handle_line 语义一致——注册表未命中的 / 前缀输入是真实用户消息）。
+            # 历史上这里回复"未知命令"，导致渠道端 /xxx 消息无法到达 LLM。
+            return False
         return True
 
     async def _cmd_model(self, msg: InboundMessage, key: str, args: str) -> None:

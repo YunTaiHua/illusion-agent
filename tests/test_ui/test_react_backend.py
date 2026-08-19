@@ -78,7 +78,15 @@ async def test_backend_host_processes_command(tmp_path, monkeypatch):
         await close_runtime(host._bundle)
 
     assert should_continue is True
-    assert any(event.type == "transcript_item" and event.item and event.item.role == "user" for event in events)
+    user_items = [
+        event.item
+        for event in events
+        if event.type == "transcript_item" and event.item and event.item.role == "user"
+    ]
+    assert user_items
+    # 已注册命令 → 命令产物标记 is_command=True（前端据此过滤，不显示在会话中）
+    for item in user_items:
+        assert item.is_command is True
     assert any(
         event.type == "command_result"
         and "IllusionAgent" in event.command_result_data.get("message", "")
@@ -86,6 +94,50 @@ async def test_backend_host_processes_command(tmp_path, monkeypatch):
         if event.command_result_data
     )
     assert any(event.type == "state_snapshot" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_backend_host_slash_prefixed_user_message_not_command(tmp_path, monkeypatch):
+    """Regression: 以 / 开头但未命中命令注册表的输入是真实用户消息。
+
+    曾按文本前缀把这类消息当作命令产物过滤（实时/重放均被吞），
+    修复后后端按 commands.lookup 判定 is_command=False，前端据此正常显示。
+    用例取真实发生过的输入——"/feedback完全删掉…"（中文无空格拼接，
+    未命中任何命令名，落入文本通道）。
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ILLUSION_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ILLUSION_DATA_DIR", str(tmp_path / "data"))
+
+    host = ReactBackendHost(BackendHostConfig(api_client=StaticApiClient("ok")))
+    host._bundle = await build_runtime(api_client=StaticApiClient("ok"))
+    events = []
+
+    async def _emit(event):
+        events.append(event)
+
+    host._emit = _emit  # type: ignore[method-assign]
+    await start_runtime(host._bundle)
+    try:
+        raw = "/feedback完全删掉，notebook_edit可以合并到其他工具中吗？工具描述也会浪费很多tokens"
+        should_continue = await host._process_line(raw)
+    finally:
+        await close_runtime(host._bundle)
+
+    assert should_continue is True
+    user_items = [
+        event.item
+        for event in events
+        if event.type == "transcript_item" and event.item and event.item.role == "user"
+    ]
+    assert user_items
+    for item in user_items:
+        assert item.text == raw
+        assert item.is_command is False
+    # 消息应进入引擎消息（context.jsonl 可回放），而非作为命令执行
+    assert any(
+        m.role == "user" and m.text == raw for m in host._bundle.engine.messages
+    )
 
 
 @pytest.mark.asyncio

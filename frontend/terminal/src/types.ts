@@ -71,6 +71,8 @@ export type TranscriptItem = {
 	tool_use_id?: string;
 	/** 所属 assistant message ID，用于并行工具分组 */
 	message_id?: string;
+	/** 命令产物标记：命令选择器产生的转录（如 /context set 512000），非真实用户输入 */
+	is_command?: boolean;
 	/** 结构化输出数据（仅在 role 为 'tool_result' 时存在） */
 	structured_output?: Record<string, unknown>;
 	/** 输出类型：text/diff/search_results/file_list/error */

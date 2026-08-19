@@ -366,8 +366,8 @@ def count_turns(messages: list[dict[str, Any]]) -> int:
                         text += block.get("text", "")
                 text = text.strip()
 
-            # 统计非空的、非斜杠命令的用户消息
-            if text and not text.startswith("/"):
+            # 统计非空用户消息（命令不进 messages；真实 / 前缀消息计入轮次）
+            if text:
                 turn_count += 1
 
     return turn_count

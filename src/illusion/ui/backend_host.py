@@ -1080,7 +1080,14 @@ class ReactBackendHost:
         await self._update_phase("thinking")
         # 发送用户消息
         await self._emit(
-            BackendEvent(type="transcript_item", item=TranscriptItem(role="user", text=transcript_line or line))
+            BackendEvent(
+                type="transcript_item",
+                item=TranscriptItem(
+                    role="user",
+                    text=transcript_line or line,
+                    is_command=self._bundle.commands.lookup(line) is not None,
+                ),
+            )
         )
 
         async def _print_system(message: str) -> None:
@@ -1289,11 +1296,11 @@ class ReactBackendHost:
         if mode not in ("both", "conversation"):
             return True
         messages = self._bundle.engine.messages
-        # 计算 target 之后需回退的真实用户轮次（排除 / 命令、后台任务完成通知与 goal 注入消息）
+        # 计算 target 之后需回退的真实用户轮次（排除后台任务完成通知与 goal 注入消息；
+        # 命令不会进入 engine.messages，真实 / 前缀消息须计入）
         turns = sum(
             1 for i, msg in enumerate(messages)
             if i >= target_idx and msg.role == "user" and msg.text.strip()
-            and not msg.text.strip().startswith("/")
             and not is_task_notification(msg.text)
             and not is_goal_system_message(msg.text)
         )
@@ -1743,7 +1750,6 @@ class ReactBackendHost:
             user_msgs = [
                 (i, msg) for i, msg in enumerate(messages)
                 if msg.role == "user" and msg.text.strip()
-                and not msg.text.strip().startswith("/")
                 and not is_task_notification(msg.text)
                 and not is_goal_system_message(msg.text)
             ]

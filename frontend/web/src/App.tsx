@@ -540,7 +540,7 @@ export default function App() {
    * rewind 完成后（busy→false）自动重发 user 消息。
    */
   const handleRegenerate = useCallback(() => {
-    const lastUserMsg = [...session.staticItems].reverse().find((i) => i.role === 'user' && !i.text.startsWith('/'));
+    const lastUserMsg = [...session.staticItems].reverse().find((i) => i.role === 'user' && !i.is_command);
     if (!lastUserMsg) return;
     pendingRegenerateRef.current = lastUserMsg.text;
     session.setBusyTrue();

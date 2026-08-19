@@ -156,6 +156,10 @@ class TranscriptItem(BaseModel):
     message_id: str | None = None
     # 新增：会话快照恢复标记
     session_snapshot: bool = False
+    # 命令产物标记：由命令选择器/内部命令调用产生的转录（如 /context set 512000），
+    # 非真实用户输入。前端以此过滤，不能按文本以 / 开头判断——用户消息
+    # 也可能以 / 开头（如 "/xxx 帮我看看"），按前缀过滤会误吞真实消息
+    is_command: bool = False
 
 
 class TaskSnapshot(BaseModel):
