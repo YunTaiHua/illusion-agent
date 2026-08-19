@@ -362,7 +362,7 @@ async def _generate_title(engine: Any, source: str) -> str:
         cwd=engine.cwd,
         model=model,
         system_prompt=_title_system_prompt(),
-        max_tokens=2048,
+        max_tokens=8192,
         max_turns=MAX_TITLE_TURNS,
         # 标题生成固定 high 强度、充足的 max_tokens：保证输出预算，避免
         # 生成被截断导致正文缺失（具体取值对多数模型通用成立）
@@ -498,8 +498,13 @@ async def _write_title_meta(
     Returns:
         bool: 是否实际写入（跳过覆盖时返回 False）
     """
-    from illusion.services.session_storage import read_meta, write_meta
+    from illusion.services.session_storage import read_meta, session_dir_for, write_meta
 
+    # 会话目录已不存在（后台生成期间用户删除了该会话）则跳过：直接返回 False，
+    # 避免 write_meta 重新创建被删会话的目录与元数据，残留孤立文件。
+    session_dir = session_dir_for(engine.cwd, session_id)
+    if not session_dir.exists():
+        return False
     meta = read_meta(engine.cwd, session_id) or {}
     if meta.get("title"):
         return False

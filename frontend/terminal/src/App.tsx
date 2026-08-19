@@ -136,7 +136,9 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 	const [pickerIndex, setPickerIndex] = useState(0);
 	const [selectModal, setSelectModal] = useState<SelectModalState>(null);
 	const [selectIndex, setSelectIndex] = useState(0);
-	const [customInputModal, setCustomInputModal] = useState<{prompt: string; command: string} | null>(null);
+	const [customInputModal, setCustomInputModal] = useState<
+		{prompt: string; command: string; prefixValue?: string; numeric?: boolean} | null
+	>(null);
 	const [permissionIndex, setPermissionIndex] = useState(2);
 	const [pendingPermissionAck, setPendingPermissionAck] = useState(false);
 	const [cursorReset, setCursorReset] = useState(0);
@@ -286,6 +288,18 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 								? t(language, 'maxTokensCustomPrompt')
 								: t(language, 'contextWindowCustomPrompt'),
 						command: req.command,
+					});
+					setSelectModal(null);
+					session.setSelectRequest(null);
+					return;
+				}
+				// rename / 重命名会话：选中目标会话后弹出自由文本输入框输入新名称
+				if (req.command === 'rename_session') {
+					setCustomInputModal({
+						prompt: t(language, 'renameInputPrompt'),
+						command: 'rename',
+						prefixValue: value,
+						numeric: false,
 					});
 					setSelectModal(null);
 					session.setSelectRequest(null);
@@ -461,6 +475,18 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 		// /max-tokens 无参数时 → 弹出选择框
 		if (trimmed === '/max-tokens') {
 			session.sendRequest({type: 'select_command', command: 'max-tokens'});
+			return true;
+		}
+
+		// /memory 无参数时 → 弹出记忆功能开关选择框
+		if (trimmed === '/memory') {
+			session.sendRequest({type: 'select_command', command: 'memory'});
+			return true;
+		}
+
+		// /rename 无参数时 → 弹出重命名会话 / 自动标题选择框
+		if (trimmed === '/rename') {
+			session.sendRequest({type: 'select_command', command: 'rename'});
 			return true;
 		}
 
@@ -858,8 +884,11 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 			<CustomInputModal
 				prompt={customInputModal.prompt}
 				language={language}
+				numeric={customInputModal.numeric}
+				placeholder={customInputModal.numeric ? undefined : ''}
 				onSubmit={(value) => {
-					session.sendRequest({type: 'apply_select_command', command: customInputModal.command, value});
+					const combined = customInputModal.prefixValue ? `${customInputModal.prefixValue} ${value}` : value;
+					session.sendRequest({type: 'apply_select_command', command: customInputModal.command, value: combined});
 					session.setBusy(true);
 					setCustomInputModal(null);
 				}}

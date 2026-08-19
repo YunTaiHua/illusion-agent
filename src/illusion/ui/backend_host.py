@@ -39,6 +39,7 @@ from uuid import uuid4
 
 from illusion.api.client import SupportsStreamingMessages
 from illusion.auth.manager import AuthManager
+from illusion.config.settings import load_settings, save_settings
 from illusion.engine.stream_events import (
     AssistantTextDelta,
     AssistantTurnComplete,
@@ -1300,8 +1301,28 @@ class ReactBackendHost:
             return True
         return await self._process_line(f"/rewind {turns} {mode}", transcript_line="/rewind")
 
+    async def _emit_result(self, message: str) -> None:
+        """发射指令结果 toast（terminal 前端 3s 自动消失）并释放 busy。"""
+        await self._emit(
+            BackendEvent(
+                type="command_result",
+                command_result_data={"message": message, "type": "info"},
+            )
+        )
+        await self._emit(BackendEvent(type="line_complete"))
+
+    def _is_zh(self) -> bool:
+        """当前是否中文界面（后端 UI 语言判断）。"""
+        assert self._bundle is not None
+        locale = str(
+            self._bundle.app_state.get().ui_language
+            or self._bundle.current_settings().ui_language
+        )
+        return locale.lower().startswith("zh")
+
     async def _apply_select_command(self, command_name: str, value: str) -> bool:
         """应用选择的命令值。"""
+        assert self._bundle is not None
         command = command_name.strip().lstrip("/").lower()
         selected = value.strip()
         # 特殊路由：context → change window 时弹出子选择器
@@ -1319,6 +1340,105 @@ class ReactBackendHost:
         # rewind 两步选择：第二步（选模式）→ 执行回退
         if command == "rewind_mode":
             return await self._handle_rewind_mode_selected(selected)
+        # rename 多步选择：步1 选择 session/title；其余 value（<session_id> <name>）
+        # 落到 _build_select_command_line 转 /rename 执行
+        if command == "rename":
+            if selected == "session":
+                await self._handle_select_command("rename_session")
+                return True
+            if selected == "title":
+                await self._handle_select_command("rename_title")
+                return True
+        # rename title → 步2：自动标题开关
+        if command == "rename_title":
+            settings = load_settings()
+            zh = self._is_zh()
+            if selected == "off":
+                settings.title.enabled = False
+                save_settings(settings)
+                await self._emit_result("自动标题已关闭" if zh else "Auto title disabled")
+            else:
+                settings.title.enabled = True
+                save_settings(settings)
+                await self._handle_select_command("rename_title_model")
+            return True
+        # rename title → 步3：设置标题生成模型
+        if command == "rename_title_model":
+            settings = load_settings()
+            zh = self._is_zh()
+            settings.title.model = selected or None
+            save_settings(settings)
+            label = selected or ("继承当前" if zh else "Inherit current")
+            await self._emit_result(
+                ("标题模型已设置为 " + label) if zh else f"Title model set to {label}"
+            )
+            return True
+        # memory 步1：记忆功能或后台自动提取
+        if command == "memory":
+            if selected == "mem":
+                await self._handle_select_command("memory_enable")
+            else:
+                await self._handle_select_command("memory_auto")
+            return True
+        # memory 步2：记忆功能开关
+        if command == "memory_enable":
+            settings = load_settings()
+            zh = self._is_zh()
+            usage = "用法: /memory [on|off|toggle|status|auto on|auto off]" if zh else "Usage: /memory [on|off|toggle|status|auto on|auto off]"
+            if selected == "off":
+                settings.memory.enabled = False
+                # 记忆关闭连带关闭后台自动提取/整合
+                settings.memory.auto_extract = False
+                save_settings(settings)
+                await self._emit_result(
+                    ("记忆功能已禁用（后台自动提取已一并关闭）\n" + usage)
+                    if zh
+                    else ("Memory disabled (auto extract also disabled)\n" + usage)
+                )
+            else:
+                settings.memory.enabled = True
+                save_settings(settings)
+                await self._handle_select_command("memory_auto")
+            return True
+        # memory 步3（记忆分支与 auto 分支共用）：后台自动提取与整合开关
+        if command == "memory_auto":
+            settings = load_settings()
+            zh = self._is_zh()
+            usage = "用法: /memory [on|off|toggle|status|auto on|auto off]" if zh else "Usage: /memory [on|off|toggle|status|auto on|auto off]"
+            if selected == "off":
+                settings.memory.auto_extract = False
+                save_settings(settings)
+                await self._emit_result("后台自动提取与整合已禁用" if zh else "Auto extract & dream disabled")
+            elif not settings.memory.enabled:
+                # 记忆关闭时不得单独开启后台提取/整合，避免出现 enabled=false + auto_extract=true 的非法态
+                await self._emit_result(
+                    ("需先开启记忆功能，后台自动提取才可启用\n" + usage)
+                    if zh
+                    else ("Enable memory first before enabling auto extract\n" + usage)
+                )
+            else:
+                settings.memory.auto_extract = True
+                save_settings(settings)
+                await self._handle_select_command("memory_extract_model")
+            return True
+        # memory 步4：设置提取子代理模型
+        if command == "memory_extract_model":
+            settings = load_settings()
+            settings.memory.extract_model = selected or None
+            save_settings(settings)
+            await self._handle_select_command("memory_dream_model")
+            return True
+        # memory 步5：设置整合子代理模型
+        if command == "memory_dream_model":
+            settings = load_settings()
+            zh = self._is_zh()
+            settings.memory.dream_model = selected or None
+            save_settings(settings)
+            label = selected or ("继承当前" if zh else "Inherit current")
+            await self._emit_result(
+                ("整合模型已设置为 " + label) if zh else f"Dream model set to {label}"
+            )
+            return True
         line = self._build_select_command_line(command, selected)
         if line is None:
             await self._emit(BackendEvent(type="error", message=f"Unknown select command: {command_name}"))
@@ -1365,6 +1485,8 @@ class ReactBackendHost:
             return None
         if command == "context-window":
             return f"/context set {value}"
+        if command == "rename":
+            return f"/rename {value}"
         return None
 
     def _status_snapshot(self) -> BackendEvent:
@@ -1937,6 +2059,146 @@ class ReactBackendHost:
             )
             return
 
+        if command == "rename":
+            # /rename 无参数 → 步1：选择重命名会话或自动标题
+            options = [
+                {"value": "session", "label": "重命名会话" if zh else "Rename session", "description": "给会话设置自定义名称" if zh else "Set a custom session name"},
+                {"value": "title", "label": "自动标题" if zh else "Auto title", "description": "配置自动标题开关" if zh else "Configure auto title", "active": settings.title.enabled},
+            ]
+            await self._emit(
+                BackendEvent(
+                    type="select_request",
+                    modal={"kind": "select", "title": "重命名" if zh else "Rename", "command": "rename"},
+                    select_options=options,
+                )
+            )
+            return
+
+        if command == "rename_session":
+            # /rename session → 步2：选择要重命名的会话
+            import time as _time
+
+            from illusion.services.session_storage import list_session_snapshots
+
+            sessions = list_session_snapshots(self._bundle.cwd, limit=20)
+            if not sessions:
+                # 空列表也要释放 busy：command_result 不释放，必须补 line_complete
+                await self._emit_result("没有已保存的会话。" if zh else "No saved sessions found.")
+                return
+            options = []
+            for i, s in enumerate(sessions, 1):
+                ts = _time.strftime("%m/%d %H:%M", _time.localtime(s.get("updated_at", s.get("created_at", 0))))
+                display = s.get("title") or s.get("summary", "")[:50] or ("（无摘要）" if zh else "(no summary)")
+                turn_count = s.get("turn_count", 0)
+                options.append({
+                    "value": s["session_id"],
+                    "label": f"#{i}  {ts}  {turn_count}轮  {display}",
+                })
+            await self._emit(
+                BackendEvent(
+                    type="select_request",
+                    modal={"kind": "select", "title": "重命名会话" if zh else "Rename Session", "command": "rename_session"},
+                    select_options=options,
+                )
+            )
+            return
+
+        if command == "rename_title":
+            # /rename title → 步2：自动标题开关
+            options = [
+                {"value": "on", "label": "开启自动标题" if zh else "Enable auto title", "active": settings.title.enabled},
+                {"value": "off", "label": "关闭自动标题" if zh else "Disable auto title", "active": not settings.title.enabled},
+            ]
+            await self._emit(
+                BackendEvent(
+                    type="select_request",
+                    modal={"kind": "select", "title": "自动标题" if zh else "Auto Title", "command": "rename_title"},
+                    select_options=options,
+                )
+            )
+            return
+
+        if command == "rename_title_model":
+            # /rename title → 步3：选择标题生成模型
+            options = self._model_selector_options(settings.title.model)
+            await self._emit(
+                BackendEvent(
+                    type="select_request",
+                    modal={"kind": "select", "title": "标题模型" if zh else "Title Model", "command": "rename_title_model"},
+                    select_options=options,
+                )
+            )
+            return
+
+        if command == "memory":
+            # /memory 无参数 → 步1：选择记忆功能或后台自动提取
+            options = [
+                {"value": "mem", "label": "记忆" if zh else "Memory", "description": "管理记忆功能开关" if zh else "Manage the memory feature", "active": settings.memory.enabled},
+                {"value": "auto", "label": "后台自动提取" if zh else "Auto extract", "description": "管理后台自动提取与整合" if zh else "Manage background auto extract & dream", "active": settings.memory.auto_extract},
+            ]
+            await self._emit(
+                BackendEvent(
+                    type="select_request",
+                    modal={"kind": "select", "title": "记忆功能" if zh else "Memory", "command": "memory"},
+                    select_options=options,
+                )
+            )
+            return
+
+        if command == "memory_enable":
+            # /memory → 步2：记忆功能开关
+            options = [
+                {"value": "on", "label": "开启记忆" if zh else "Enable memory", "active": settings.memory.enabled},
+                {"value": "off", "label": "关闭记忆" if zh else "Disable memory", "active": not settings.memory.enabled},
+            ]
+            await self._emit(
+                BackendEvent(
+                    type="select_request",
+                    modal={"kind": "select", "title": "记忆功能" if zh else "Memory", "command": "memory_enable"},
+                    select_options=options,
+                )
+            )
+            return
+
+        if command == "memory_auto":
+            # /memory → 步3（记忆分支与 auto 分支共用）：后台自动提取与整合开关
+            options = [
+                {"value": "on", "label": "开启提取与整合" if zh else "Enable extract & dream", "active": settings.memory.auto_extract},
+                {"value": "off", "label": "关闭提取与整合" if zh else "Disable extract & dream", "active": not settings.memory.auto_extract},
+            ]
+            await self._emit(
+                BackendEvent(
+                    type="select_request",
+                    modal={"kind": "select", "title": "后台自动提取" if zh else "Auto Extract", "command": "memory_auto"},
+                    select_options=options,
+                )
+            )
+            return
+
+        if command == "memory_extract_model":
+            # /memory → 步4：选择提取子代理模型
+            options = self._model_selector_options(settings.memory.extract_model)
+            await self._emit(
+                BackendEvent(
+                    type="select_request",
+                    modal={"kind": "select", "title": "提取模型" if zh else "Extract Model", "command": "memory_extract_model"},
+                    select_options=options,
+                )
+            )
+            return
+
+        if command == "memory_dream_model":
+            # /memory → 步5：选择整合子代理模型
+            options = self._model_selector_options(settings.memory.dream_model)
+            await self._emit(
+                BackendEvent(
+                    type="select_request",
+                    modal={"kind": "select", "title": "整合模型" if zh else "Dream Model", "command": "memory_dream_model"},
+                    select_options=options,
+                )
+            )
+            return
+
         await self._emit(BackendEvent(type="error", message=(f"/{command} 暂无可选项" if zh else f"No selector available for /{command}")))
 
     def _model_select_options(self, current_model: str) -> list[dict[str, object]]:
@@ -1973,6 +2235,36 @@ class ReactBackendHost:
                     "active": is_current,
                 })
 
+        return options
+
+    def _model_selector_options(self, current_ref: str | None) -> list[dict[str, object]]:
+        """构建子代理模型选择选项：[继承当前] + 各 env 模型的引用列表。
+
+        用于标题生成、记忆提取/整合等可指定模型的子系统（None 继承当前）。
+        值取 ``env_N.model_M`` 引用，label 为模型名。
+        """
+        assert self._bundle is not None
+        locale = str(
+            self._bundle.app_state.get().ui_language
+            or self._bundle.current_settings().ui_language
+        )
+        zh = locale.lower().startswith("zh")
+        options: list[dict[str, object]] = [{
+            "value": "",
+            "label": "继承当前" if zh else "Inherit current",
+            "description": "使用当前会话上下文模型" if zh else "Use the current conversational model",
+            "active": not current_ref,
+        }]
+        settings = self._bundle.current_settings()
+        for env_key, env in settings.list_envs().items():
+            for model_key, model_name in env.list_models().items():
+                ref = f"{env_key}.{model_key}"
+                options.append({
+                    "value": ref,
+                    "label": model_name,
+                    "description": f"{env_key} ({env.api_format})",
+                    "active": ref == current_ref,
+                })
         return options
 
     async def _ask_permission(self, tool_name: str, reason: str, high_risk: bool = False) -> bool:

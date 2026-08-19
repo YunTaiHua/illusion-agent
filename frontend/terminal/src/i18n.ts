@@ -87,6 +87,9 @@ const ZH: Dict = {
 	maxTokensCustomPrompt: '输入自定义最大令牌数:',
 	maxTokensInvalid: '请输入有效的正整数',
 	contextWindowCustomPrompt: '输入自定义上下文窗口大小:',
+	// ---- rename / 自定义输入模态框 ----
+	renameInputPrompt: '输入新的会话名称:',
+	inputValueEmpty: '输入不能为空',
 	// ---- 后端退出兜底提示 ----
 	backend_exit_hint: '后端启动失败。请运行 \'illusion auth login\' 配置 API 环境，或检查 settings.json 配置。',
 	// ---- Ctrl+x 行上下文占比摘要（{used}/{window}/{pct} 为占位符）----
@@ -212,6 +215,9 @@ const EN: Dict = {
 	maxTokensCustomPrompt: 'Enter custom max tokens:',
 	maxTokensInvalid: 'Please enter a valid positive integer',
 	contextWindowCustomPrompt: 'Enter custom context window size:',
+	// ---- rename / custom input modal ----
+	renameInputPrompt: 'Enter a new session name:',
+	inputValueEmpty: 'Input cannot be empty',
 	// ---- backend exit fallback hint ----
 	backend_exit_hint: 'Backend startup failed. Run \'illusion auth login\' to configure API environment, or check settings.json.',
 	// ---- Ctrl+x line context usage summary ({used}/{window}/{pct} are placeholders) ----

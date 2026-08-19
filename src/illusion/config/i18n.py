@@ -87,6 +87,27 @@ MESSAGES: dict[str, dict[str, str]] = {
     "bg_agent_waiting": {"zh-CN": "等待后台代理完成", "en-US": "Waiting for background agent"},
     "bg_agent_resuming": {"zh-CN": "后台代理已完成，继续执行", "en-US": "Background agent completed, resuming"},
     "default_endpoint": {"zh-CN": "默认", "en-US": "default"},
+    # --- memory / title 开关 ---
+    "memory_usage": {
+        "zh-CN": "用法: /memory [on|off|toggle|status|auto on|auto off]",
+        "en-US": "Usage: /memory [on|off|toggle|status|auto on|auto off]",
+    },
+    "memory_enabled": {"zh-CN": "记忆功能已启用", "en-US": "Memory enabled"},
+    "memory_disabled": {"zh-CN": "记忆功能已禁用", "en-US": "Memory disabled"},
+    "memory_auto_on": {"zh-CN": "后台自动提取已启用", "en-US": "Auto extraction enabled"},
+    "memory_auto_off": {"zh-CN": "后台自动提取已禁用", "en-US": "Auto extraction disabled"},
+    "memory_show": {
+        "zh-CN": "记忆功能: {enabled} | 后台自动提取: {auto}",
+        "en-US": "Memory: {enabled} | Auto extract: {auto}",
+    },
+    "memory_auto_show": {
+        "zh-CN": "后台自动提取: {state}",
+        "en-US": "Auto extract: {state}",
+    },
+    "memory_auto_need_mem": {
+        "zh-CN": "需先开启记忆功能，后台自动提取才可启用",
+        "en-US": "Enable memory first before enabling auto extract",
+    },
     # --- mcp ---
     "mcp_none": {"zh-CN": "未配置 MCP 服务器", "en-US": "No MCP servers configured"},
     "mcp_invalid_json": {"zh-CN": "无效 JSON: {exc}", "en-US": "Invalid JSON: {exc}"},

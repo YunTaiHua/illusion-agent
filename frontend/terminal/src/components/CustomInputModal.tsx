@@ -22,19 +22,30 @@ type CustomInputModalProps = {
 	prompt: string;
 	/** 当前 UI 语言 */
 	language: UiLanguage;
-	/** 提交回调，参数为校验通过的数字字符串 */
+	/** 提交回调，参数为校验通过的字符串 */
 	onSubmit: (value: string) => void;
 	/** 取消回调 */
 	onCancel: () => void;
+	/** 是否校验为正整数（默认 true）；false 时接受任意非空文本（如重命名名称） */
+	numeric?: boolean;
+	/** 输入占位符（默认 "1024"） */
+	placeholder?: string;
 };
 
 /**
- * 自定义数字输入模态对话框
+ * 自定义输入模态对话框
  *
  * @param props - 组件属性
  * @returns 返回模态对话框的 JSX 元素
  */
-export function CustomInputModal({prompt, language, onSubmit, onCancel}: CustomInputModalProps): React.JSX.Element {
+export function CustomInputModal({
+	prompt,
+	language,
+	onSubmit,
+	onCancel,
+	numeric = true,
+	placeholder = '1024',
+}: CustomInputModalProps): React.JSX.Element {
 	const [value, setValue] = useState('');
 	const [error, setError] = useState('');
 	const theme = useTheme();
@@ -48,8 +59,13 @@ export function CustomInputModal({prompt, language, onSubmit, onCancel}: CustomI
 
 	const handleSubmit = (v: string): void => {
 		const trimmed = v.trim();
-		if (!/^\d+$/.test(trimmed) || parseInt(trimmed, 10) <= 0) {
-			setError(t(language, 'maxTokensInvalid'));
+		if (numeric) {
+			if (!/^\d+$/.test(trimmed) || parseInt(trimmed, 10) <= 0) {
+				setError(t(language, 'maxTokensInvalid'));
+				return;
+			}
+		} else if (!trimmed) {
+			setError(t(language, 'inputValueEmpty'));
 			return;
 		}
 		onSubmit(trimmed);
@@ -64,7 +80,7 @@ export function CustomInputModal({prompt, language, onSubmit, onCancel}: CustomI
 				<TextInput
 					value={value}
 					onChange={setValue}
-					placeholder="1024"
+					placeholder={placeholder}
 					focus={true}
 					showCursor={true}
 					onSubmit={handleSubmit}

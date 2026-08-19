@@ -250,7 +250,7 @@ def create_default_command_registry() -> CommandRegistry:
     registry.register(SlashCommand("version", "Show the installed IllusionAgent version", version_handler))
     registry.register(SlashCommand("context", "Show active system prompt or manage context window", context_handler, usage="/context [usage|show|window|set N]"))
     registry.register(SlashCommand("compact", "Compact older conversation history", compact_handler))
-    registry.register(SlashCommand("memory", "Inspect and manage project memory", memory_handler))
+    registry.register(SlashCommand("memory", "Inspect and manage project memory, or toggle the memory feature", memory_handler))
     registry.register(SlashCommand("hooks", "Show configured hooks", hooks_handler))
     registry.register(SlashCommand("resume", "Restore the latest saved session", resume_handler, usage="/resume [session_id|#N]"))
     registry.register(SlashCommand("export", "Export the current transcript", export_handler))

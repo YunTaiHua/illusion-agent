@@ -5,7 +5,10 @@
 /memory — 查看和管理项目记忆
 
 用法：
-    /memory                         显示记忆目录信息
+    /memory                         显示记忆目录信息（terminal 无参数时打开开关选择框）
+    /memory on | off | toggle       开启/关闭/切换记忆功能
+    /memory auto on | off | toggle  开启/关闭/切换后台自动提取与整合
+    /memory status                  显示记忆功能与后台自动提取状态
     /memory list                    列出所有记忆文件
     /memory show NAME               显示指定记忆内容
     /memory add TITLE :: CONTENT    创建记忆（默认根目录）
@@ -18,6 +21,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from illusion.commands.types import CommandContext, CommandResult
+from illusion.config.i18n import t
+from illusion.config.settings import load_settings, save_settings
 from illusion.memory import (
     add_memory_entry,
     get_memory_dir_for_cwd,
@@ -26,6 +31,52 @@ from illusion.memory import (
     remove_memory_entry,
 )
 from illusion.memory.paths import MEMORY_TYPE_DIRS
+
+
+async def _memory_toggle(args: str, context: CommandContext) -> CommandResult:
+    """处理记忆功能开关子命令（on/off/toggle/status、auto on/off/toggle）。"""
+    del context
+    settings = load_settings()
+    tokens = args.split()
+    if tokens and tokens[0] == "auto":
+        state = settings.memory.auto_extract
+        action = tokens[1] if len(tokens) == 2 else "status"
+        if action == "status":
+            return CommandResult(
+                message=t("memory_auto_show", state=("on" if state else "off"))
+            )
+        enabled = {"on": True, "off": False, "toggle": not state}.get(action)
+        if enabled is None:
+            return CommandResult(message=t("memory_usage"))
+        if enabled and not settings.memory.enabled:
+            # 记忆关闭时不得单独开启后台提取/整合
+            return CommandResult(message=t("memory_auto_need_mem"))
+        settings.memory.auto_extract = enabled
+        save_settings(settings)
+        return CommandResult(
+            message=t("memory_auto_on" if enabled else "memory_auto_off")
+        )
+    action = tokens[0] if tokens else "status"
+    state = settings.memory.enabled
+    if action == "status":
+        return CommandResult(
+            message=t(
+                "memory_show",
+                enabled=("on" if state else "off"),
+                auto=("on" if settings.memory.auto_extract else "off"),
+            )
+        )
+    enabled = {"on": True, "off": False, "toggle": not state}.get(action)
+    if enabled is None:
+        return CommandResult(message=t("memory_usage"))
+    settings.memory.enabled = enabled
+    if not enabled:
+        # 记忆关闭连带关闭后台自动提取/整合
+        settings.memory.auto_extract = False
+    save_settings(settings)
+    return CommandResult(
+        message=t("memory_enabled" if enabled else "memory_disabled")
+    )
 
 
 async def memory_handler(args: str, context: CommandContext) -> CommandResult:
@@ -39,6 +90,12 @@ async def memory_handler(args: str, context: CommandContext) -> CommandResult:
         )
     action = tokens[0]
     rest = tokens[1] if len(tokens) == 2 else ""
+    # 功能开关子命令（on/off/toggle/status、auto on/off）
+    if (
+        action in {"on", "off", "toggle", "status"}
+        or action == "auto"
+    ):
+        return await _memory_toggle(args, context)
     if action == "list":
         memory_files = list_memory_files(context.cwd)
         if not memory_files:

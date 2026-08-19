@@ -200,9 +200,24 @@ async def test_write_title_meta_skips_when_already_titled(tmp_path):
 
 @pytest.mark.asyncio
 async def test_write_title_meta_writes_when_no_title(tmp_path):
+    # 模拟真实会话：已有会话目录与 meta（后台标题写入前 _update_session_meta 已落盘）
+    from illusion.services.session_storage import write_meta
+
+    write_meta(str(tmp_path), "ses123", {})
     engine = FakeEngine(str(tmp_path))
     wrote = await _write_title_meta(engine, "ses123", "新标题")
     assert wrote is True
     from illusion.services.session_storage import read_meta
 
     assert read_meta(str(tmp_path), "ses123")["title"] == "新标题"
+
+
+@pytest.mark.asyncio
+async def test_write_title_meta_skips_when_session_deleted(tmp_path):
+    # 后台生成期间用户删除了会话：目录不存在 → 跳过写入，且不复活残留在磁盘
+    engine = FakeEngine(str(tmp_path))
+    wrote = await _write_title_meta(engine, "ses123", "新标题")
+    assert wrote is False
+    from illusion.services.session_storage import session_dir_for
+
+    assert not session_dir_for(str(tmp_path), "ses123").exists()
