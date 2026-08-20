@@ -30,8 +30,15 @@ def web_start(
     import uvicorn
 
     # working_directory 已由主回调统一切换（见 cli/main.py）
+    from illusion.ui.web.security import WebAuthConfig, generate_auth_token
     from illusion.ui.web.server import create_app
     from illusion.ui.web.ws_host import WebHostConfig
+
+    # 生产模式：启动时生成一次性高熵令牌，启用 Web 鉴权（Origin 校验 + 令牌
+    # Cookie）。令牌仅存于内存，重启后旧令牌失效；浏览器经同源 Cookie 自动携带。
+    # dev 模式不启用令牌（Vite 代理下浏览器页面在 localhost:5173、拿不到本机
+    # Cookie，令牌会拦截开发工作流），但仍启用 Origin 校验。
+    auth_config = WebAuthConfig() if dev else WebAuthConfig(token=generate_auth_token())
 
     # 渠道自动激活：与 illusion 主命令一致，有 enabled 渠道时 spawn 守护进程。
     # 渠道启用必须配置运行目录（working_directory，见 channel enable --working-directory
@@ -93,10 +100,15 @@ def web_start(
         channel_tools=pc_channel_tools,
     )
 
-    app = create_app(dev=dev, host_config=config)
+    app = create_app(dev=dev, host_config=config, auth=auth_config)
 
     url = f"http://{host}:{port}"
     typer.echo(f"Illusion Agent Web UI: {url}")
+    # Web 鉴权已启用（Origin 校验 + 启动令牌 Cookie）：令牌经同源 Cookie 自动
+    # 传递，浏览器/桌面壳均无需手动拼接，仅在控制台提示已启用。
+    if auth_config.enabled:
+        import logging
+        logging.getLogger(__name__).info("Web 鉴权已启用：Origin 校验 + 启动令牌 Cookie")
     if not dev:
         import os
 
