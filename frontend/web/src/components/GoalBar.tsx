@@ -44,6 +44,8 @@ interface GoalBarProps {
   onClear: () => void;
   /** 清除行内错误 */
   onDismissError: () => void;
+  /** goal 进入 blocked（验证失败/轮次耗尽等）时回调（App 弹 toast 展示受阻原因） */
+  onBlocked: (code: string, message: string) => void;
 }
 
 /* ---- 16px 线性图标（IconGoal/Pause/Play/Edit/Trash/Check/Close） ---- */
@@ -103,7 +105,7 @@ const CloseIcon = () => (
  *
  * 停靠于输入框卡片正上方的目标状态条。
  */
-export function GoalBar({ goal, lang, actionError, onEdit, onPause, onResume, onClear, onDismissError }: GoalBarProps) {
+export function GoalBar({ goal, lang, actionError, onEdit, onPause, onResume, onClear, onDismissError, onBlocked }: GoalBarProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [pending, setPending] = useState(false);
@@ -112,6 +114,38 @@ export function GoalBar({ goal, lang, actionError, onEdit, onPause, onResume, on
   const pendingRef = useRef(false);
   // 发起操作时的 goal (id, revision) 快照 + 操作名：goal 变化/错误到达时解除 pending
   const actRef = useRef<{ id?: string; revision?: number; action?: GoalAction }>({});
+  // 已弹 toast 的 blocked goal id 集合：同一 goal 只提示一次（避免每秒状态
+  // 快照重复触发）；goal 离开 blocked 后再进入会重新提示
+  const blockedNotifiedRef = useRef<Set<string>>(new Set());
+
+  // goal 进入 blocked（验证失败 cap/stall、轮次耗尽等）→ toast 展示受阻原因。
+  // 受阻信息不进 GoalBar 内联（长错误文本会挤占空间、影响体验），
+  // 由 App 的 showToast 呈现，bar 内仅保留相位标签与操作按钮
+  const prevPhaseRef = useRef<string | null>(null);
+  const prevGoalIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (goal == null) {
+      prevPhaseRef.current = null;
+      prevGoalIdRef.current = null;
+      return;
+    }
+    const prevPhase = prevPhaseRef.current;
+    const prevId = prevGoalIdRef.current;
+    prevPhaseRef.current = goal.phase;
+    prevGoalIdRef.current = goal.id;
+    if (
+      goal.phase === 'blocked' &&
+      goal.blockedReason?.message &&
+      (prevId !== goal.id || prevPhase !== 'blocked') &&
+      !blockedNotifiedRef.current.has(goal.id)
+    ) {
+      blockedNotifiedRef.current.add(goal.id);
+      onBlocked(goal.blockedReason.code, goal.blockedReason.message);
+    }
+    if (goal.phase !== 'blocked') {
+      blockedNotifiedRef.current.delete(goal.id);
+    }
+  }, [goal, onBlocked]);
 
   // 新 goal 身份（清除/完成/外部替换）使本地编辑态失效：
   // 不重置的话残留草稿的 Enter 会写覆盖新 goal（dsh 同款防护）
@@ -236,19 +270,11 @@ export function GoalBar({ goal, lang, actionError, onEdit, onPause, onResume, on
       <span className="flex-1 min-w-0 overflow-hidden text-[13px] leading-5 text-content-secondary whitespace-nowrap text-ellipsis">
         {goal.objective}
       </span>
-      {/* 常驻轮次分数：roundsStarted/maxGoalRounds（blocked 时显示受阻原因） */}
-      {goal.phase === 'blocked' && goal.blockedReason ? (
-        <span
-          className="min-w-0 max-w-[40%] shrink truncate text-xs text-danger"
-          title={goal.blockedReason.message}
-        >
-          {goal.blockedReason.message}
-        </span>
-      ) : (
-        <span className="shrink-0 text-xs text-content-disabled whitespace-nowrap tabular-nums">
-          {goal.roundsStarted}/{goal.maxGoalRounds}
-        </span>
-      )}
+      {/* 常驻轮次分数：roundsStarted/maxGoalRounds（受阻原因经 toast 呈现，
+          不进内联避免长错误文本撑破状态栏） */}
+      <span className="shrink-0 text-xs text-content-disabled whitespace-nowrap tabular-nums">
+        {goal.roundsStarted}/{goal.maxGoalRounds}
+      </span>
       {actionError !== null && (
         <span role="alert" className="min-w-0 max-w-[40%] shrink truncate text-xs text-danger">
           {actionError.message} ({actionError.code})

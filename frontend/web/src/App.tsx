@@ -850,7 +850,13 @@ export default function App() {
               onPause={() => session.sendGoalAction('pause')}
               onResume={() => session.sendGoalAction('resume')}
               onClear={() => session.sendGoalAction('clear')}
-              onDismissError={session.clearGoalActionError} />
+              onDismissError={session.clearGoalActionError}
+              onBlocked={(code, message) => {
+                // blockedReason.code → 本地化文案；model-reported / 未知 code
+                // 回退后端原始 message，避免信息丢失
+                const localized = t(lang, `goal:blocked.${code}`);
+                showToast(localized.startsWith('goal:blocked.') ? message : localized, 'error');
+              }} />
             {composer}
           </div>
         )}

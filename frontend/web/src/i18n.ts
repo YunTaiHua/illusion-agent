@@ -470,6 +470,11 @@ const ZH: Record<string, string> = {
   'goal:action.resume': '恢复目标',
   'goal:action.edit': '编辑目标',
   'goal:action.clear': '清除目标',
+  // 受阻原因 toast 文案（blockedReason.code → 本地化；model-reported 与
+  // 未知 code 直接展示后端原始 message，保证信息不丢失）
+  'goal:blocked.verification-cap': '目标验证多次拒绝完成声明，目标已自动暂停',
+  'goal:blocked.verification-stall': '目标验证陷入相同缺陷循环，目标已自动暂停等待处理',
+  'goal:blocked.round-limit': '已达到轮次上限，目标已自动暂停',
 };
 
 const EN: Record<string, string> = {
@@ -913,6 +918,11 @@ const EN: Record<string, string> = {
   'goal:action.resume': 'Resume goal',
   'goal:action.edit': 'Edit goal',
   'goal:action.clear': 'Clear goal',
+  // Blocked reason toast copy (blockedReason.code → localized; model-reported
+  // and unknown codes fall back to the backend's raw message to avoid loss)
+  'goal:blocked.verification-cap': 'Goal verification rejected the completion claim multiple times; goal auto-paused',
+  'goal:blocked.verification-stall': 'Goal verification hit the same gaps repeatedly; goal paused for your decision',
+  'goal:blocked.round-limit': 'Goal round limit reached; goal auto-paused',
   cmd_goal: 'Set or view the goal for a long-running task',
 };
 
