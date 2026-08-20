@@ -30,6 +30,7 @@ from illusion.goal.prompts import (
     CHANGES_UNAVAILABLE,
     VERIFIER_REPORT_MAX_CHARS,
     build_evidence_packet,
+    is_goal_system_message,
     render_verifier_gaps_block,
     render_verifier_user_prompt,
 )
@@ -402,9 +403,21 @@ def _write_patch_file(diff: str, session_id: str) -> str:
 
 
 def _last_assistant_text(engine: QueryEngine) -> str:
-    """引擎消息中最后一条 assistant 文本（作为 FINAL_RESPONSE 证据）。"""
-    for msg in reversed(engine.messages):
-        if msg.role == "assistant" and msg.text.strip():
+    """引擎消息中 goal 轮次内的最后一条 assistant 文本（FINAL_RESPONSE 证据）。
+
+    锚定最近一次 goal harness 注入消息（<goal_round> 等）之后的消息——
+    验证只面向当前 goal 轮次的实现者输出。注入之前的 assistant 属于更早的
+    会话轮次（典型场景：会话首条为普通消息、后续才 /goal 创建），误取其
+    文本会导致完成声明验证永远失败（验证器盯着与目标无关的旧回复）。
+    未发现 goal 注入时回退到最后一条 assistant（兼容旧流程）。
+    """
+    messages = engine.messages
+    start = 0
+    for i, msg in enumerate(messages):
+        if msg.role == "user" and is_goal_system_message(msg.text):
+            start = i + 1
+    for msg in reversed(messages[start:]):
+        if msg.role == "assistant":
             return msg.text
     return ""
 

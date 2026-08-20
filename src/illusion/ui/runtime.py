@@ -1045,7 +1045,9 @@ def _update_session_meta(bundle: RuntimeBundle) -> None:
         if snap is not None:
             summary = snap.objective.strip()[:80]
     # 计算 turn_count：按真正由用户输入的消息数计算（排除 tool_result 等）
-    # 一轮对话 = 一个用户输入 + 一个或多个 assistant 回复（含工具调用的中间回复）
+    # 一轮对话 = 一个用户输入 + 一个或多个 assistant 回复（含工具调用的中间回复）。
+    # /goal 命令原文已作为真实 user 消息入库（record_goal_command），计入轮次；
+    # goal 自动续跑的 <goal_round> 注入消息非用户输入，不再单独加成
     from illusion.engine.messages import ToolResultBlock
     turn_count = sum(
         1 for m in bundle.engine.messages
@@ -1054,12 +1056,6 @@ def _update_session_meta(bundle: RuntimeBundle) -> None:
         and m.text.strip()
         and not is_task_notification(m.text)
         and not is_goal_system_message(m.text)
-    )
-    # goal 自动续跑轮次计入轮数（<goal_round> 注入消息本身在上面被排除；
-    # 按消息计数而非 manager.rounds_started，clear/恢复后历史轮次仍准确）
-    turn_count += sum(
-        1 for m in bundle.engine.messages
-        if m.role == "user" and m.text.strip().startswith("<goal_round>")
     )
     # 保留原始 created_at（首次调用时不存在则用当前时间）
     existing = read_meta_from(session_dir, session_id) or {}
@@ -1210,6 +1206,14 @@ async def handle_line(
                     await render_event(event)
             except MaxTurnsExceeded as exc:
                 await print_system(f"Stopped after {exc.max_turns} turns (max_turns).")
+        # 命令路径（不走 submit_message）补触发会话自动标题：/goal 创建目标的
+        # 命令原文已作为 user 消息入库，需在回合结束后调度标题生成
+        try:
+            from illusion.title.auto_title import maybe_schedule_title
+
+            maybe_schedule_title(bundle.engine)
+        except Exception:
+            logging.getLogger(__name__).exception("命令路径自动标题调度失败")
         sync_app_state(bundle)
         return not result.should_exit
 

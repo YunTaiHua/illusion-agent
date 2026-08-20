@@ -1079,13 +1079,22 @@ class ReactBackendHost:
         # 更新会话阶段为思考中
         await self._update_phase("thinking")
         # 发送用户消息
+        # /goal 创建命令（非 clear/edit/pause/resume 子命令、非空参数）原文会作为
+        # 真实 user 消息入库（record_goal_command），其转录不打命令产物标记，
+        # 前端按普通用户消息渲染；其余命令仍标记 is_command 由前端过滤
+        parsed_cmd = self._bundle.commands.lookup(line)
+        is_command = parsed_cmd is not None
+        if parsed_cmd is not None and parsed_cmd[0].name == "goal":
+            from illusion.commands.goal import is_goal_create_args
+
+            is_command = not is_goal_create_args(parsed_cmd[1])
         await self._emit(
             BackendEvent(
                 type="transcript_item",
                 item=TranscriptItem(
                     role="user",
                     text=transcript_line or line,
-                    is_command=self._bundle.commands.lookup(line) is not None,
+                    is_command=is_command,
                 ),
             )
         )

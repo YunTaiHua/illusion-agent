@@ -787,6 +787,27 @@ class QueryEngine:
         if self._checkpoint_store is not None:
             await self._checkpoint_store.append_message(message)
 
+    async def record_goal_command(self, text: str) -> None:
+        """将 /goal 命令原文作为真实 user 消息追加并持久化。
+
+        命令本身由 handle_line 命令分支执行（不进 engine.messages），但
+        /goal 创建目标时用户意图蕴含在命令原文里，需作为首条可见消息：
+        - 前端实时转录与重放均按 user 消息渲染
+        - 自动标题生成（_user_messages）能捕获它作为标题素材
+        - 轮次统计 / 会话摘要 / rewind 将其视为真实一轮
+
+        rewind 一致性：命令路径不经过 submit_message 的 checkpoint 边界，
+        这里显式 append_checkpoint，使 rewind 能按轮次回退到 /goal 之前
+        （否则 checkpoints 只覆盖普通消息轮，回退会越过 /goal 直接删到
+        第一条普通消息）。
+
+        Args:
+            text: 用户输入的 /goal 命令原文
+        """
+        if self._checkpoint_store is not None:
+            await self._checkpoint_store.append_checkpoint()
+        await self._append_injected_user_message(text)
+
     async def _flush_goal_state(self, *, force: bool = False) -> None:
         """将 goal 状态以 last-wins 行写入 checkpoint。
 

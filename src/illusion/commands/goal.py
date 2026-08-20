@@ -18,6 +18,25 @@ from illusion.goal.types import GoalError
 USAGE = "Usage: /goal [<objective>|clear|edit <objective>|pause|resume]"
 
 
+def is_goal_create_args(args: str) -> bool:
+    """判断 /goal 参数是否为创建目标的调用。
+
+    创建目标 = 非空参数且首词不是 clear/edit/pause/resume 子命令。
+    （与 goal_handler 的分支解析保持一致，供 UI 层判定转录标记）
+
+    Args:
+        args: /goal 命令参数（已 strip 或未 strip 均可）
+
+    Returns:
+        bool: 是否为创建目标的调用
+    """
+    args = (args or "").strip()
+    if not args:
+        return False
+    head = args.split(None, 1)[0]
+    return head not in ("clear", "edit", "pause", "resume")
+
+
 def _manager(context: CommandContext) -> tuple[QueryEngine, GoalManager | None]:
     engine = context.engine
     manager = getattr(engine, "_goal_manager", None)
@@ -83,8 +102,11 @@ async def goal_handler(args: str, context: CommandContext) -> CommandResult:
                 return CommandResult(message="No goal is currently set.")
             manager.edit(view.snapshot.id, view.snapshot.revision, objective=rest)
             return CommandResult(message="Goal objective updated.")
-        # 其余整体视作 objective
+        # 其余整体视作 objective（args 非空且非子命令，即创建目标）
         manager.create(objective=args)
+        # 将 /goal 命令原文作为真实 user 消息持久化：前端可渲染（实时+重放）、
+        # 自动标题可捕获其作为标题素材（_user_messages 收集 user 消息）
+        await _engine.record_goal_command(f"/goal {args}")
         return CommandResult(
             message="Goal set. Starting autonomous rounds…",
             drive_goal=True,

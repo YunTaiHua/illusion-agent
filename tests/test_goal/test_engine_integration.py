@@ -255,6 +255,11 @@ class _FakeCommandEngine:
 
     def __init__(self, manager: GoalManager | None) -> None:
         self._goal_manager = manager
+        self.messages: list[ConversationMessage] = []
+
+    async def record_goal_command(self, text: str) -> None:
+        """模拟 goal 命令原文入库（真实引擎会附加持久化）。"""
+        self.messages.append(ConversationMessage.from_user_text(text))
 
 
 def test_goal_command_create_and_status() -> None:
@@ -271,9 +276,13 @@ def test_goal_command_create_and_status() -> None:
         assert manager.snapshot is not None
         assert manager.snapshot.objective == "build the thing"
         assert manager.activation == "armed"
+        # /goal 命令原文作为真实 user 消息入库（渲染/标题/轮次素材）
+        assert [m.text for m in engine.messages] == ["/goal build the thing"]
 
         result = await goal_handler("", ctx)
         assert "Objective: build the thing" in (result.message or "")
+        # 状态查看不重复入库
+        assert len(engine.messages) == 1
 
         result = await goal_handler("pause", ctx)
         assert manager.snapshot is not None and manager.snapshot.phase == "paused"
@@ -308,6 +317,141 @@ def test_goal_command_no_goal() -> None:
         assert "No goal is currently set." in (result.message or "")
 
     asyncio.run(run())
+
+
+# ---------------------------------------------------------------------------
+# record_goal_command 持久化与轮次语义（真实引擎 + CheckpointStore）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_goal_command_persisted_and_turn_count(tmp_path: Path) -> None:
+    """/goal 命令原文作为真实 user 消息持久化，且不叠加 <goal_round> 轮次。
+
+    集成验证（真实 QueryEngine + CheckpointStore）：
+    - context.jsonl 中 /goal 命令原文恰好一行，且先于首个 <goal_round> 行
+    - 驱动 goal 轮次后 turn_count 只计真实用户输入（/goal 1 轮），
+      <goal_round> 注入消息不叠加（回归：之前直接加成 goal 轮次）
+    """
+    from illusion.commands.goal import goal_handler
+    from illusion.commands.types import CommandContext
+    from illusion.services.checkpoint_store import CheckpointStore
+    from illusion.services.session_storage import session_dir_for
+
+    manager = GoalManager(GoalSettings(default_max_goal_rounds=2))
+    engine = _FakeEngine(manager, cwd=str(tmp_path))
+    store = CheckpointStore(session_dir_for(str(tmp_path), "goal-test"), "goal-test")
+    engine._checkpoint_store = store
+
+    async def run() -> None:
+        ctx = CommandContext(engine=engine)  # type: ignore[arg-type]
+        # 1. 执行 /goal 创建命令：命令原文入库
+        result = await goal_handler("实现登录功能", ctx)
+        assert result.drive_goal is True
+        recorded = [m.text for m in engine.messages if m.role == "user"]
+        assert recorded == ["/goal 实现登录功能"]
+
+        # 2. 驱动 goal 自动续跑（2 轮注入 <goal_round>）
+        async for _ in engine.drive_goal_rounds():
+            pass
+        user_texts = [m.text for m in engine.messages if m.role == "user"]
+        assert user_texts[0] == "/goal 实现登录功能"
+        assert sum(1 for t in user_texts if t.startswith("<goal_round>")) == 2
+
+        # 3. checkpoint 持久化顺序：/goal 行在首个 <goal_round> 行之前，仅一行
+        jsonl = store.session_dir.joinpath("context.jsonl").read_text(encoding="utf-8")
+        round_idx = jsonl.find("<goal_round>")
+        assert round_idx != -1
+        goal_idx = jsonl.find("/goal 实现登录功能")
+        assert goal_idx != -1 and goal_idx < round_idx
+        assert jsonl.count("/goal 实现登录功能") == 1
+
+        # 4. 轮次语义：turn_count 只计真实用户输入（/goal 1 轮），
+        #    <goal_round> 不叠加（与 runtime._update_session_meta 同口径的最小复刻）
+        from illusion.goal.prompts import is_goal_system_message
+        from illusion.tasks.types import is_task_notification
+
+        turn_count = sum(
+            1
+            for m in engine.messages
+            if m.role == "user"
+            and m.text.strip()
+            and not is_task_notification(m.text)
+            and not is_goal_system_message(m.text)
+        )
+        assert turn_count == 1
+
+    await run()
+
+
+@pytest.mark.asyncio
+async def test_goal_command_sets_checkpoint_boundary(tmp_path: Path) -> None:
+    """/goal 命令路径显式建 checkpoint 边界：rewind 可回退到 /goal 之前。
+
+    回归：命令路径不经过 submit_message 的 checkpoint 创建，若 record_goal_command
+    不 append_checkpoint，rewind 1 轮会按 checkpoint 计数回退并越过 /goal
+    直接删到第一条普通消息。
+    """
+    from illusion.commands.goal import goal_handler
+    from illusion.commands.types import CommandContext
+    from illusion.services.checkpoint_store import CheckpointStore
+    from illusion.services.session_storage import session_dir_for
+
+    manager = GoalManager(GoalSettings(default_max_goal_rounds=2))
+    engine = _FakeEngine(manager, cwd=str(tmp_path))
+    store = CheckpointStore(session_dir_for(str(tmp_path), "goal-boundary"), "goal-boundary")
+    engine._checkpoint_store = store
+
+    async def run() -> None:
+        # 第一条普通消息（真实用户轮次，走 submit_message 的 checkpoint 边界）
+        await store.append_checkpoint()  # id 0
+        await store.append_message(ConversationMessage.from_user_text("第一条普通消息"))
+        # /goal 创建命令
+        ctx = CommandContext(engine=engine)  # type: ignore[arg-type]
+        result = await goal_handler("目标事项", ctx)
+        assert result.drive_goal is True
+        # record_goal_command 应建立新的 checkpoint 边界（id 1）
+        assert store.next_checkpoint_id == 2, (
+            f"/goal 应建立独立 checkpoint 边界，实际 next_checkpoint_id={store.next_checkpoint_id}"
+        )
+
+        # rewind 1 轮 → 回退到 /goal 之前：第一条普通消息保留
+        restored = await store.rewind_to(1)
+        restored_texts = [m.text for m in restored.messages]
+        assert "/goal 目标事项" not in restored_texts
+        assert "第一条普通消息" in restored_texts
+
+    await run()
+
+
+@pytest.mark.asyncio
+async def test_last_assistant_text_anchored_after_goal_injection(tmp_path: Path) -> None:
+    """/goal 开局晚于普通消息时，FINAL_RESPONSE 锚定 goal 轮次内。
+
+    回归（对应验证器 FINAL_RESPONSE 检查 bug）：会话首条为普通消息、后续
+    才 /goal 创建时，若 goal 轮 assistant 文本为空（纯工具轮），旧实现会
+    回退到第一条普通消息的旧回复作为 FINAL_RESPONSE，导致验证永远失败。
+    """
+    from illusion.goal.verifier import _last_assistant_text
+
+    messages = [
+        ConversationMessage.from_user_text("帮我整理项目结构"),
+        ConversationMessage(role="assistant", content=[], text="这是第一条消息的旧回复"),
+        ConversationMessage.from_user_text("/goal 实现登录"),
+        ConversationMessage.from_user_text("<goal_round>Round 1/2</goal_round>"),
+        # goal 轮 assistant 仅工具调用、无文本输出
+        ConversationMessage(role="assistant", content=[]),
+    ]
+    result = _last_assistant_text(_FakeMsgEngine(messages))
+    # 空文本 assistant 是 goal 轮次内的最后一条，不应回退到旧回复
+    assert result == ""
+
+
+class _FakeMsgEngine:
+    """仅暴露 messages 属性的引擎桩（供 _last_assistant_text 测试）。"""
+
+    def __init__(self, messages: list[ConversationMessage]) -> None:
+        self.messages = messages
 
 
 # ---------------------------------------------------------------------------

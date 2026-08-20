@@ -178,7 +178,7 @@ export function GoalBar({ goal, lang, actionError, onEdit, onPause, onResume, on
 
   if (editing) {
     return (
-      <div data-goal-bar className="glass-surface rounded-xl flex items-center gap-2.5 h-9 px-3 py-1">
+      <div data-goal-bar className="glass-surface rounded-xl flex items-center gap-2.5 min-w-0 h-9 px-3 py-1 overflow-hidden">
         <input
           type="text"
           aria-label={t(lang, 'goal:objective.aria')}
@@ -192,7 +192,7 @@ export function GoalBar({ goal, lang, actionError, onEdit, onPause, onResume, on
           className="flex-1 min-w-0 h-[26px] px-2 rounded-md border border-border-light bg-black/5 dark:bg-white/5 text-[13px] leading-5 text-content-primary outline-none focus:border-primary"
         />
         {actionError !== null && (
-          <span role="alert" className="flex-1 min-w-0 text-xs text-danger truncate">
+          <span role="alert" className="min-w-0 max-w-[40%] shrink truncate text-xs text-danger">
             {actionError.message} ({actionError.code})
           </span>
         )}
@@ -226,7 +226,7 @@ export function GoalBar({ goal, lang, actionError, onEdit, onPause, onResume, on
   const title =
     goal.phase === 'blocked' ? goal.blockedReason?.message?.slice(0, 200).replace(/\n/g, ' ') : undefined;
   return (
-    <div data-goal-bar title={title} className="glass-surface rounded-xl flex items-center gap-2.5 h-9 px-3 py-1">
+    <div data-goal-bar title={title} className="glass-surface rounded-xl flex items-center gap-2.5 min-w-0 h-9 px-3 py-1 overflow-hidden">
       <span className="inline-flex shrink-0 text-content-disabled">
         <GoalGlyph />
       </span>
@@ -238,14 +238,19 @@ export function GoalBar({ goal, lang, actionError, onEdit, onPause, onResume, on
       </span>
       {/* 常驻轮次分数：roundsStarted/maxGoalRounds（blocked 时显示受阻原因） */}
       {goal.phase === 'blocked' && goal.blockedReason ? (
-        <span className="shrink-0 text-xs text-danger whitespace-nowrap">{goal.blockedReason.message}</span>
+        <span
+          className="min-w-0 max-w-[40%] shrink truncate text-xs text-danger"
+          title={goal.blockedReason.message}
+        >
+          {goal.blockedReason.message}
+        </span>
       ) : (
         <span className="shrink-0 text-xs text-content-disabled whitespace-nowrap tabular-nums">
           {goal.roundsStarted}/{goal.maxGoalRounds}
         </span>
       )}
       {actionError !== null && (
-        <span role="alert" className="flex-1 min-w-0 text-xs text-danger truncate">
+        <span role="alert" className="min-w-0 max-w-[40%] shrink truncate text-xs text-danger">
           {actionError.message} ({actionError.code})
         </span>
       )}

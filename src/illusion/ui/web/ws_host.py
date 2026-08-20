@@ -1031,18 +1031,27 @@ class WebBackendHost:
         session.emitted_tool_started_ids.clear()
         # 更新会话阶段为思考中
         await self._update_phase(session, "thinking")
-        # 发送用户消息（transcript_line 为 None 时不发送转录，用于左侧栏操作等静默场景）
-        if transcript_line is not None:
+        # 发送用户消息（transcript_line 为 None 时不发送转录，用于左侧栏操作等静默场景；
+        # /goal 创建命令走 submit_line 时 transcript_line 为 None，但命令原文需
+        # 作为真实 user 消息渲染，故例外地发送转录）
+        parsed_cmd = session.bundle.commands.lookup(line)
+        is_goal_create = False
+        if parsed_cmd is not None and parsed_cmd[0].name == "goal":
+            from illusion.commands.goal import is_goal_create_args
+
+            is_goal_create = is_goal_create_args(parsed_cmd[1])
+        if transcript_line is not None or is_goal_create:
+            # 命令产物标记：按命令注册表判定而非文本前缀——用户消息也可能以
+            # / 开头，前缀判断会误吞真实消息。cron 委托场景 line 为任务 prompt
+            # （非命令），因此 is_command=False。/goal 创建命令原文作为真实
+            # user 消息入库（record_goal_command），转录不打命令产物标记
             await self._emit(
                 BackendEvent(
                     type="transcript_item",
                     item=TranscriptItem(
                         role="user",
                         text=transcript_line or line,
-                        # 命令产物标记：按命令注册表判定而非文本前缀——用户消息
-                        # 也可能以 / 开头，前缀判断会误吞真实消息。cron 委托场景
-                        # line 为任务 prompt（非命令），因此 is_command=False
-                        is_command=session.bundle.commands.lookup(line) is not None,
+                        is_command=parsed_cmd is not None and not is_goal_create,
                     ),
                 ),
                 session_id=session.session_id,
@@ -1643,7 +1652,9 @@ class WebBackendHost:
             goal_manager = engine.goal_manager
             if goal_manager is not None and goal_manager.snapshot is not None:
                 summary = goal_manager.snapshot.objective.strip()[:80]
-        # 轮数：真正由用户输入的消息数（与 _update_session_meta 口径一致）
+        # 轮数：真正由用户输入的消息数（与 _update_session_meta 口径一致）。
+        # /goal 命令原文已作为真实 user 消息入库（record_goal_command），计入轮次；
+        # goal 自动续跑的 <goal_round> 注入消息非用户输入，不再单独加成
         turn_count = sum(
             1
             for m in messages
@@ -1652,13 +1663,6 @@ class WebBackendHost:
             and m.text.strip()
             and not is_task_notification(m.text)
             and not is_goal_system_message(m.text)
-        )
-        # goal 自动续跑轮次计入轮数（<goal_round> 注入消息本身在上面被排除；
-        # 按消息计数而非 manager.rounds_started，clear/恢复后历史轮次仍准确）
-        turn_count += sum(
-            1
-            for m in messages
-            if m.role == "user" and m.text.strip().startswith("<goal_round>")
         )
         message_count = len(messages)
         # 读取磁盘 meta 获取自定义 title（rename 写入的名称）——

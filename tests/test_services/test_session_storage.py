@@ -86,10 +86,11 @@ def test_count_turns() -> None:
     ]
     assert count_turns(messages) == 2
 
-    # 以 / 开头的 user 消息：命令本身不进 messages（handle_line 拦截），
-    # 出现即真实用户输入（如未知命令落入文本通道），应计入轮次
+    # 以 / 开头的 user 消息：一般命令本身不进 messages（handle_line 拦截），
+    # 但 /goal 创建命令原文会作为真实消息入库（record_goal_command），
+    # 二者出现即真实用户输入，均应计入轮次
     messages = [
-        {"role": "user", "text": "/feedback完全删掉"},
+        {"role": "user", "text": "/goal 实现登录功能"},
         {"role": "assistant", "text": "Done"},
         {"role": "user", "text": "Hello"},
         {"role": "assistant", "text": "Hi there"},

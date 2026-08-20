@@ -8,10 +8,12 @@
 设计要点（与 memory/extract 对齐）：
     - 无感调度：通过 asyncio.create_task 后台执行，首个 await 前让出当前
       tick，不阻塞主对话
-    - 仅首回合：每会话只尝试三次（state.attempted），且仅在真实用户回合数
+    - 仅首回合：每会话只尝试一次（state.attempted），且仅在真实用户回合数
       不超过 1 时触发；标题素材只取首条真实用户消息，不分析整段对话
-    - /goal 特殊情况：若首条消息即为 /goal 命令（无真实用户消息），用当前
-      goal 的 objective 兜底作为标题素材
+    - /goal 场景：/goal 创建命令原文已作为真实 user 消息入库
+      （record_goal_command），标题素材直接捕获它；仅当首条消息是 goal
+      harness 注入消息（<goal_round>，非真实用户输入）且无其他真实消息时，
+      用当前 goal 的 objective 兜底作为标题素材
     - 一次性生成：会话已有 title（手动重命名或已生成过）则跳过
     - 工具限制：标题生成无需任何工具，使用空工具注册表，仅一轮 LLM 调用
     - 模型可配：settings.title.model（env_N.model_M 格式），None 继承当前
@@ -171,7 +173,11 @@ def _clean_title(raw: str) -> str:
 
 
 def _user_messages(engine: Any) -> list[str]:
-    """收集真实用户消息文本（排除 / 命令、后台任务通知与 goal 注入消息）。"""
+    """收集真实用户消息文本（排除后台任务通知与 goal 注入消息）。
+
+    注：/goal 创建命令原文已作为真实 user 消息入库（record_goal_command），
+    会被收集作为标题素材；goal harness 注入的 <goal_round> 等消息被排除。
+    """
     from illusion.engine.messages import ToolResultBlock
     from illusion.goal.prompts import is_goal_system_message
     from illusion.tasks.types import is_task_notification
@@ -185,7 +191,7 @@ def _user_messages(engine: Any) -> list[str]:
         text = msg.text.strip()
         if not text:
             continue
-        # 命令不进 engine.messages；真实 / 前缀消息可作为标题素材
+        # 后台任务通知与 goal harness 注入消息不是用户输入，排除
         if is_task_notification(text) or is_goal_system_message(text):
             continue
         texts.append(text)
@@ -193,7 +199,12 @@ def _user_messages(engine: Any) -> list[str]:
 
 
 def _goal_objective(engine: Any) -> str:
-    """提取当前 goal 的 objective（/goal 首条命令时的标题素材兜底）。"""
+    """提取当前 goal 的 objective（/goal 开局时的标题素材兜底）。
+
+    兜底场景：首条消息为 goal harness 注入消息（<goal_round>，非真实用户
+    输入）且无其他真实消息时使用；/goal 命令原文已入库的场景优先走
+    _user_messages，不会落到这里。
+    """
     goal_manager = getattr(engine, "goal_manager", None)
     if goal_manager is None:
         return ""

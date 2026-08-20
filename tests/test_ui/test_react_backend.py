@@ -141,6 +141,48 @@ async def test_backend_host_slash_prefixed_user_message_not_command(tmp_path, mo
 
 
 @pytest.mark.asyncio
+async def test_backend_host_goal_command_transcript_not_filtered(tmp_path, monkeypatch):
+    """/goal 创建命令的转录不打 is_command 标记，前端按真实用户消息渲染。
+
+    /goal 命令原文通过 record_goal_command 作为 user 消息入库（重放可见、
+    自动标题可捕获），因此其实时转录也不应被命令产物过滤。
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ILLUSION_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ILLUSION_DATA_DIR", str(tmp_path / "data"))
+
+    host = ReactBackendHost(BackendHostConfig(api_client=StaticApiClient("ok")))
+    host._bundle = await build_runtime(api_client=StaticApiClient("ok"))
+    events = []
+
+    async def _emit(event):
+        events.append(event)
+
+    host._emit = _emit  # type: ignore[method-assign]
+    await start_runtime(host._bundle)
+    try:
+        should_continue = await host._process_line("/goal 实现登录功能")
+    finally:
+        await close_runtime(host._bundle)
+
+    assert should_continue is True
+    user_items = [
+        event.item
+        for event in events
+        if event.type == "transcript_item" and event.item and event.item.role == "user"
+    ]
+    assert user_items
+    for item in user_items:
+        assert item.text == "/goal 实现登录功能"
+        assert item.is_command is False
+    # /goal 命令原文已作为真实 user 消息入库（标题/轮次/重放素材）
+    assert any(
+        m.role == "user" and m.text == "/goal 实现登录功能"
+        for m in host._bundle.engine.messages
+    )
+
+
+@pytest.mark.asyncio
 async def test_backend_host_processes_model_turn(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("ILLUSION_CONFIG_DIR", str(tmp_path / "config"))

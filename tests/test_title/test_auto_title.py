@@ -114,6 +114,18 @@ def test_extract_title_source_falls_back_to_goal():
     assert _extract_title_source(engine) == "实现登录功能"
 
 
+def test_extract_title_source_uses_goal_command_text():
+    # /goal 命令原文已作为真实 user 消息入库（record_goal_command）：
+    # 标题素材应捕获 /goal xxx 原文本身，而非回退到 goal objective
+    goal = SimpleNamespace(snapshot=SimpleNamespace(objective="实现登录功能"))
+    engine = FakeEngine(
+        ".",
+        [ConversationMessage.from_user_text("/goal 实现登录功能，支持第三方登录")],
+        goal_manager=goal,
+    )
+    assert _extract_title_source(engine) == "/goal 实现登录功能，支持第三方登录"
+
+
 def test_goal_objective_absent_returns_empty():
     engine = FakeEngine(".", [ConversationMessage.from_user_text("hi")], goal_manager=None)
     assert _goal_objective(engine) == ""
