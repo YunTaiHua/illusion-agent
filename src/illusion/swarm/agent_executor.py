@@ -656,6 +656,11 @@ async def run_agent_in_process(
             nonlocal last_activity
             logger.warning("[agent_executor] %s: entering query loop", agent_id)
             event_count = 0
+            # 已上报 "running xxx" 的 tool_use_id 集合。
+            # query.py 单工具路径会 yield 两次 ToolExecutionStarted（ApiToolCallStartedEvent
+            # 提前通知 + 正式执行通知），此处去重避免对同一工具调用上报两次进度，
+            # 与 host 层（ws_host/backend_host）的 emitted_tool_started_ids 去重对称。
+            emitted_progress_tool_ids: set[str] = set()
             async for event, usage in run_query(agent_query_context, messages):
                 event_count += 1
                 # 任何事件都视为活跃，刷新活动时间戳（前台 idle_watcher 据此判断）
@@ -704,7 +709,15 @@ async def run_agent_in_process(
                             # 保留分支结构可留作后续拓展（如完成确认标记，不留也没事我觉得有些冗余）。
                             pass
                         elif isinstance(event, ToolExecutionStarted):
-                            await on_progress(f"running {event.tool_name}", "tool")
+                            # query.py 单工具路径会 yield 两次 ToolExecutionStarted（提前通知 + 正式通知），
+                            # 通过 tool_use_id 去重，仅首次上报 "running xxx"，避免前端重复显示
+                            tid = getattr(event, "tool_use_id", "") or ""
+                            if tid and tid in emitted_progress_tool_ids:
+                                pass
+                            else:
+                                if tid:
+                                    emitted_progress_tool_ids.add(tid)
+                                await on_progress(f"running {event.tool_name}", "tool")
                         else:
                             # 其他事件（如 ApiToolCallStartedEvent 已被 query.py 转为
                             # ToolExecutionStarted，无需在此重复处理）
