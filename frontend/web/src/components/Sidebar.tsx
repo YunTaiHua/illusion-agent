@@ -147,6 +147,9 @@ function SessionItem({ session, isRestoring, isActive, lang, onSelect, onRename,
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
   const dotsRef = useRef<HTMLButtonElement>(null);
+  // 会话项根节点引用：用于判定 scroll 事件是否来自会话列表自身滚动，
+  // 避免聊天区流式跟随滚动等外部滚动误关闭操作菜单
+  const itemRef = useRef<HTMLDivElement>(null);
 
   /** 操作菜单预估高度（重命名 + 删除两项，含 padding），用于视口底部翻转判断 */
   const MENU_EST_HEIGHT = 90;
@@ -167,17 +170,28 @@ function SessionItem({ session, isRestoring, isActive, lang, onSelect, onRename,
 
   // 菜单打开期间：滚动会话列表关闭（固定定位浮层不跟随滚动）、
   // Escape 关闭、窗口 resize 关闭（固定定位位置失效）
+  // 注意：仅会话列表自身的滚动会关闭菜单；聊天区等其他区域的滚动
+  // （如流式输出自动跟随到底部）不影响菜单位置，不应关闭——
+  // 否则流式阶段点击三点后菜单会被聊天区滚动事件立即关闭，表现为不可点击
   useEffect(() => {
     if (!menuOpen) return;
     const close = () => setMenuOpen(false);
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') close();
     };
-    document.addEventListener('scroll', close, true);
+    // 仅当滚动发生在会话列表容器（即包含本会话项的滚动祖先）时才关闭菜单；
+    // 其他区域滚动事件的 target 不会包含本会话项节点，予以忽略
+    const onScroll = (e: Event) => {
+      const target = e.target as Element | null;
+      if (target && itemRef.current && target.contains(itemRef.current)) {
+        close();
+      }
+    };
+    document.addEventListener('scroll', onScroll, true);
     document.addEventListener('keydown', onKey);
     window.addEventListener('resize', close);
     return () => {
-      document.removeEventListener('scroll', close, true);
+      document.removeEventListener('scroll', onScroll, true);
       document.removeEventListener('keydown', onKey);
       window.removeEventListener('resize', close);
     };
@@ -205,7 +219,7 @@ function SessionItem({ session, isRestoring, isActive, lang, onSelect, onRename,
   const roundsStr = t(lang, 'session_rounds').replace('{count}', String(session.turnCount));
 
   return (
-    <div className="relative group">
+    <div className="relative group" ref={itemRef}>
       <button
         onClick={() => onSelect(session.value, session.cwd || undefined)}
         className={className}
