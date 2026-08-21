@@ -465,7 +465,7 @@ export function CollapsibleSection({
           {onRefresh ? (
             <>
               <span className="absolute inset-0 flex items-center justify-center transition-opacity duration-100 group-hover/head:opacity-0">
-                <span className="text-[10px] text-content-secondary bg-[var(--badge-bg)] px-1.5 py-0.5 rounded-full tabular-nums">{count}</span>
+                <span className="text-[10px] text-content-secondary bg-[var(--badge-bg-subtle)] px-1.5 py-0.5 rounded-full tabular-nums">{count}</span>
               </span>
               <button
                 onClick={(e) => { e.stopPropagation(); onRefresh(); }}
@@ -480,7 +480,7 @@ export function CollapsibleSection({
               </button>
             </>
           ) : (
-            <span className="text-[10px] text-content-secondary bg-[var(--badge-bg)] px-1.5 py-0.5 rounded-full tabular-nums">{count}</span>
+            <span className="text-[10px] text-content-secondary bg-[var(--badge-bg-subtle)] px-1.5 py-0.5 rounded-full tabular-nums">{count}</span>
           )}
         </span>
       </div>
@@ -511,7 +511,7 @@ function ItemRow({ name, description, tag }: { name: string; description: string
       >
         <span className="text-content-primary font-medium truncate flex-1 text-left">{name}</span>
         {tag && (
-          <span className="text-[10px] text-primary/80 bg-[var(--badge-bg)] px-1.5 py-0.5 rounded-full font-medium shrink-0">{tag}</span>
+          <span className="text-[10px] text-primary/80 bg-[var(--badge-bg-subtle)] px-1.5 py-0.5 rounded-full font-medium shrink-0">{tag}</span>
         )}
       </button>
       {expanded && hasDesc && (

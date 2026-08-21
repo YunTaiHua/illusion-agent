@@ -100,6 +100,45 @@ export function buildToolInputMap(items: TranscriptItem[]): Map<string, Record<s
   return map;
 }
 
+/** 变更类工具名单（单轮变更条追踪范围；bash/powershell 不追踪） */
+const CHANGE_TOOLS = new Set(['edit_file', 'write_file']);
+
+/**
+ * 提取单轮内被变更工具成功修改的文件路径列表
+ *
+ * 扫描该轮转录项：role='tool' 且 tool_name 属于变更类工具的条目取其
+ * file_path/path 输入；对应 tool_result 标记 is_error=true 的调用剔除。
+ * 按原始输入串去重保序（后端按原始串解析并回填绝对路径与统计）。
+ * 仅在轮次完成后调用（流式期间 tool_result 未到齐，失败判定不完整）。
+ *
+ * @param turn - 单轮转录项列表（useStableTurns 切分的一轮）
+ * @returns 原始路径串列表（可能为空）
+ */
+export function buildTurnChangedFiles(turn: TranscriptItem[]): string[] {
+  const failedUseIds = new Set<string>();
+  for (const item of turn) {
+    if (item.role === 'tool_result' && item.is_error && item.tool_use_id) {
+      failedUseIds.add(item.tool_use_id);
+    }
+  }
+  const seen = new Set<string>();
+  const files: string[] = [];
+  for (const item of turn) {
+    if (item.role !== 'tool' || !item.tool_name || !CHANGE_TOOLS.has(item.tool_name)) continue;
+    if (!item.tool_use_id || failedUseIds.has(item.tool_use_id)) continue;
+    const input = item.tool_input as { file_path?: unknown; path?: unknown } | undefined;
+    const raw = input?.file_path ?? input?.path;
+    if (typeof raw !== 'string' || !raw.trim()) continue;
+    // push trim 后的串：请求键/缓存键/后端回显键三方一致——未 trim 的原串
+    // 会使后端 exists() 误判 deleted 且预览回显失配（载荷被丢弃永久加载）
+    const trimmed = raw.trim();
+    if (seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    files.push(trimmed);
+  }
+  return files;
+}
+
 /**
  * 按用户消息分组为轮次（turns），带结构化共享缓存
  *

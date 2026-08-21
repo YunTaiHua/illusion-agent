@@ -14,10 +14,11 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { t, type UiLanguage } from '../i18n';
 import MessageBubble, { PendingToolBubble, StreamingBuffer, ThinkingBlock, useContentCollapse } from './MessageBubble';
-import { useStableTurns, useStableToolInputMap } from '../utils/turnGrouping';
+import { buildTurnChangedFiles, useStableTurns, useStableToolInputMap } from '../utils/turnGrouping';
+import TurnFilesBar from './TurnFilesBar';
 import WelcomeScreen from './WelcomeScreen';
 import { PermissionCard, QuestionCard } from './ModalCard';
-import type { TranscriptItem, PendingToolCall } from '../types/protocol';
+import type { FileStatItem, TranscriptItem, PendingToolCall } from '../types/protocol';
 
 /** 消息列表收缩阈值：超过此轮次时折叠更早的消息 */
 const COLLAPSE_TURN_THRESHOLD = 5;
@@ -195,6 +196,12 @@ interface TurnViewProps {
   onRegenerate?: () => void;
   /** 是否为列表首轮（控制轮间间距） */
   hasTopGap: boolean;
+  /** 文件增删行数统计缓存：原始路径串 → 条目（单轮变更条数据源） */
+  fileStats: Map<string, FileStatItem>;
+  /** 批量拉取文件行数统计（hook 内去重，引用稳定） */
+  onRequestFileStats: (paths: string[]) => void;
+  /** 点击变更文件打开预览：Git 内传绝对路径 + 'diff'，否则 + 'content'（引用稳定） */
+  onOpenSessionFile: (path: string, kind: 'content' | 'diff') => void;
 }
 
 /**
@@ -211,6 +218,7 @@ interface TurnViewProps {
 const TurnView = memo(function TurnView({
   turn, isLastTurn, turnsToRewind, busy, hasPendingTools, lang, toolInputMap,
   onRewindToTurn, onRegenerate, hasTopGap,
+  fileStats, onRequestFileStats, onOpenSessionFile,
 }: TurnViewProps) {
   // 轮是否仍在流式：busy=true 与 user 消息（transcript_item）存在网络往返
   // 窗口期——若仅按 busy && isLastTurn 判定，窗口期内旧轮会被误判为流式轮，
@@ -227,6 +235,44 @@ const TurnView = memo(function TurnView({
   const { userItems, thinkingItems, finalAssistant } = useMemo(
     () => splitTurnItems(turn, turnStreaming),
     [turn, turnStreaming],
+  );
+
+  // 单轮变更文件（轮次完成后提取；流式期间 tool_result 未到齐不渲染）
+  const changedFiles = useMemo(
+    () => (turnStreaming ? [] : buildTurnChangedFiles(turn)),
+    [turn, turnStreaming],
+  );
+
+  // 该轮统计签名：仅当"本轮路径的缓存内容"变化时才改变（到达/数值更新）。
+  // fileStats 是会话级整表——任何轮次的合并都会替换其引用，若 footer 直接
+  // 依赖 Map，所有历史轮的 memo(MessageBubble) 会全量失效（长会话恢复时
+  // O(N²) 次 Markdown 重解析）。签名作为值依赖隔离跨轮影响。
+  const turnStatsSig = useMemo(
+    () => changedFiles.map((p) => {
+      const s = fileStats.get(p);
+      return s ? `${s.status ?? ''}:${s.insertions}:${s.deletions}` : '';
+    }).join('\u0001'),
+    [changedFiles, fileStats],
+  );
+
+  // 单轮变更条（footer 插槽）：渲染于最终回复正文之后、复制/重新生成按钮
+  // 上方。元素经 memo 缓存保证引用稳定——仅 changedFiles/统计签名变化时
+  // 重建，不破坏 memo(MessageBubble)。TurnFilesBar 内部仍从 fileStats 取值
+  // （Map 引用变化只让轻量的变更条自身重渲染，不波及 Markdown 正文）。
+  const turnFilesFooter = useMemo(
+    () => (
+      changedFiles.length > 0 ? (
+        <TurnFilesBar
+          lang={lang}
+          rawPaths={changedFiles}
+          stats={fileStats}
+          onRequestStats={onRequestFileStats}
+          onOpenFile={onOpenSessionFile}
+        />
+      ) : null
+    ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 以签名为值依赖，见上
+    [changedFiles, turnStatsSig, lang, onRequestFileStats, onOpenSessionFile],
   );
 
   // 回调引用稳定：turnsToRewind / onRewindToTurn 变化时才重建
@@ -294,6 +340,7 @@ const TurnView = memo(function TurnView({
           hideReasoning
           onRegenerate={isLastTurn ? onRegenerate : undefined}
           actionsDisabled={busy}
+          footer={turnFilesFooter}
         />
       )}
     </div>
@@ -333,6 +380,12 @@ interface ChatAreaProps {
   onRewindToTurn?: (turnsToRewind: number) => void;
   /** 重新生成回调（回退最后一轮并重发 user 消息） */
   onRegenerate?: () => void;
+  /** 文件增删行数统计缓存：原始路径串 → 条目（单轮变更条数据源） */
+  fileStats: Map<string, FileStatItem>;
+  /** 批量拉取文件行数统计（hook 内去重，引用稳定） */
+  onRequestFileStats: (paths: string[]) => void;
+  /** 点击变更文件打开预览：Git 内传绝对路径 + 'diff'，否则 + 'content'（引用稳定） */
+  onOpenSessionFile: (path: string, kind: 'content' | 'diff') => void;
   /** 欢迎态注入到标题下方的内容（输入框 + 工具栏卡片；非欢迎态不渲染） */
   children?: ReactNode;
 }
@@ -347,7 +400,8 @@ interface ChatAreaProps {
  */
 export default function ChatArea({
   lang, staticItems, assistantBuffer, streamingReasoning, pendingToolCalls, reasoningStreaming, busy, connected,
-  modal, onPermissionResponse, onQuestionResponse, restoringSessionId, onRewindToTurn, onRegenerate, children,
+  modal, onPermissionResponse, onQuestionResponse, restoringSessionId, onRewindToTurn, onRegenerate,
+  fileStats, onRequestFileStats, onOpenSessionFile, children,
 }: ChatAreaProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showScrollDown, setShowScrollDown] = useState(false);
@@ -560,6 +614,9 @@ export default function ChatArea({
               onRewindToTurn={stableOnRewindToTurn}
               onRegenerate={stableOnRegenerate}
               hasTopGap={visIdx > 0}
+              fileStats={fileStats}
+              onRequestFileStats={onRequestFileStats}
+              onOpenSessionFile={onOpenSessionFile}
             />
           );
         })}

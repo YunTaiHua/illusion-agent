@@ -686,6 +686,12 @@ export default function App() {
   const handleRequestSessionFiles = useCallback(() => {
     session.requestSessionFiles();
   }, [session.requestSessionFiles]);
+  // 单轮变更条点击文件：稳定包装（内联箭头函数会让 memo(TurnView) 全量失效）。
+  // Git 内文件开 diff 变更视图；deleted/工作区外/非 Git 降级内容预览
+  const handleOpenSessionFile = useCallback((path: string, kind: 'content' | 'diff') => {
+    if (kind === 'diff') session.openFileDiff(path);
+    else session.openSessionFile(path);
+  }, [session.openFileDiff, session.openSessionFile]);
 
   // 文件/diff 预览出现时自动调整布局：折叠区块栏，让文件预览栏占满最大宽度（2/5 屏）。
   // 仅处理同一预览键（kind|path）的首次出现，预览载荷反复刷新（加载中→内容）不重复调整；
@@ -945,9 +951,19 @@ export default function App() {
     const git = session.gitStatus;
     if (!git || !session.filePreview) return null;
     if (!git.is_repo) return false;
-    const p = session.filePreview.path;
-    return (git.files ?? []).some((f) => f.path === p);
-  }, [session.gitStatus, session.filePreview]);
+    // 预览 path 可能为绝对路径原串（单轮变更条统一下发），gitStatus.files
+    // 为工作区内 posix 相对路径：规范化分隔符并剥离工作区前缀后再比较
+    const p = (session.filePreview.path || '').replace(/\\/g, '/');
+    const cwd = (session.activeWorkspaceCwd || session.resourcesCwd || '')
+      .replace(/\\/g, '/').replace(/\/+$/, '');
+    const rel = cwd && p.toLowerCase().startsWith(`${cwd.toLowerCase()}/`)
+      ? p.slice(cwd.length + 1)
+      : p;
+    // 已知限制：rel 剩余部分大小写敏感；工作区为仓库子目录时 porcelain
+    // 路径（仓库根相对）多一层前缀仍不匹配 → 仅丢失 Diff 入口（降级内容
+    // 视图可接受），不影响数据正确性
+    return (git.files ?? []).some((f) => f.path === rel);
+  }, [session.gitStatus, session.filePreview, session.activeWorkspaceCwd, session.resourcesCwd]);
 
   /** 输入框 + 工具栏合并为单卡片（欢迎态注入标题下方，非欢迎态置于底部） */
   const composer = (
@@ -1007,7 +1023,9 @@ export default function App() {
           busy={session.busy} connected={session.connected}
           modal={session.modal} onPermissionResponse={handlePermissionResponse}
           onQuestionResponse={handleQuestionResponse} restoringSessionId={session.restoringSessionId}
-          onRewindToTurn={handleRewindToTurn} onRegenerate={handleRegenerate}>
+          onRewindToTurn={handleRewindToTurn} onRegenerate={handleRegenerate}
+          fileStats={session.fileStats} onRequestFileStats={session.requestFileStats}
+          onOpenSessionFile={handleOpenSessionFile}>
           {/* 欢迎态：输入框 + 工具栏注入到标题/副标题下方（ChatArea 内渲染） */}
           {welcomeVisible && composer}
         </ChatArea>

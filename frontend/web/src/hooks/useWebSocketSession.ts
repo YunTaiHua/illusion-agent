@@ -24,6 +24,7 @@ import type {
   BackendEvent,
   FileContentPayload,
   FileTreeNode,
+  FileStatItem,
   GitStatusSnapshot,
   GoalStatus,
   McpServerSnapshot,
@@ -250,6 +251,10 @@ export interface WebSocketSessionState {
   sessionFiles: SessionFileItem[];
   /** 会话文件拉取中（右栏会话文件区块加载态） */
   sessionFilesLoading: boolean;
+  /** 文件增删行数统计缓存：原始路径串 → 条目（web_file_stats，随会话隔离；单轮变更条数据源） */
+  fileStats: Map<string, FileStatItem>;
+  /** 批量拉取文件增删行数统计（已缓存/在途的路径自动跳过） */
+  requestFileStats: (paths: string[]) => void;
   /** Git 状态快照（null = 未拉取；is_repo=false 前端隐藏区块） */
   gitStatus: GitStatusSnapshot | null;
   /** Git 状态加载中 */
@@ -436,6 +441,11 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   const [sessionFiles, setSessionFiles] = useState<SessionFileItem[]>([]);
   /** 会话文件拉取中（区块加载态） */
   const [sessionFilesLoading, setSessionFilesLoading] = useState(false);
+  // 单轮变更条行数统计（原始路径串 → 统计条目；随会话隔离，切会话清空）
+  const [fileStats, setFileStats] = useState<Map<string, FileStatItem>>(() => new Map());
+  const fileStatsRef = useRef<Map<string, FileStatItem>>(fileStats);
+  // 已发出未返回的统计请求去重（ref 不触发渲染）
+  const fileStatsInFlightRef = useRef<Set<string>>(new Set());
   const [gitStatus, setGitStatus] = useState<GitStatusSnapshot | null>(null);
   const [gitLoading, setGitLoading] = useState(false);
   const [filePreview, setFilePreview] = useState<FileContentPayload | null>(null);
@@ -876,6 +886,25 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     sendRaw({ type: 'web_request_session_files', session_id: activeSessionIdRef.current ?? undefined });
   }, [sendRaw]);
 
+  /**
+   * 批量拉取文件增删行数统计（单轮变更条数据源）
+   *
+   * 已缓存 / 在途的路径自动跳过；后端对白名单外路径回显占位条目
+   * （无数值），占位同样合并进缓存并清理 in-flight 标记。
+   *
+   * @param paths - 变更工具输入的原始路径串列表
+   */
+  const requestFileStats = useCallback((paths: string[]): void => {
+    const missing = paths.filter(
+      (p) => !fileStatsRef.current.has(p) && !fileStatsInFlightRef.current.has(p));
+    if (missing.length === 0) return;
+    for (const p of missing) fileStatsInFlightRef.current.add(p);
+    sendRaw({
+      type: 'web_request_file_stats', paths: missing,
+      session_id: activeSessionIdRef.current ?? undefined,
+    });
+  }, [sendRaw]);
+
   /** 打开会话内修改文件预览（内容视图；支持工作区外/非 Git 追踪的文件；
    *  同样绑定当前活跃会话，同视图同路径读取中忽略连点） */
   const openSessionFile = useCallback((path: string): void => {
@@ -934,6 +963,9 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     setAgentTasks([]);
     setSessionFiles([]);
     setSessionFilesLoading(false);
+    setFileStats(new Map());
+    fileStatsRef.current = new Map();
+    fileStatsInFlightRef.current.clear();
     setFileTree({});
     setFileTreeLoadingPaths([]);
     setGitStatus(null);
@@ -1060,6 +1092,9 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
         setTasks(evt.tasks ?? []);
         setCommands(evt.commands ?? []);
         setMcpServers((evt.mcp_servers as McpServerSnapshot[]) ?? []);
+        // 重连成功：断线期间在途统计请求的响应已丢失，清理标记允许重新请求
+        // （否则键永久滞留，对应变更条直到切会话都无计数）
+        fileStatsInFlightRef.current.clear();
         // 会话列表 / 活跃会话转录由后端随后的 web_sessions + web_restore_completed 驱动
         return;
       }
@@ -1533,6 +1568,24 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
         setSessionFilesLoading(false);
         return;
       }
+      if (evt.type === 'web_file_stats') {
+        // 文件增删行数统计（单轮变更条）：归属活跃会话或未标记时合并；
+        // 无论归属都清理 in-flight 标记，避免迟到响应泄漏导致无法重新请求
+        const items = (evt.web_file_stats as FileStatItem[] | undefined) ?? [];
+        for (const it of items) fileStatsInFlightRef.current.delete(it.input);
+        const sid = evt.session_id;
+        if (!sid || !activeSessionIdRef.current || sid === activeSessionIdRef.current) {
+          if (items.length > 0) {
+            setFileStats((prev) => {
+              const next = new Map(prev);
+              for (const it of items) next.set(it.input, it);
+              fileStatsRef.current = next;
+              return next;
+            });
+          }
+        }
+        return;
+      }
       if (evt.type === 'web_file_tree') {
         // 目录单层条目（懒加载）；按事件携带目录归位。
         // 无论归属是否匹配都清理该目录的加载态，避免 cwd-guard 丢弃路径
@@ -1730,6 +1783,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       tasks, commands, mcpServers, skills, plugins, rules, modelOptions,
       agentTasks, fileTree, fileTreeLoadingPaths, gitStatus, gitLoading,
       sessionFiles, sessionFilesLoading,
+      fileStats, requestFileStats,
       filePreview, filePreviewLoading,
       requestFileTree, requestGitStatus, openFilePreview, openFileDiff, closeFilePreview,
       requestAgentTasks, viewAgentSummary, requestSessionFiles, openSessionFile,
@@ -1781,6 +1835,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     status, tasks, commands, mcpServers, skills, plugins, rules, modelOptions,
     agentTasks, fileTree, fileTreeLoadingPaths, gitStatus, gitLoading,
     sessionFiles, sessionFilesLoading,
+    fileStats, requestFileStats,
     filePreview, filePreviewLoading,
     requestFileTree, requestGitStatus, openFilePreview, openFileDiff, closeFilePreview,
     requestAgentTasks, viewAgentSummary, requestSessionFiles, openSessionFile,

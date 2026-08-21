@@ -93,6 +93,7 @@ class FrontendRequest(BaseModel):
         "web_request_agent_tasks",
         "web_request_session_files",
         "web_read_session_file",
+        "web_request_file_stats",
         "web_query",
         "web_request_workspaces",
         "web_add_workspace",
@@ -126,6 +127,8 @@ class FrontendRequest(BaseModel):
     # === 工作区（多目录空间）专属字段 ===
     cwd: str | None = None
     path: str | None = None
+    # web_request_file_stats 专属：待统计增删行数的文件路径列表（原始输入串）
+    paths: list[str] | None = None
     # submit_line 专属：为 True 时跳过命令注册表，直接当 user 消息提交给 LLM
     treat_as_text: bool | None = None
     # === agent 向导专属字段 ===
@@ -276,6 +279,7 @@ class BackendEvent(BaseModel):
         "web_file_content",
         "web_agent_tasks",
         "web_session_files",
+        "web_file_stats",
         "web_restore_started",
         "web_restore_completed",
         "web_query_result",
@@ -351,6 +355,7 @@ class BackendEvent(BaseModel):
     web_file_content: dict[str, Any] | None = None      # web_file_content 推送的文件内容（预览）
     web_agent_tasks: list[dict[str, Any]] | None = None # web_agent_tasks 推送的智能体与后台任务列表
     web_session_files: list[dict[str, Any]] | None = None  # web_session_files 推送的会话内修改文件列表（会话文件区块）
+    web_file_stats: list[dict[str, Any]] | None = None  # web_file_stats 推送的文件增删行数统计（单轮变更条数据源）
     # === agent 向导响应专属字段 ===
     request_id: str | None = None
     error: str | None = None

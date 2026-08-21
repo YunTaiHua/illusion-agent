@@ -287,10 +287,32 @@ export interface FileTreeNode {
 export interface SessionFileItem {
   /** 文件绝对路径（读取与安全校验的唯一键） */
   path: string;
-  /** 展示路径：工作区内为相对路径，工作区外为绝对路径（/ 分隔） */
+  /** 展示路径（统一绝对路径，/ 分隔） */
   display: string;
   /** 修改该文件的工具名（如 edit_file / write_file） */
   tool: string;
+}
+
+/**
+ * 文件增删行数统计条目接口
+ *
+ * web_file_stats 推送的单个条目（单轮变更条数据源）。
+ * 数值语义为"该文件当前相对 Git HEAD 的差异"；非 Git 环境 / 工作区外 /
+ * 二进制文件降级为 null（前端只显示文件名）；文件不存在标记 deleted。
+ */
+export interface FileStatItem {
+  /** 变更工具输入的原始路径串（前端映射键，与请求 paths 一一对应） */
+  input: string;
+  /** 文件绝对路径（预览请求参数；占位条目为空串） */
+  path: string;
+  /** 展示路径（统一绝对路径，/ 分隔；占位条目回显原始串） */
+  display: string;
+  /** 变更状态：'added'（未跟踪新文件）| 'modified' | 'deleted' | null（无法判定） */
+  status?: 'added' | 'modified' | 'deleted' | null;
+  /** 新增行数（null 表示无法统计） */
+  insertions?: number | null;
+  /** 删除行数（null 表示无法统计） */
+  deletions?: number | null;
 }
 
 /**
@@ -492,6 +514,8 @@ export interface BackendEvent {
   web_agent_tasks?: AgentTaskItem[];
   /** web_session_files 推送的会话内修改文件列表（可选，会话文件区块数据源） */
   web_session_files?: SessionFileItem[];
+  /** web_file_stats 推送的文件增删行数统计（可选，单轮变更条数据源） */
+  web_file_stats?: FileStatItem[];
   /** web_models 推送的模型选项（可选） */
   web_models?: SelectOption[];
   /** web_setting_changed 的键名（可选） */

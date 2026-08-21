@@ -260,6 +260,9 @@ interface MessageBubbleProps {
   showActions?: boolean;
   /** 禁用操作按钮（busy 时禁用撤销/重新生成，复制不受影响） */
   actionsDisabled?: boolean;
+  /** 助手气泡底部附加区块（渲染于正文之后、操作按钮之前，如单轮变更条；
+   * 元素引用需由调用方 memo 保证，避免破坏本组件 memo） */
+  footer?: React.ReactNode;
 }
 
 /**
@@ -341,7 +344,7 @@ const MessageActions = memo(function MessageActions({ text, lang, onRewind, onRe
  * @param props - 组件属性
  * @returns 返回消息气泡的 JSX 元素
  */
-function MessageBubble({ item, toolInputMap, lang = 'zh-CN', onRewind, onRegenerate, hideReasoning, showActions = true, actionsDisabled }: MessageBubbleProps) {
+function MessageBubble({ item, toolInputMap, lang = 'zh-CN', onRewind, onRegenerate, hideReasoning, showActions = true, actionsDisabled, footer }: MessageBubbleProps) {
   if (item.role === 'user') {
     return (
       <div className="flex justify-end py-1.5 group">
@@ -365,6 +368,7 @@ function MessageBubble({ item, toolInputMap, lang = 'zh-CN', onRewind, onRegener
             {item.text}
           </ReactMarkdown>
         </div>
+        {footer}
         {showActions && <MessageActions text={item.text} lang={lang} onRegenerate={onRegenerate} disabled={actionsDisabled} />}
       </div>
     );

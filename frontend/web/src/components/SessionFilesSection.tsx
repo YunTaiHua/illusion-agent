@@ -97,7 +97,7 @@ function SessionFileRow({ file, onOpenFile }: { file: SessionFileItem; onOpenFil
         {dir && <span className="text-content-disabled">{dir}</span>}
         <span className="text-content-primary">{name}</span>
       </span>
-      <span className="shrink-0 text-[10px] text-primary/80 bg-[var(--badge-bg)] px-1.5 py-0.5 rounded-full font-medium">
+      <span className="shrink-0 text-[10px] text-primary/80 bg-[var(--badge-bg-subtle)] px-1.5 py-0.5 rounded-full font-medium">
         {file.tool.replace(/_/g, ' ')}
       </span>
     </button>

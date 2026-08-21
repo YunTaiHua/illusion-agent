@@ -378,6 +378,8 @@ const ZH: Record<string, string> = {
   git_title: 'Git 文件变更',
   agents_title: '智能体与任务',
   session_files_title: '会话文件',
+  // ---- 单轮变更条（聊天气泡底部）----
+  turn_files_title: '本轮变更',
   // ---- 区块空占位 ----
   no_skills: '暂无技能',
   no_mcp: '暂无 MCP 服务器',
@@ -388,6 +390,7 @@ const ZH: Record<string, string> = {
   // 会话文件预览错误码（前端本地化）
   session_file_session_not_found: '会话不存在',
   session_file_not_in_session: '文件不在本会话修改记录中',
+  session_file_file_deleted: '文件已被删除',
   // ---- 智能体与任务 ----
   agent_type_agent: '智能体',
   agent_type_task: '任务',
@@ -865,6 +868,8 @@ const EN: Record<string, string> = {
   git_title: 'Git Changes',
   agents_title: 'Agents & Tasks',
   session_files_title: 'Session Files',
+  // ---- per-turn changed files bar (chat bubble footer) ----
+  turn_files_title: 'Changed this round',
   // ---- section empty placeholders ----
   no_skills: 'No skills',
   no_mcp: 'No MCP servers',
@@ -875,6 +880,7 @@ const EN: Record<string, string> = {
   // Session-file preview error codes (localized on frontend)
   session_file_session_not_found: 'Session not found',
   session_file_not_in_session: 'Not in this session\'s modified files',
+  session_file_file_deleted: 'File has been deleted',
   // ---- agents & tasks ----
   agent_type_agent: 'agent',
   agent_type_task: 'task',

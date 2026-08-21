@@ -95,8 +95,9 @@
   --beam-color-a: #0891b2;
   --beam-color-b: #6366f1;
 
-  /* 小圆 badge 背景（count/tag 胶囊）— 浅色模式保持半透明白 */
-  --badge-bg: rgba(255, 255, 255, 0.5);
+  /* 小圆 badge 背景（count/tag 胶囊，右栏区块与单轮变更条共用）—
+     浅色下半透明白不可辨，用淡墨底保证可读 */
+  --badge-bg-subtle: rgba(15, 23, 42, 0.07);
 
   /* 聊天内容列与输入框卡片宽度：输入框卡片比聊天区每边宽约 17px，圆角错开避免遮盖 */
   --chat-content-width: 896px;
@@ -168,7 +169,7 @@
   --beam-color-b: #a29bfe;
 
   /* badge 背景：深色模式下改为深色半透明，让亮色文字（primary/secondary）清晰可读 */
-  --badge-bg: rgba(255, 255, 255, 0.08);
+  --badge-bg-subtle: rgba(255, 255, 255, 0.08);
 
   /* 行内代码背景：深色下保留 hover 背景 */
   --inline-code-bg: var(--bg-hover);

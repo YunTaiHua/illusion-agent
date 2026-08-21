@@ -199,6 +199,7 @@ class WebApiDispatcher:
             "web_request_agent_tasks": self.handle_web_request_agent_tasks,
             "web_request_session_files": self.handle_web_request_session_files,
             "web_read_session_file": self.handle_web_read_session_file,
+            "web_request_file_stats": self.handle_web_request_file_stats,
             "web_query": self.handle_web_query,
             "web_request_workspaces": self.handle_web_request_workspaces,
             "web_add_workspace": self.handle_web_add_workspace,
@@ -831,15 +832,21 @@ class WebApiDispatcher:
         if host._bundle is None:
             return
         bundle = self._resolve_resource_bundle(request)
-        rel = (request.path or "").strip().replace("\\", "/")
+        # 请求原串用于回显：前端以「content|path」精确关联响应与请求，
+        # path 须与发起时字符串一致，否则载荷被丢弃导致永久加载中
+        requested = (request.path or "").strip()
+        rel = requested.replace("\\", "/")
         target = _resolve_within_root(bundle.cwd, rel)
         if target is None or not target.is_file():
             await self._emit(BackendEvent(
                 type="web_file_content", cwd=bundle.cwd,
-                web_file_content={"path": rel, "error": "文件不存在或超出工作区范围"},
+                web_file_content={"path": requested, "error": "文件不存在或超出工作区范围"},
             ))
             return
         payload = await asyncio.to_thread(_read_file_payload, target, rel)
+        # 回显请求原串（内部 rel 仅作读取参数），保证前端 key 关联命中
+        if isinstance(payload, dict):
+            payload = {**payload, "path": requested}
         await self._emit(BackendEvent(
             type="web_file_content",
             cwd=bundle.cwd,
@@ -852,23 +859,36 @@ class WebApiDispatcher:
         变更视图（kind=diff）：跟踪文件取 ``git diff HEAD -- <path>``
         （暂存 + 工作区合并差异）；未跟踪/新文件用 ``git diff --no-index``
         合成全新增 diff。已删除文件同样可取 diff（无需文件存在）。
+        path 支持工作区内相对路径或绝对路径（绝对路径须位于工作区内，
+        单轮变更条统一下发绝对路径）。
 
         Args:
-            request: 前端请求（path 必填：工作区内相对路径）
+            request: 前端请求（path 必填：工作区内相对路径或工作区内绝对路径）
         """
         host = self._host
         if host._bundle is None:
             return
         bundle = self._resolve_resource_bundle(request)
-        rel = (request.path or "").strip().replace("\\", "/")
-        # 只做边界校验（不要求文件存在：已删除文件也有 diff）
-        if not rel or _resolve_within_root(bundle.cwd, rel) is None:
+        # 请求原串用于回显：前端以「kind|path」精确关联响应与请求，
+        # path 必须与发起时的字符串完全一致（含分隔符形式），否则
+        # 载荷被丢弃导致预览面板永久加载中
+        requested = (request.path or "").strip()
+        raw = requested.replace("\\", "/")
+        # 只做边界校验（不要求文件存在：已删除文件也有 diff）。
+        # _resolve_within_root 对区内绝对路径同样放行（pathlib 的 root/abs
+        # 语义即 abs 本身），出界/穿越返回 None，无需单独的绝对路径分支
+        target = _resolve_within_root(bundle.cwd, raw)
+        if target is None or not raw:
             await self._emit(BackendEvent(
                 type="web_file_content", cwd=bundle.cwd,
-                web_file_content={"path": rel, "kind": "diff", "error": "路径无效或超出工作区范围"},
+                web_file_content={"path": requested, "kind": "diff", "error": "路径无效或超出工作区范围"},
             ))
             return
-        payload = await asyncio.to_thread(_git_file_diff, bundle.cwd, rel)
+        rel_final = target.relative_to(Path(bundle.cwd).resolve()).as_posix()
+        payload = await asyncio.to_thread(_git_file_diff, bundle.cwd, rel_final)
+        # 回显请求原串（内部 rel 仅作 git 参数），保证前端 key 关联命中
+        if isinstance(payload, dict):
+            payload = {**payload, "path": requested}
         await self._emit(BackendEvent(
             type="web_file_content",
             cwd=bundle.cwd,
@@ -967,6 +987,74 @@ class WebApiDispatcher:
         await self._emit(BackendEvent(
             type="web_file_content", session_id=session_id,
             cwd=session.bundle.cwd, web_file_content=payload))
+
+    async def handle_web_request_file_stats(self, request: FrontendRequest) -> None:
+        """批量统计会话内修改文件的增删行数并推送 web_file_stats 事件。
+
+        单轮变更条（聊天气泡底部"本轮变更"）的数据源：前端按轮次提取
+        edit_file/write_file 的目标路径后批量请求。安全模型与
+        web_read_session_file 一致：仅允许统计"当前会话确实修改过的文件"
+        （由 _collect_session_files 界定），杜绝任意路径探测。
+
+        Args:
+            request: 前端请求（paths 必填：变更工具输入的原始路径串；
+                session_id 可选：目标会话）
+        """
+        host = self._host
+        if host._bundle is None:
+            return
+        session_id = request.session_id or host._active_session_id
+        session = host._sessions.get(session_id) if session_id else None
+        raw_paths = [p for p in (request.paths or []) if isinstance(p, str) and p.strip()]
+        if session is None:
+            # 逐条回显占位而非空数组：前端以 input 键清理 in-flight 标记，
+            # 空响应会让这些键永久滞留 → 之后不再重试 → 条目永远无统计
+            await self._emit(BackendEvent(
+                type="web_file_stats", session_id=session_id,
+                cwd=host._bundle.cwd,
+                web_file_stats=[
+                    {"input": p, "path": "", "display": p,
+                     "status": None, "insertions": None, "deletions": None}
+                    for p in raw_paths]))
+            return
+        if not raw_paths:
+            await self._emit(BackendEvent(
+                type="web_file_stats", session_id=session_id,
+                cwd=session.bundle.cwd, web_file_stats=[]))
+            return
+        tracked = {
+            f["path"]: f["display"]
+            for f in await asyncio.to_thread(
+                _collect_session_files, session.engine.messages, session.bundle.cwd)
+        }
+
+        # 白名单过滤必须前移到 _file_numstats 之前：后者会填充真实 Git 数值
+        # 与 deleted 存在性标记，若对白名单外路径调用即泄漏工作区任意文件的
+        # 变更状态（存在性预言机）。白名单外条目仅回显纯占位（input 原串、
+        # 无解析路径、无任何数值），供前端清理 in-flight 标记与占位缓存；
+        # 预览仍走 web_read_session_file 白名单校验。
+        from illusion.config.paths import resolve_relative_path
+        root = Path(session.bundle.cwd).resolve()
+
+        def _allowlisted(raw: str) -> bool:
+            try:
+                return str(resolve_relative_path(root, raw.strip())) in tracked
+            except (ValueError, OSError):
+                return False
+
+        def _placeholder(raw: str) -> dict[str, Any]:
+            return {"input": raw, "path": "", "display": raw,
+                    "status": None, "insertions": None, "deletions": None}
+
+        allowed_raws = [p for p in raw_paths if _allowlisted(p)]
+        stats = (
+            await asyncio.to_thread(_file_numstats, session.bundle.cwd, allowed_raws)
+            if allowed_raws else [])
+        by_input = {e["input"]: e for e in stats}
+        allowed = [by_input.get(p) or _placeholder(p) for p in raw_paths]
+        await self._emit(BackendEvent(
+            type="web_file_stats", session_id=session_id,
+            cwd=session.bundle.cwd, web_file_stats=allowed))
 
     # === 工作区（目录空间）管理 ===
 
@@ -1679,8 +1767,8 @@ def _collect_session_files(
 
     Returns:
         list[dict[str, Any]]: [{path, display, tool}]
-        path 为绝对路径（读取与安全校验键）；display 为展示路径
-        （工作区内相对路径，工作区外用绝对路径，统一 / 分隔）
+        path 与 display 均为绝对路径（/ 分隔；读取与安全校验键，
+        展示统一绝对路径样式）
     """
     from illusion.config.paths import resolve_relative_path
     from illusion.engine.messages import ToolResultBlock, ToolUseBlock
@@ -1716,16 +1804,21 @@ def _collect_session_files(
             if abs_path in seen:
                 continue
             seen.add(abs_path)
-            try:
-                display = Path(abs_path).relative_to(root).as_posix()
-            except ValueError:
-                display = Path(abs_path).as_posix()
-            result.append({"path": abs_path, "display": display, "tool": block.name})
+            # 展示统一绝对路径（/ 分隔），与单轮变更条样式一致
+            result.append({
+                "path": abs_path,
+                "display": Path(abs_path).as_posix(),
+                "tool": block.name,
+            })
     return result
 
 
 def _read_session_file_payload(path: str) -> dict[str, Any]:
     """读取会话内修改文件生成预览载荷（复用 _read_file_payload 限制）。
+
+    文件不存在（被用户手动删除或工具在会话中删除）时返回结构化错误码
+    ``file_deleted``，交由前端 i18n 本地化展示，避免裸 OSError 英文串；
+    其余读取失败沿用 _read_file_payload 的错误载荷。
 
     Args:
         path: 文件绝对路径（已经过会话修改记录校验）
@@ -1733,7 +1826,86 @@ def _read_session_file_payload(path: str) -> dict[str, Any]:
     Returns:
         dict[str, Any]: 与 _read_file_payload 相同的预览载荷结构
     """
-    return _read_file_payload(Path(path), path)
+    target = Path(path)
+    if not target.exists():
+        return {"path": path, "error": "file_deleted"}
+    return _read_file_payload(target, path)
+
+
+def _count_lines(path: Path) -> int | None:
+    """统计文本文件行数；二进制（含 NUL 字节）或读取失败返回 None。"""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    if b"\x00" in data:
+        return None
+    if not data:
+        return 0
+    return data.count(b"\n") + (0 if data.endswith(b"\n") else 1)
+
+
+def _file_numstats(cwd: str, abs_paths: list[str]) -> list[dict[str, Any]]:
+    """批量统计文件相对 Git HEAD 的增删行数（单轮变更条数据源）。
+
+    入参为已通过会话白名单校验的绝对路径（过滤在 handler 中完成）。
+    语义：返回值为该文件"当前相对 HEAD"的差异统计（非严格单轮增量，
+    与主流 agent 桌面端一致）。降级链：非 Git 仓库 / 工作区外 / 二进制
+    → insertions/deletions/status 均为 None（前端只显示文件名）；未跟踪
+    新文件 → status="added"、insertions=文件总行数、deletions=0；
+    文件不存在（被用户手动删除或会话中被删除）→ status="deleted"。
+
+    Args:
+        cwd: 工作区目录（git 执行目录与工作区内判定基准）
+        abs_paths: 文件绝对路径列表
+
+    Returns:
+        list[dict[str, Any]]: [{input, path, status, insertions, deletions}]
+        input 为原始串（前端映射键，顺序与入参一致）
+    """
+    root = Path(cwd).resolve()
+    inside_repo = (_run_git(cwd, "rev-parse", "--is-inside-work-tree") or "").strip() == "true"
+
+    entries: list[dict[str, Any]] = []
+    rel_of: dict[str, str] = {}  # 绝对路径 → 工作区内 posix 相对路径（仅仓库内文件）
+    for raw in abs_paths:
+        entry: dict[str, Any] = {
+            "input": raw, "path": raw, "display": Path(raw).as_posix(),
+            "status": None, "insertions": None, "deletions": None,
+        }
+        entries.append(entry)
+        if inside_repo and raw:
+            try:
+                rel_of[raw] = Path(raw).relative_to(root).as_posix()
+            except ValueError:
+                pass
+
+    # 先检测存在性：已删除（被用户手动删除或工具删除）标 deleted，
+    # 前端点击时降级为内容视图并展示"文件已被删除"
+    for entry in entries:
+        if entry["path"] and not Path(entry["path"]).exists():
+            entry["status"] = "deleted"
+
+    if inside_repo and rel_of:
+        # 全量采集后内存过滤：避免长 pathspec 命令行（Windows 长度上限），
+        # 成本与右栏 Git 快照的单次全量 diff 一致
+        numstat = _parse_git_numstat(
+            _run_git(cwd, "diff", "--numstat", "-z", "--relative", "HEAD") or "")
+        others = set(
+            (_run_git(cwd, "ls-files", "--others", "--exclude-standard", "-z") or "").split("\0"))
+        for entry in entries:
+            rel = rel_of.get(entry["path"])
+            if rel is None or entry["status"] == "deleted":
+                continue  # 工作区外无 Git 数值；deleted 已标记不覆盖
+            if rel in others:
+                entry["status"] = "added"
+                entry["insertions"] = _count_lines(Path(entry["path"]))
+                entry["deletions"] = 0
+            elif rel in numstat:
+                ins, dele = numstat[rel]
+                entry["status"] = "modified"
+                entry["insertions"], entry["deletions"] = ins, dele
+    return entries
 
 
 def _cap_preview_text(text: str) -> tuple[str, bool]:

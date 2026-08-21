@@ -36,7 +36,7 @@ const STATUS_META: Record<string, { letter: string; cls: string }> = {
   modified: { letter: 'M', cls: 'text-warning bg-warning/15' },
   deleted: { letter: 'D', cls: 'text-danger bg-danger/15' },
   renamed: { letter: 'R', cls: 'text-info bg-info/15' },
-  untracked: { letter: 'U', cls: 'text-content-secondary bg-[var(--badge-bg)]' },
+  untracked: { letter: 'U', cls: 'text-content-secondary bg-[var(--badge-bg-subtle)]' },
   unmerged: { letter: '!', cls: 'text-danger bg-danger/15' },
 };
 
