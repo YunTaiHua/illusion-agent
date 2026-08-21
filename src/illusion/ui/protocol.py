@@ -63,8 +63,10 @@ class FrontendRequest(BaseModel):
         limit: 拉取数量上限（web_request_sessions 用）
         offset: 拉取偏移量（web_request_sessions 用）
         cwd: 工作区目录（web_new_session/web_restore_session/web_delete_sessions/
-            web_request_resources 指定目标工作区）
-        path: 目录路径（web_add_workspace/web_remove_workspace 用）
+            web_request_resources/web_request_file_tree/web_request_git_status/
+            web_read_file 指定目标工作区）
+        path: 目录路径（web_add_workspace/web_remove_workspace 用；
+            web_request_file_tree/web_read_file 为工作区内的相对路径）
     """
 
     type: Literal[
@@ -84,6 +86,11 @@ class FrontendRequest(BaseModel):
         "web_request_sessions",
         "web_request_models",
         "web_request_resources",
+        "web_request_file_tree",
+        "web_request_git_status",
+        "web_read_file",
+        "web_file_diff",
+        "web_request_agent_tasks",
         "web_query",
         "web_request_workspaces",
         "web_add_workspace",
@@ -262,6 +269,10 @@ class BackendEvent(BaseModel):
         "web_resources",
         "web_setting_changed",
         "web_models",
+        "web_file_tree",
+        "web_git_status",
+        "web_file_content",
+        "web_agent_tasks",
         "web_restore_started",
         "web_restore_completed",
         "web_query_result",
@@ -331,6 +342,11 @@ class BackendEvent(BaseModel):
     web_request_id: str | None = None                   # web_query_result 关联的请求 ID
     web_command: str | None = None                      # web_query_result 关联的命令名
     web_error: str | None = None                        # web_restore_completed 等事件的错误信息（非空表示操作失败）
+    # === 右栏扩展：文件树 / Git 状态 / 文件预览 / 智能体与任务 ===
+    web_file_tree: dict[str, Any] | None = None         # web_file_tree 推送的目录条目（path + entries）
+    web_git_status: dict[str, Any] | None = None        # web_git_status 推送的 Git 快照（branch/upstream/files）
+    web_file_content: dict[str, Any] | None = None      # web_file_content 推送的文件内容（预览）
+    web_agent_tasks: list[dict[str, Any]] | None = None # web_agent_tasks 推送的智能体与后台任务列表
     # === agent 向导响应专属字段 ===
     request_id: str | None = None
     error: str | None = None

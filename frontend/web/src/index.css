@@ -354,6 +354,21 @@ pre code.hljs,
 .text-diff-del { color: var(--error); }
 .text-diff-hunk { color: var(--info-color); }
 
+/* ========== 文件预览滚动容器 ==========
+   稍粗的滚动条便于鼠标拖动；纵向轨道背景与行号列（--bg-card）一致，
+   视觉上成为行号区的自然延伸；轨道不过宽（8px）。 */
+.preview-scroll { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb, var(--border-medium)) var(--bg-card, transparent); }
+.preview-scroll::-webkit-scrollbar { width: 8px; height: 10px; }
+.preview-scroll::-webkit-scrollbar-track { background: var(--bg-card, transparent); }
+.preview-scroll::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb, var(--border-medium));
+  border-radius: 4px;
+  border: 1.5px solid transparent;
+  background-clip: content-box;
+}
+.preview-scroll::-webkit-scrollbar-thumb:hover { background-color: var(--text-secondary, #999); background-clip: content-box; }
+.preview-scroll::-webkit-scrollbar-corner { background: var(--bg-card, transparent); }
+
 /* ========== 暗色模式代码高亮覆盖 ==========
    基础主题是 highlight.js 的 github.css（浅色配色，如 #0550ae 深蓝），
    在深色背景上对比度严重不足（注释/字符串/数字几乎融入背景）。
@@ -429,11 +444,17 @@ pre code.hljs,
   color: #79c0ff;
 }
 
+/* 斜体 / 加粗（Markdown 的 *xx* / **xx**，含文件预览 hljs 标记）：
+   基主题 github.css 对这两类 token 显式赋予浅色近黑 #24292e，深色下若不覆盖
+   会与深底融为一体完全看不清，故显式复写为主文本色，保证 *斜体* 与 **加粗**
+   在深色主题下清晰可辨。 */
 :root.dark .hljs-emphasis {
+  color: var(--text-primary);
   font-style: italic;
 }
 
 :root.dark .hljs-strong {
+  color: var(--text-primary);
   font-weight: 700;
 }
 

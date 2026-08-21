@@ -972,7 +972,7 @@ def _get_user_agents_dir() -> Path:
     return get_config_dir() / "agents"
 
 
-def get_all_agent_definitions() -> list[AgentDefinition]:
+def get_all_agent_definitions(cwd: str | None = None) -> list[AgentDefinition]:
     """获取所有代理定义: 内置 + 用户 + 项目级 + 插件
 
     合并顺序 (相同名称后写入者胜出):
@@ -983,6 +983,9 @@ def get_all_agent_definitions() -> list[AgentDefinition]:
 
     用户定义覆盖同名内置代理; 项目级定义覆盖用户定义;
     插件定义覆盖项目级定义。
+
+    Args:
+        cwd: 项目工作目录（项目级/插件代理的加载基准）；缺省为当前进程目录
 
     Returns:
         list[AgentDefinition]: 所有代理定义列表
@@ -1004,7 +1007,7 @@ def get_all_agent_definitions() -> list[AgentDefinition]:
 
     # 3. 项目级代理 — 与 AgentWizard project scope 写入路径一致
     try:
-        project_agents_dir = get_project_config_dir(os.getcwd()) / "agents"
+        project_agents_dir = get_project_config_dir(cwd or os.getcwd()) / "agents"
         project_agents = load_agents_dir(project_agents_dir)
         for agent in project_agents:
             agent_map[agent.name] = agent

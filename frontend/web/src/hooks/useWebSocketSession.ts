@@ -20,7 +20,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type {
+  AgentTaskItem,
   BackendEvent,
+  FileContentPayload,
+  FileTreeNode,
+  GitStatusSnapshot,
   GoalStatus,
   McpServerSnapshot,
   PendingToolCall,
@@ -89,6 +93,16 @@ const SESSION_STATUS_KEYS = new Set<string>([
  * 例如："  bash (git add ...)" 或 "read (file_path: ...)"
  */
 const TOOL_CALL_LINE_RE = /^\s{2,}\w[\w-]*\s*\(.*\)\s*$/;
+
+/**
+ * 变更类工具集合
+ *
+ * 这些工具执行完成后可能改动工作区（文件/目录/配置），右栏数据
+ * （文件树 / Git 状态 / 资源快照）需要随之无感刷新。触发后经统一
+ * 刷新函数（refreshRightPanel）防抖合并，避免工具链内连续变更时
+ * 重复请求。
+ */
+const CHANGE_TOOLS = new Set(['edit_file', 'write_file', 'bash', 'powershell', 'agent']);
 
 /**
  * 从助手文本中移除工具调用预览行
@@ -225,6 +239,20 @@ export interface WebSocketSessionState {
   skills: SkillSnapshot[];
   plugins: PluginSnapshot[];
   rules: RuleSnapshot[];
+  /** 智能体与后台任务列表（web_agent_tasks，随会话隔离；右栏 Agents 区块数据源） */
+  agentTasks: AgentTaskItem[];
+  /** 文件树缓存：目录相对路径 → 子条目（'' 为根；懒加载，右栏 Files 区块数据源） */
+  fileTree: Record<string, FileTreeNode[]>;
+  /** 文件树正在加载的目录路径列表（行内加载态） */
+  fileTreeLoadingPaths: string[];
+  /** Git 状态快照（null = 未拉取；is_repo=false 前端隐藏区块） */
+  gitStatus: GitStatusSnapshot | null;
+  /** Git 状态加载中 */
+  gitLoading: boolean;
+  /** 文件预览载荷（null = 预览关闭；error 字段非空表示读取失败） */
+  filePreview: FileContentPayload | null;
+  /** 文件预览加载中 */
+  filePreviewLoading: boolean;
   modelOptions: Option[];
   ready: boolean;
   /** 首次登录标识（后端 ready 事件携带，无 env_N 且无 working_directory 时为 true） */
@@ -261,6 +289,23 @@ export interface WebSocketSessionState {
   removeWorkspace: (path: string) => void;
   /** 拉取资源快照（web_request_resources，可指定会话/工作区；缺省 = 活跃会话） */
   requestResources: (sessionId?: string, cwd?: string) => void;
+  /** 清空右栏目录相关数据（切换会话/目录时调用，随后由统一刷新重拉） */
+  resetWorkspaceResources: () => void;
+  /** 拉取文件树单层条目（web_request_file_tree；path 为工作区相对目录，缺省根；
+   *  已有缓存且非 force 时跳过） */
+  requestFileTree: (path?: string, force?: boolean) => void;
+  /** 拉取 Git 状态快照（web_request_git_status） */
+  requestGitStatus: () => void;
+  /** 打开文件预览（web_read_file，内容视图；同视图同路径读取中直接忽略连点） */
+  openFilePreview: (path: string) => void;
+  /** 打开文件 diff 预览（web_file_diff，相对 HEAD 的变更视图） */
+  openFileDiff: (path: string) => void;
+  /** 关闭文件预览 */
+  closeFilePreview: () => void;
+  /** 拉取智能体与后台任务（web_request_agent_tasks，随活跃会话） */
+  requestAgentTasks: () => void;
+  /** 查看智能体/任务摘要（复用 /agent 指令，结果在预览面板展示） */
+  viewAgentSummary: (id: string) => void;
   /** 会话级内联选项（活跃视图） */
   inlineOptions: SelectRequestPayload | null;
   /** 设置活跃会话的内联选项（/language 等前端本地弹出的选择框） */
@@ -372,6 +417,14 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   const [skills, setSkills] = useState<SkillSnapshot[]>([]);
   const [plugins, setPlugins] = useState<PluginSnapshot[]>([]);
   const [rules, setRules] = useState<RuleSnapshot[]>([]);
+  // === 右栏扩展：智能体与任务 / 文件树 / Git 状态 / 文件预览 ===
+  const [agentTasks, setAgentTasks] = useState<AgentTaskItem[]>([]);
+  const [fileTree, setFileTree] = useState<Record<string, FileTreeNode[]>>({});
+  const [fileTreeLoadingPaths, setFileTreeLoadingPaths] = useState<string[]>([]);
+  const [gitStatus, setGitStatus] = useState<GitStatusSnapshot | null>(null);
+  const [gitLoading, setGitLoading] = useState(false);
+  const [filePreview, setFilePreview] = useState<FileContentPayload | null>(null);
+  const [filePreviewLoading, setFilePreviewLoading] = useState(false);
   const [modelOptions, setModelOptions] = useState<Option[]>([]);
   const [ready, setReady] = useState(false);
   const [showThinking, setShowThinking] = useState(true);
@@ -393,6 +446,14 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   // === 工作区（目录空间）状态 ===
   const [workspaces, setWorkspaces] = useState<WebWorkspaceItem[]>([]);
   const [resourcesCwd, setResourcesCwd] = useState<string | null>(null);
+  // resourcesCwd 的 ref 镜像：事件处理器闭包内判断树/Git 快照归属工作区
+  const resourcesCwdRef = useRef<string | null>(null);
+  // 文件树正在加载的目录集合（ref 镜像，防同目录并发重复请求）
+  const fileTreeLoadingRef = useRef<Set<string>>(new Set());
+  // 文件预览正在读取的键（`kind|path`，防同视图同路径连点重复请求）
+  const filePreviewKeyRef = useRef<string | null>(null);
+  // 待展示的智能体摘要请求（viewAgentSummary 发起的 web_query request_id → 条目 id）
+  const agentViewRef = useRef<{ requestId: string; id: string } | null>(null);
   // 视图最新引用：事件处理器（WS 闭包）与回调中读取，避免陈旧闭包
   const viewsRef = useRef<Record<string, SessionViewState>>({});
   const activeSessionIdRef = useRef<string | null>(null);
@@ -402,6 +463,8 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   const showThinkingRef = useRef(true);
   // 会话级 stop 超时定时器（sendStop 15s 兜底，line_complete 时清理）
   const stopTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  // 右栏统一刷新防抖定时器（工具链内连续变更工具只刷一次）
+  const rightPanelRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 会话级恢复超时定时器（activateSession 10s 兜底，restore_completed 时清理）
   const restoreTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
@@ -517,6 +580,17 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     if (!view) return;
     patchView(sid, { items: [...view.items, item] });
   }, [patchView]);
+
+  // resourcesCwd ref 镜像 + 工作区切换失效：文件树与 Git 快照按目录归属，
+  // 切换工作区（web_resources 的 cwd 变化）时清空缓存与加载态
+  useEffect(() => {
+    resourcesCwdRef.current = resourcesCwd;
+    setFileTree({});
+    setFileTreeLoadingPaths([]);
+    setGitStatus(null);
+    setGitLoading(false);
+    fileTreeLoadingRef.current.clear();
+  }, [resourcesCwd]);
 
   /** 发送原始请求（不注入 session_id，供内部使用） */
   const sendRaw = useCallback((payload: Record<string, unknown>): void => {
@@ -688,8 +762,8 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
         clearTimeout(prev);
         delete restoreTimersRef.current[id];
       }
-      // 本地切换跨目录时右栏资源联动：按目标会话请求其工作区资源快照
-      sendRaw({ type: 'web_request_resources', session_id: id });
+      // 右栏资源联动由 activeSessionId 变化的统一刷新 effect 承担
+      // （覆盖资源 / Git / 文件树根 / 智能体任务），此处不再单独发请求
     }
   }, [patchView, sendRaw]);
 
@@ -722,6 +796,134 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       ...(cwd ? { cwd } : {}),
     });
   }, [sendRaw]);
+
+  /** 拉取文件树单层条目（path 为工作区相对目录，'' 为根；同目录加载中去重复请求。
+   *  请求显式绑定当前活跃会话，后端按 session_id 路由到目标工作区，避免本地切会话后
+   *  仍按后端旧活跃会话取到上一个目录的目录树 */
+  const requestFileTree = useCallback((path?: string, force?: boolean): void => {
+    const dir = path ?? '';
+    if (!force && fileTreeLoadingRef.current.has(dir)) return;
+    fileTreeLoadingRef.current.add(dir);
+    setFileTreeLoadingPaths((prev) => (prev.includes(dir) ? prev : [...prev, dir]));
+    sendRaw({
+      type: 'web_request_file_tree',
+      ...(dir ? { path: dir } : {}),
+      session_id: activeSessionIdRef.current ?? undefined,
+    });
+  }, [sendRaw]);
+
+  /** 拉取 Git 状态快照（显式绑定当前活跃会话，同文件树） */
+  const requestGitStatus = useCallback((): void => {
+    setGitLoading(true);
+    sendRaw({ type: 'web_request_git_status', session_id: activeSessionIdRef.current ?? undefined });
+  }, [sendRaw]);
+
+  /** 打开文件预览（内容视图；同视图同路径读取中直接忽略连点；
+   *  显式绑定当前活跃会话，避免本地切会话后读到上一个会话目录的文件） */
+  const openFilePreview = useCallback((path: string): void => {
+    const key = `content|${path}`;
+    if (filePreviewKeyRef.current === key) return;
+    filePreviewKeyRef.current = key;
+    setFilePreviewLoading(true);
+    setFilePreview({ path });
+    sendRaw({ type: 'web_read_file', path, session_id: activeSessionIdRef.current ?? undefined });
+  }, [sendRaw]);
+
+  /** 打开文件 diff 预览（相对 HEAD 的变更视图；同样绑定当前活跃会话） */
+  const openFileDiff = useCallback((path: string): void => {
+    const key = `diff|${path}`;
+    if (filePreviewKeyRef.current === key) return;
+    filePreviewKeyRef.current = key;
+    setFilePreviewLoading(true);
+    setFilePreview({ path, kind: 'diff' });
+    sendRaw({ type: 'web_file_diff', path, session_id: activeSessionIdRef.current ?? undefined });
+  }, [sendRaw]);
+
+  /** 关闭文件预览 */
+  const closeFilePreview = useCallback((): void => {
+    filePreviewKeyRef.current = null;
+    agentViewRef.current = null;
+    setFilePreviewLoading(false);
+    setFilePreview(null);
+  }, []);
+
+  /** 拉取智能体与后台任务（随活跃会话；切会话后由统一刷新触发重拉） */
+  const requestAgentTasks = useCallback((): void => {
+    sendRequest({ type: 'web_request_agent_tasks' });
+  }, [sendRequest]);
+
+  /**
+   * 统一刷新右栏数据（资源 + Git + 文件树根 + 智能体任务）
+   *
+   * 覆盖"切换目录 / 切换会话 / 调用变更工具"三类触发场景，作为唯一
+   * 刷新入口统一管理。防抖合并：工具链内连续调用（多个变更工具先后
+   * 完成）只触发一次。只覆盖数据源本身、不清空已有缓存，避免刷新
+   * 瞬间出现空态闪烁（无感）。
+   *
+   * @returns 无返回值
+   */
+  const refreshRightPanel = useCallback((): void => {
+    if (rightPanelRefreshTimerRef.current) clearTimeout(rightPanelRefreshTimerRef.current);
+    rightPanelRefreshTimerRef.current = setTimeout(() => {
+      rightPanelRefreshTimerRef.current = null;
+      // 显式绑定当前活跃会话：本地切会话后后端活跃会话可能滞后，缺省按活跃取
+      // 会在快速多次切换时取到上一个会话/目录的数据（右栏整体串档）
+      const sid = activeSessionIdRef.current ?? undefined;
+      requestResources(sid);
+      requestGitStatus();
+      requestAgentTasks();
+      requestFileTree(''); // 根目录（请求内部已绑定会话）
+    }, 150);
+  }, [requestResources, requestGitStatus, requestAgentTasks, requestFileTree]);
+
+  // 切换会话 / 切换目录（新建会话）时统一刷新右栏：资源随目标会话工作区
+  // 联动；跨目录时 Git/文件树由 resourcesCwd 变化的缓存失效 + 区块自拉取
+  // 兜底（GitSection/FileTreeSection 各自 effect），无感更新、不抖动
+  useEffect(() => {
+    if (activeSessionId) refreshRightPanel();
+  }, [activeSessionId, refreshRightPanel]);
+
+  /**
+   * 清空右栏目录相关数据（置于未加载态）
+   *
+   * 切换会话/目录时由 App 调用，随后 refreshRightPanel 重拉新目录数据。
+   * 避免跨目录后、新数据到达前右栏残留上一目录的资源快照（skills/mcp/
+   * plugins/rules/agentTasks、文件树与 Git 状态）。不拉新数据，只清空。
+   *
+   * @returns 无返回值
+   */
+  const resetWorkspaceResources = useCallback((): void => {
+    setSkills([]);
+    setMcpServers([]);
+    setPlugins([]);
+    setRules([]);
+    setAgentTasks([]);
+    setFileTree({});
+    setFileTreeLoadingPaths([]);
+    setGitStatus(null);
+    setGitLoading(false);
+    fileTreeLoadingRef.current.clear();
+  }, []);
+
+  // 组件卸载时清理右栏刷新防抖定时器
+  useEffect(() => {
+    return () => {
+      if (rightPanelRefreshTimerRef.current) {
+        clearTimeout(rightPanelRefreshTimerRef.current);
+        rightPanelRefreshTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  /** 查看智能体/任务摘要：复用 /agent 指令（web_query），结果路由到预览面板 */
+  const viewAgentSummary = useCallback((id: string): void => {
+    const requestId = `agentview-${id}-${Date.now()}`;
+    agentViewRef.current = { requestId, id };
+    filePreviewKeyRef.current = null;
+    setFilePreviewLoading(true);
+    setFilePreview({ path: `${id} · 摘要` });
+    sendRequest({ type: 'web_query', command: 'agent', args: id, request_id: requestId });
+  }, [sendRequest]);
 
   const setInlineOptions = useCallback((payload: SelectRequestPayload | null) => {
     const sid = activeSessionIdRef.current;
@@ -848,7 +1050,9 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
         setStatus(newState);
         const st = newState.show_thinking;
         if (typeof st === 'boolean') { setShowThinking(st); showThinkingRef.current = st; }
-        setMcpServers((evt.mcp_servers as McpServerSnapshot[]) ?? []);
+        // 注意：不外覆盖 MCP 服务器列表。state_snapshot 的 mcp_servers 取自后端
+        // 活跃会话 bundle，前端本地切会话后该活跃可能滞后；而 MCP 应与其他资源
+        // 一致，统一由绑定会话的 web_resources 驱动，避免被全局快照拉回旧目录状态。
         return;
       }
       if (evt.type === 'tasks_snapshot') { setTasks(evt.tasks ?? []); return; }
@@ -989,6 +1193,9 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
           pushStatic(sid, { ...evt.item, role: 'tool_result', tool_name: toolName,
             tool_use_id: toolUseId || undefined, is_error: (evt.item.is_error ?? evt.is_error ?? undefined) as boolean | undefined,
             progress_messages: progressMessages });
+          // 变更类工具执行完成后统一刷新右栏（文件树 / Git / 资源快照）；
+          // 仅活跃会话触发的工具才刷新（后台 agent 的变更不联动活跃会话数据）
+          if (CHANGE_TOOLS.has(toolName) && sid === activeSessionIdRef.current) refreshRightPanel();
           return;
         }
         if (evt.type === 'tool_input_updated') {
@@ -1252,12 +1459,61 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
         // 后端推送的资源快照，结构化更新（废弃旧的文本正则解析）；
         // cwd 标记资源所属工作区（右栏按目录联动的依据）
         const res = evt.web_resources;
-        if (res) {
-          setSkills((res.skills as SkillSnapshot[]) ?? []);
-          setPlugins((res.plugins as PluginSnapshot[]) ?? []);
-          setRules((res.rules as RuleSnapshot[]) ?? []);
-          setMcpServers((res.mcp_servers as McpServerSnapshot[]) ?? []);
-          setResourcesCwd(evt.cwd ?? null);
+        if (!res) return;
+        // 目录归属守卫：快速多次切换会话/目录时，前序会话的迟到 web_resources
+        // 会覆盖当前会话数据。仅当响应 cwd 与当前活跃会话目录一致（或无法判断
+        // 目录时放宽）才应用，否则丢弃，避免"残留上一个会话状态"
+        const active = activeSessionIdRef.current
+          ? viewsRef.current[activeSessionIdRef.current]
+          : undefined;
+        if (evt.cwd && active?.cwd && evt.cwd !== active.cwd) return;
+        setSkills((res.skills as SkillSnapshot[]) ?? []);
+        setPlugins((res.plugins as PluginSnapshot[]) ?? []);
+        setRules((res.rules as RuleSnapshot[]) ?? []);
+        setMcpServers((res.mcp_servers as McpServerSnapshot[]) ?? []);
+        setResourcesCwd(evt.cwd ?? null);
+        return;
+      }
+      if (evt.type === 'web_agent_tasks') {
+        // 智能体与后台任务（随会话隔离）：归属活跃会话或未标记时应用
+        const sid = evt.session_id;
+        if (!sid || !activeSessionIdRef.current || sid === activeSessionIdRef.current) {
+          setAgentTasks((evt.web_agent_tasks as AgentTaskItem[]) ?? []);
+        }
+        return;
+      }
+      if (evt.type === 'web_file_tree') {
+        // 目录单层条目（懒加载）；按事件携带目录归位。
+        // 无论归属是否匹配都清理该目录的加载态，避免 cwd-guard 丢弃路径
+        // （切换目录后的迟到响应）泄漏 loading 导致 Files 区块永久加载中
+        const tree = evt.web_file_tree;
+        if (tree) {
+          const dir = tree.path ?? '';
+          fileTreeLoadingRef.current.delete(dir);
+          setFileTreeLoadingPaths((prev) => prev.filter((p) => p !== dir));
+          if (!evt.cwd || !resourcesCwdRef.current || evt.cwd === resourcesCwdRef.current) {
+            setFileTree((prev) => ({ ...prev, [dir]: tree.entries ?? [] }));
+          }
+        }
+        return;
+      }
+      if (evt.type === 'web_git_status') {
+        // Git 状态快照；迟到响应按 cwd 丢弃，同上
+        const snap = evt.web_git_status;
+        if (snap && (!evt.cwd || !resourcesCwdRef.current || evt.cwd === resourcesCwdRef.current)) {
+          setGitStatus(snap);
+        }
+        setGitLoading(false);
+        return;
+      }
+      if (evt.type === 'web_file_content') {
+        // 文件预览载荷（error 字段非空表示读取失败）；与发起请求的
+        // kind|path 一致才应用（内容/diff 两视图按键精确关联）
+        const payload = evt.web_file_content;
+        const key = `${payload?.kind === 'diff' ? 'diff' : 'content'}|${payload?.path ?? ''}`;
+        if (payload && key === filePreviewKeyRef.current) {
+          setFilePreview(payload);
+          setFilePreviewLoading(false);
         }
         return;
       }
@@ -1273,6 +1529,24 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       }
       if (evt.type === 'web_query_result') {
         const payload = evt.web_query_payload;
+        // 智能体摘要（viewAgentSummary 发起）：路由到预览面板展示全文
+        if (evt.web_command === 'agent' && agentViewRef.current && evt.web_request_id === agentViewRef.current.requestId) {
+          const id = agentViewRef.current.id;
+          agentViewRef.current = null;
+          if (evt.web_query_kind === 'text' && typeof payload === 'string') {
+            setFilePreview({
+              path: `${id} · 摘要`,
+              content: payload,
+              size: payload.length,
+              truncated: false,
+            });
+          } else {
+            setFilePreview({ path: `${id} · 摘要`, error: '未找到该智能体或任务的摘要' });
+          }
+          setFilePreviewLoading(false);
+          if (sid) patchView(sid, { busy: false });
+          return;
+        }
         if (evt.web_query_kind === 'text' && typeof payload === 'string') {
           // 所有 B 通道指令的文本结果统一走 toast，不渲染到主会话
           if (payload.trim() && onCommandResultRef.current) {
@@ -1379,7 +1653,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     }
 
     return () => { ws.close(); wsRef.current = null; };
-  }, [url, routeSessionId, ensureView, patchView, getBuffer, flushAssistantDelta, clearAssistantDelta, pushStatic, sendRaw]);
+  }, [url, routeSessionId, ensureView, patchView, getBuffer, flushAssistantDelta, clearAssistantDelta, pushStatic, sendRaw, refreshRightPanel]);
 
   // 首次登录配置保存后手动清除 firstLogin 状态（避免再次打开表单仍显示首次登录）
   const clearFirstLogin = useCallback(() => setFirstLogin(false), []);
@@ -1403,6 +1677,10 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       },
       // 全局状态
       tasks, commands, mcpServers, skills, plugins, rules, modelOptions,
+      agentTasks, fileTree, fileTreeLoadingPaths, gitStatus, gitLoading,
+      filePreview, filePreviewLoading,
+      requestFileTree, requestGitStatus, openFilePreview, openFileDiff, closeFilePreview,
+      requestAgentTasks, viewAgentSummary,
       ready, firstLogin, showThinking,
       swarmTeammates, swarmNotifications, bgAgentLabel, connected,
       modelSwitching, setModelSwitching,
@@ -1430,6 +1708,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       addWorkspace,
       removeWorkspace,
       requestResources,
+      resetWorkspaceResources,
       inlineOptions: view?.inlineOptions ?? null,
       setInlineOptions,
       // agent 向导（全局）
@@ -1447,11 +1726,15 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     };
   }, [
     status, tasks, commands, mcpServers, skills, plugins, rules, modelOptions,
+    agentTasks, fileTree, fileTreeLoadingPaths, gitStatus, gitLoading,
+    filePreview, filePreviewLoading,
+    requestFileTree, requestGitStatus, openFilePreview, openFileDiff, closeFilePreview,
+    requestAgentTasks, viewAgentSummary,
     ready, firstLogin, showThinking, swarmTeammates, swarmNotifications,
     bgAgentLabel, connected, sessionViews, sessionList, activeSessionId,
     workspaces, resourcesCwd,
     activateSession, newSession, setInlineOptions, patchView,
-    requestWorkspaces, addWorkspace, removeWorkspace, requestResources,
+    requestWorkspaces, addWorkspace, removeWorkspace, requestResources, resetWorkspaceResources,
     agentWizardTools, agentWizardModels, agentGenerated, agentGenerateLoading,
     agentGenerateError, agentWizardResult,
     sendAgentWizardInit, sendAgentGenerateRequest, sendAgentWizardSubmit, clearAgentWizardState,

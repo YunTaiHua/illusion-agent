@@ -24,7 +24,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import subprocess
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from illusion.commands.registry import create_default_command_registry
@@ -189,6 +192,11 @@ class WebApiDispatcher:
             "web_request_sessions": self.handle_web_request_sessions,
             "web_request_models": self.handle_web_request_models,
             "web_request_resources": self.handle_web_request_resources,
+            "web_request_file_tree": self.handle_web_request_file_tree,
+            "web_request_git_status": self.handle_web_request_git_status,
+            "web_read_file": self.handle_web_read_file,
+            "web_file_diff": self.handle_web_file_diff,
+            "web_request_agent_tasks": self.handle_web_request_agent_tasks,
             "web_query": self.handle_web_query,
             "web_request_workspaces": self.handle_web_request_workspaces,
             "web_add_workspace": self.handle_web_add_workspace,
@@ -759,6 +767,135 @@ class WebApiDispatcher:
             cwd=bundle.cwd,
         ))
 
+    # === 右栏扩展：文件树 / Git 状态 / 文件预览 ===
+
+    async def handle_web_request_file_tree(self, request: FrontendRequest) -> None:
+        """列出目标目录的一层可见条目并推送 web_file_tree 事件。
+
+        前端树形导航按需逐层拉取（path 为工作区内相对路径，空串表示根）。
+        过滤规则见 _tree_entry_visible（隐藏生成产物/缓存目录，点文件仅
+        保留项目配置相关的少量目录）。单层超过 500 条时截断并标记。
+
+        Args:
+            request: 前端请求（path 可选：目标子目录；session_id/cwd 同资源解析）
+        """
+        host = self._host
+        if host._bundle is None:
+            return
+        bundle = self._resolve_resource_bundle(request)
+        rel = (request.path or "").strip().replace("\\", "/")
+        base = _resolve_within_root(bundle.cwd, rel)
+        if base is None or not base.is_dir():
+            await self._emit(BackendEvent(type="error", message="目录路径无效或超出工作区范围"))
+            return
+        entries, truncated = await asyncio.to_thread(_list_dir_entries, base, bundle.cwd)
+        await self._emit(BackendEvent(
+            type="web_file_tree",
+            cwd=bundle.cwd,
+            web_file_tree={"path": rel, "entries": entries, "truncated": truncated},
+        ))
+
+    async def handle_web_request_git_status(self, request: FrontendRequest) -> None:
+        """采集目标工作区的 Git 状态快照并推送 web_git_status 事件。
+
+        快照包含分支/上游/领先落后计数与变更文件列表
+        （porcelain -z -uall + numstat，行级增删统计；非 Git 目录返回
+        is_repo=False，前端隐藏区块）。
+
+        Args:
+            request: 前端请求（session_id/cwd 同资源解析）
+        """
+        host = self._host
+        if host._bundle is None:
+            return
+        bundle = self._resolve_resource_bundle(request)
+        snapshot = await asyncio.to_thread(_git_status_snapshot, bundle.cwd)
+        await self._emit(BackendEvent(
+            type="web_git_status",
+            cwd=bundle.cwd,
+            web_git_status=snapshot,
+        ))
+
+    async def handle_web_read_file(self, request: FrontendRequest) -> None:
+        """读取工作区内文本文件内容并推送 web_file_content 事件（预览）。
+
+        安全与限制：路径解析限定在工作区内（拒绝 ../ 穿越）；二进制
+        （前 8KB 含 NUL）不返回内容；超过 512KB / 4000 行截断并标记。
+
+        Args:
+            request: 前端请求（path 必填：工作区内相对路径）
+        """
+        host = self._host
+        if host._bundle is None:
+            return
+        bundle = self._resolve_resource_bundle(request)
+        rel = (request.path or "").strip().replace("\\", "/")
+        target = _resolve_within_root(bundle.cwd, rel)
+        if target is None or not target.is_file():
+            await self._emit(BackendEvent(
+                type="web_file_content", cwd=bundle.cwd,
+                web_file_content={"path": rel, "error": "文件不存在或超出工作区范围"},
+            ))
+            return
+        payload = await asyncio.to_thread(_read_file_payload, target, rel)
+        await self._emit(BackendEvent(
+            type="web_file_content",
+            cwd=bundle.cwd,
+            web_file_content=payload,
+        ))
+
+    async def handle_web_file_diff(self, request: FrontendRequest) -> None:
+        """读取单个文件相对 HEAD 的 diff 并推送 web_file_content 事件。
+
+        变更视图（kind=diff）：跟踪文件取 ``git diff HEAD -- <path>``
+        （暂存 + 工作区合并差异）；未跟踪/新文件用 ``git diff --no-index``
+        合成全新增 diff。已删除文件同样可取 diff（无需文件存在）。
+
+        Args:
+            request: 前端请求（path 必填：工作区内相对路径）
+        """
+        host = self._host
+        if host._bundle is None:
+            return
+        bundle = self._resolve_resource_bundle(request)
+        rel = (request.path or "").strip().replace("\\", "/")
+        # 只做边界校验（不要求文件存在：已删除文件也有 diff）
+        if not rel or _resolve_within_root(bundle.cwd, rel) is None:
+            await self._emit(BackendEvent(
+                type="web_file_content", cwd=bundle.cwd,
+                web_file_content={"path": rel, "kind": "diff", "error": "路径无效或超出工作区范围"},
+            ))
+            return
+        payload = await asyncio.to_thread(_git_file_diff, bundle.cwd, rel)
+        await self._emit(BackendEvent(
+            type="web_file_content",
+            cwd=bundle.cwd,
+            web_file_content=payload,
+        ))
+
+    async def handle_web_request_agent_tasks(self, request: FrontendRequest) -> None:
+        """收集会话内的智能体与后台任务并推送 web_agent_tasks 事件。
+
+        复用 /agent 指令的双数据源（前台 agent 工具结果 + transcript 的
+        task-notification），按会话隔离（切换会话时前端重新拉取）。
+        行点击查看摘要同样复用 /agent（web_query command=agent args=<id>）。
+
+        Args:
+            request: 前端请求（session_id 可选：目标会话；缺省为活跃会话）
+        """
+        host = self._host
+        if host._bundle is None:
+            return
+        session_id = request.session_id or host._active_session_id
+        session = host._sessions.get(session_id) if session_id else None
+        if session is None:
+            await self._emit(BackendEvent(
+                type="web_agent_tasks", session_id=session_id, web_agent_tasks=[]))
+            return
+        items = await asyncio.to_thread(_collect_agent_tasks, session.engine.messages)
+        await self._emit(BackendEvent(
+            type="web_agent_tasks", session_id=session_id, web_agent_tasks=items))
+
     # === 工作区（目录空间）管理 ===
 
     async def handle_web_request_workspaces(self, request: FrontendRequest) -> None:
@@ -1009,7 +1146,7 @@ async def _run_command_via_registry(line: str, bundle: RuntimeBundle) -> Command
 
 
 def _collect_resources(bundle: RuntimeBundle) -> dict[str, Any]:
-    """收集右侧栏资源快照（skills/plugins/rules/mcp_servers）。
+    """收集右侧栏资源快照（skills/agents/plugins/rules/mcp_servers）。
 
     直接调用各注册表/管理器的结构化接口，废弃旧的命令文本正则解析
     （_parseSkillsResult / _parsePluginsResult / _parseRulesResult）。
@@ -1018,7 +1155,7 @@ def _collect_resources(bundle: RuntimeBundle) -> dict[str, Any]:
         bundle: 运行时 bundle
 
     Returns:
-        dict[str, Any]: {skills, plugins, rules, mcp_servers} 结构化快照
+        dict[str, Any]: {skills, agents, plugins, rules, mcp_servers} 结构化快照
     """
     # skills：从技能注册表读取结构化数据
     from illusion.skills.loader import load_skill_registry
@@ -1027,6 +1164,22 @@ def _collect_resources(bundle: RuntimeBundle) -> dict[str, Any]:
         {"name": s.name, "description": s.description or "", "source": s.source}
         for s in skill_registry.list_skills()
     ]
+
+    # agents：内置 + 用户级 + 项目级（随 bundle.cwd）+ 插件的合并视图
+    agents = []
+    try:
+        from illusion.coordinator.agent_definitions import get_all_agent_definitions
+        for agent in get_all_agent_definitions(cwd=bundle.cwd):
+            agents.append({
+                "name": agent.name,
+                "description": agent.description or "",
+                "source": agent.source,
+                "color": agent.color,
+                "model": agent.model,
+                "background": agent.background,
+            })
+    except Exception:
+        log.exception("收集代理快照失败")
 
     # plugins：从当前可见插件读取（复用 bundle.current_plugins）
     plugins = []
@@ -1079,7 +1232,453 @@ def _collect_resources(bundle: RuntimeBundle) -> dict[str, Any]:
     except Exception:
         log.exception("收集 MCP 服务器快照失败")
 
-    return {"skills": skills, "plugins": plugins, "rules": rules, "mcp_servers": mcp_servers}
+    return {"skills": skills, "agents": agents, "plugins": plugins, "rules": rules, "mcp_servers": mcp_servers}
+
+
+# ---------------------------------------------------------------------------
+# 右栏扩展纯函数辅助：文件树过滤 / Git 解析 / 文件预览
+# （独立于 dispatcher，便于单元测试）
+# ---------------------------------------------------------------------------
+
+# 文件树忽略的目录名（生成产物/依赖/缓存，体积大且无导航价值）
+_TREE_IGNORED_NAMES = frozenset({
+    "node_modules", "__pycache__", ".git", ".hg", ".svn",
+    ".venv", "venv", "env", "dist", "build", "out", "target",
+    ".next", ".nuxt", ".cache", ".mypy_cache", ".pytest_cache",
+    ".ruff_cache", ".tox", ".idea", "coverage", ".turbo", ".parcel-cache",
+})
+# 点文件目录白名单（项目配置相关，导航有意义才展示）
+_TREE_DOTDIR_ALLOW = frozenset({
+    ".github", ".illusion", ".claude", ".cursor", ".devcontainer", ".vscode",
+})
+# 单层目录条目上限（超出截断，前端显示省略行）
+_TREE_MAX_ENTRIES = 500
+# 文件预览限制
+_PREVIEW_MAX_BYTES = 512 * 1024
+_PREVIEW_MAX_LINES = 4000
+# git 子进程超时（秒）
+_GIT_TIMEOUT = 5.0
+
+
+def _tree_entry_visible(name: str, is_dir: bool) -> bool:
+    """判断目录条目是否在文件树中可见。
+
+    规则：忽略名单一律隐藏；点文件仅展示白名单内的目录，其余
+    点文件/点目录（.env、.DS_Store 等）视为噪音隐藏。
+
+    Args:
+        name: 条目名（不含路径）
+        is_dir: 是否目录
+
+    Returns:
+        bool: 可见返回 True
+    """
+    if name in _TREE_IGNORED_NAMES:
+        return False
+    if name.startswith("."):
+        return is_dir and name in _TREE_DOTDIR_ALLOW
+    return True
+
+
+def _resolve_within_root(root: str, rel: str) -> Path | None:
+    """将相对路径解析到 root 内的绝对路径，越界/穿越返回 None。
+
+    Args:
+        root: 工作区根目录（绝对路径）
+        rel: 工作区内相对路径（空串表示根；支持 / 或 \\ 分隔）
+
+    Returns:
+        Path | None: 解析后的绝对路径；超出 root 或解析失败返回 None
+    """
+    try:
+        root_path = Path(root).resolve()
+        target = (root_path / rel).resolve() if rel else root_path
+        target.relative_to(root_path)
+    except (OSError, ValueError):
+        return None
+    return target
+
+
+def _list_dir_entries(directory: Path, root: str) -> tuple[list[dict[str, Any]], bool]:
+    """列出目录一层的可见条目（目录优先，名称不区分大小写排序）。
+
+    Args:
+        directory: 目标目录（绝对路径）
+        root: 工作区根目录（条目 path 字段以根为基准的相对路径，/ 分隔）
+
+    Returns:
+        tuple[list[dict[str, Any]], bool]: (条目列表, 是否因超过上限截断)；
+        条目为 {name, path, kind: dir|file, size: 文件字节数}
+    """
+    entries: list[dict[str, Any]] = []
+    truncated = False
+    try:
+        with os.scandir(directory) as it:
+            for e in it:
+                try:
+                    is_dir = e.is_dir(follow_symlinks=False)
+                except OSError:
+                    continue
+                if not _tree_entry_visible(e.name, is_dir):
+                    continue
+                if len(entries) >= _TREE_MAX_ENTRIES:
+                    truncated = True
+                    break
+                try:
+                    rel = os.path.relpath(e.path, root).replace("\\", "/")
+                except ValueError:
+                    continue
+                entry: dict[str, Any] = {"name": e.name, "path": rel, "kind": "dir" if is_dir else "file"}
+                if not is_dir:
+                    try:
+                        entry["size"] = e.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        entry["size"] = 0
+                entries.append(entry)
+    except OSError:
+        return [], False
+    entries.sort(key=lambda x: (x["kind"] != "dir", x["name"].lower()))
+    return entries, truncated
+
+
+def _run_git(cwd: str, *args: str, ok_codes: tuple[int, ...] = (0,)) -> str | None:
+    """在工作区目录执行 git 子命令，成功返回 stdout，失败/超时返回 None。
+
+    Args:
+        cwd: 工作区目录
+        *args: git 子命令参数
+        ok_codes: 视为成功的退出码集合（如 --no-index 有差异时退出码为 1）
+
+    Returns:
+        str | None: stdout 原文（含换行）；退出码不在 ok_codes、git 缺失或超时返回 None
+    """
+    try:
+        # 非零退出码（如无上游/空仓库）由调用方按返回值降级，无需抛异常
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_GIT_TIMEOUT,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return proc.stdout if proc.returncode in ok_codes else None
+
+
+# porcelain 状态字母 → 展示状态
+_GIT_STATUS_MAP = {
+    "A": "added",
+    "M": "modified",
+    "D": "deleted",
+    "R": "renamed",
+    "C": "modified",
+    "T": "modified",
+    "U": "unmerged",
+    "?": "untracked",
+}
+
+
+def _parse_git_porcelain(raw: str) -> list[dict[str, Any]]:
+    """解析 ``git status --porcelain=v1 -z -uall`` 输出。
+
+    -z 模式条目以 NUL 分隔（路径内空格/引号不转义）；R/C 条目
+    后跟一条原始路径记录。XY 双字母：X=暂存区，Y=工作区。
+
+    Args:
+        raw: porcelain -z 原始输出
+
+    Returns:
+        list[dict[str, Any]]: [{path, status, staged, orig_path?, insertions, deletions}]
+    """
+    files: list[dict[str, Any]] = []
+    fields = [f for f in raw.split("\0") if f]
+    i = 0
+    while i < len(fields):
+        field = fields[i]
+        i += 1
+        if len(field) < 4:
+            continue
+        xy, path = field[:2], field[3:]
+        orig: str | None = None
+        if xy[0] in ("R", "C") and i < len(fields):
+            orig = fields[i]
+            i += 1
+        x, y = xy[0], xy[1]
+        letter = x if x not in (" ", "?", "!") else y
+        files.append({
+            "path": path,
+            "status": _GIT_STATUS_MAP.get(letter, "modified"),
+            "staged": x not in (" ", "?", "!"),
+            "orig_path": orig,
+            "insertions": None,
+            "deletions": None,
+        })
+    return files
+
+
+def _parse_git_numstat(raw: str) -> dict[str, tuple[int | None, int | None]]:
+    """解析 ``git diff --numstat -z`` 输出为 路径 → (增行, 删行) 映射。
+
+    二进制文件的增删为 "-"（映射为 None）；重命名条目附带的原始路径
+    记录无制表符分隔结构，自然跳过。
+
+    Args:
+        raw: numstat -z 原始输出
+
+    Returns:
+        dict[str, tuple[int | None, int | None]]: 路径 → (insertions, deletions)
+    """
+    result: dict[str, tuple[int | None, int | None]] = {}
+    for field in raw.split("\0"):
+        if not field:
+            continue
+        parts = field.split("\t")
+        if len(parts) != 3:
+            continue
+        added_s, deleted_s, path = parts
+        result[path] = (
+            int(added_s) if added_s.isdigit() else None,
+            int(deleted_s) if deleted_s.isdigit() else None,
+        )
+    return result
+
+
+def _git_status_snapshot(cwd: str) -> dict[str, Any]:
+    """采集工作区 Git 状态快照（分支/上游/领先落后/变更文件）。
+
+    所有 git 调用失败安全降级：非仓库返回 {"is_repo": False}；
+    无上游/空仓库/分离 HEAD 等缺省字段为 None。
+
+    Args:
+        cwd: 工作区目录
+
+    Returns:
+        dict[str, Any]: {is_repo, branch?, upstream?, ahead?, behind?, files?}
+    """
+    inside = _run_git(cwd, "rev-parse", "--is-inside-work-tree")
+    if inside is None or inside.strip() != "true":
+        return {"is_repo": False}
+
+    branch = (_run_git(cwd, "branch", "--show-current") or "").strip()
+    if not branch:
+        head = _run_git(cwd, "rev-parse", "--short", "HEAD")
+        if head:
+            branch = f"({head.strip()})"  # 分离 HEAD，展示短提交号
+
+    upstream: str | None = None
+    ahead: int | None = None
+    behind: int | None = None
+    up = _run_git(cwd, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+    if up and up.strip():
+        upstream = up.strip()
+        counts = _run_git(cwd, "rev-list", "--left-right", "--count", f"{upstream}...HEAD")
+        if counts:
+            parts = counts.split()
+            if len(parts) == 2:
+                try:
+                    behind, ahead = int(parts[0]), int(parts[1])
+                except ValueError:
+                    pass
+
+    files = _parse_git_porcelain(_run_git(cwd, "status", "--porcelain=v1", "-z", "-uall") or "")
+    stats = _parse_git_numstat(_run_git(cwd, "diff", "--numstat", "-z", "--relative", "HEAD") or "")
+    for f in files:
+        stat = stats.get(f["path"])
+        if stat is not None:
+            f["insertions"], f["deletions"] = stat
+    files.sort(key=lambda f: f["path"].lower())
+
+    return {
+        "is_repo": True,
+        "branch": branch or None,
+        "upstream": upstream,
+        "ahead": ahead,
+        "behind": behind,
+        "files": files,
+    }
+
+
+def _collect_agent_tasks(messages: list[Any]) -> list[dict[str, Any]]:
+    """从会话 transcript 收集智能体与后台任务（复用 /agent 指令的双数据源）。
+
+    数据源与 /agent handler 保持一致：
+    1. 前台 agent：assistant 消息中 name=agent 的 ToolUseBlock（标题取
+       description/name/subagent_type 入参）+ user 消息中对应 tool_result
+       （跳过 "launched in background/as subprocess" 启动通知）；
+    2. 后台任务：user 消息 TextBlock 的 task-notification
+       （TASK_NOTIFICATION_RE：task-id/status/summary/task-name/result），
+       task-name/task-id 含 agent 判为智能体，否则为任务。
+
+    Args:
+        messages: 会话引擎消息列表（engine.messages）
+
+    Returns:
+        list[dict[str, Any]]: [{id, title, type: agent|task, status, summary}]，
+        按出现顺序倒排（最近的在最前）
+    """
+    from illusion.engine.messages import TextBlock, ToolResultBlock, ToolUseBlock
+    from illusion.tasks.types import TASK_NOTIFICATION_RE
+
+    def _is_agent_id(task_id: str, task_name: str) -> bool:
+        hay = f"{task_id} {task_name}".lower()
+        return "agent" in hay
+
+    items: list[dict[str, Any]] = []
+
+    # 1. 前台 agent 工具调用 → 匹配 tool_result
+    front_results: dict[str, ToolResultBlock] = {}
+    for msg in messages:
+        if msg.role != "user":
+            continue
+        for block in msg.content:
+            if isinstance(block, ToolResultBlock):
+                front_results[block.tool_use_id] = block
+    for msg in messages:
+        if msg.role != "assistant":
+            continue
+        for block in msg.content:
+            if not isinstance(block, ToolUseBlock) or block.name != "agent":
+                continue
+            result = front_results.get(block.id)
+            if result is None:
+                continue
+            text = result.text_content or ""
+            if "launched in background" in text or "launched as subprocess" in text:
+                continue  # 启动通知非摘要，与 /agent 过滤一致
+            inputs = block.input if isinstance(block.input, dict) else {}
+            title = str(
+                inputs.get("description") or inputs.get("name") or inputs.get("subagent_type") or "agent"
+            )
+            items.append({
+                "id": block.id,
+                "title": title,
+                "type": "agent",
+                "status": "failed" if result.is_error else "completed",
+                "summary": " ".join(text.split())[:160],
+            })
+
+    # 2. 后台任务通知（agent / bash / powershell 等）
+    for msg in messages:
+        if msg.role != "user":
+            continue
+        for block in msg.content:
+            if not isinstance(block, TextBlock):
+                continue
+            match = TASK_NOTIFICATION_RE.search(block.text)
+            if not match:
+                continue
+            task_id = match.group("task_id").strip()
+            task_name = (match.group("task_name") or "").strip()
+            items.append({
+                "id": task_id,
+                "title": task_name or task_id,
+                "type": "agent" if _is_agent_id(task_id, task_name) else "task",
+                "status": match.group("status").strip(),
+                "summary": " ".join((match.group("summary") or "").split())[:160],
+            })
+
+    items.reverse()  # 最近的在最前
+    return items
+
+
+def _cap_preview_text(text: str) -> tuple[str, bool]:
+    """按预览上限截断文本（字节 + 行数），返回 (文本, 是否截断)。"""
+    truncated = False
+    data = text.encode("utf-8", errors="replace")
+    if len(data) > _PREVIEW_MAX_BYTES:
+        text = data[:_PREVIEW_MAX_BYTES].decode("utf-8", errors="replace")
+        truncated = True
+    lines = text.split("\n")
+    if len(lines) > _PREVIEW_MAX_LINES:
+        text = "\n".join(lines[:_PREVIEW_MAX_LINES])
+        truncated = True
+    return text, truncated
+
+
+def _git_file_diff(cwd: str, rel: str) -> dict[str, Any]:
+    """获取单个文件相对 HEAD 的局部 diff（少量上下文的 hunk 结构）。
+
+    -U3 让每个 hunk 只带极少量上下文，前端据此只展示局部增减，并在
+    hunk 头标注新旧文件起点行号，删除行/新增行各自对应正确的行号；未跟踪/
+    新文件用 --no-index 合成全新增 diff。
+    判定顺序：
+    1. ``git diff HEAD -- <path>`` 非空 → 直接返回（暂存 + 工作区合并差异）；
+    2. diff HEAD 成功但为空：文件被跟踪（ls-files 可匹配）且无变更 → 空 diff；
+       未被跟踪则继续（diff HEAD 不含 untracked 文件）；
+    3. 未跟踪/新文件/空仓库（无 HEAD，diff 失败）→ ``--no-index`` 合成全新增 diff。
+
+    Args:
+        cwd: 工作区目录
+        rel: 工作区内相对路径（/ 分隔；文件可能已被删除）
+
+    Returns:
+        dict[str, Any]: {path, kind: diff, content, truncated} 或 {path, kind, error}
+    """
+    # git 不可用 / 非仓库：--no-index 无需仓库也能成功，需前置判定
+    inside = _run_git(cwd, "rev-parse", "--is-inside-work-tree")
+    if inside is None or inside.strip() != "true":
+        return {"path": rel, "kind": "diff", "error": "无法获取 diff（非 Git 仓库或 git 不可用）"}
+    tracked = _run_git(cwd, "diff", "-U3", "HEAD", "--", rel)
+    if tracked is not None and tracked.strip():
+        content, truncated = _cap_preview_text(tracked)
+        return {"path": rel, "kind": "diff", "content": content, "truncated": truncated}
+    if tracked is not None:
+        # diff HEAD 为空：被跟踪且无变更（untracked 不会出现在 diff HEAD 中，需判别）
+        matched = _run_git(cwd, "ls-files", "--error-unmatch", "--", rel)
+        if matched is not None:
+            return {"path": rel, "kind": "diff", "content": "", "truncated": False}
+    # 未跟踪 / 新文件 / 空仓库：--no-index 与空设备比较合成全新增 diff
+    synth = _run_git(cwd, "diff", "--no-index", "-U3", "--", os.devnull, rel, ok_codes=(0, 1))
+    if synth is not None and synth.strip():
+        # 头部的 a/<devnull> 规整为 a/dev/null，b/ 侧保持相对路径
+        devnull_side = f"a/{os.devnull}"
+        if devnull_side in synth:
+            synth = synth.replace(devnull_side, "a/dev/null")
+        content, truncated = _cap_preview_text(synth)
+        return {"path": rel, "kind": "diff", "content": content, "truncated": truncated}
+    if synth is not None:
+        return {"path": rel, "kind": "diff", "content": "", "truncated": False}
+    return {"path": rel, "kind": "diff", "error": "无法获取 diff"}
+
+
+def _read_file_payload(target: Path, rel: str) -> dict[str, Any]:
+    """读取文本文件生成预览载荷（二进制嗅探 + 大小/行数截断）。
+
+    Args:
+        target: 文件绝对路径（已经过工作区边界校验）
+        rel: 工作区内相对路径（回显给前端）
+
+    Returns:
+        dict[str, Any]: {path, binary, size, truncated, content} 或 {path, error}
+    """
+    try:
+        size = target.stat().st_size
+        with open(target, "rb") as fh:
+            if b"\0" in fh.read(8192):
+                return {"path": rel, "binary": True, "size": size, "truncated": False, "content": ""}
+            fh.seek(0)
+            data = fh.read(_PREVIEW_MAX_BYTES + 1)
+    except OSError as exc:
+        return {"path": rel, "error": str(exc)}
+    truncated = len(data) > _PREVIEW_MAX_BYTES
+    if truncated:
+        data = data[:_PREVIEW_MAX_BYTES]
+    text = data.decode("utf-8", errors="replace")
+    lines = text.split("\n")
+    if len(lines) > _PREVIEW_MAX_LINES:
+        lines = lines[:_PREVIEW_MAX_LINES]
+        truncated = True
+    return {
+        "path": rel,
+        "binary": False,
+        "size": size,
+        "truncated": truncated,
+        "content": "\n".join(lines),
+    }
 
 
 __all__ = ["WebApiDispatcher"]

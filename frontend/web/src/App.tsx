@@ -25,6 +25,8 @@ import RightPanel, { RightPanelControls } from './components/RightPanel';
 import TitleBar from './components/TitleBar';
 import ConnectingOverlay from './components/ConnectingOverlay';
 import ImagePreview from './components/ImagePreview';
+import FileViewerModal from './components/FileViewerModal';
+import FilePreviewPanel from './components/FilePreviewPanel';
 import { CustomInputModal } from './components/CustomInputModal';
 import { AgentWizardForm } from './components/AgentWizardForm';
 import { SetupForm } from './components/SetupForm';
@@ -70,9 +72,20 @@ export default function App() {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   // 右栏默认折叠；折叠态下右栏整体隐藏，控制由顶部右侧按钮组（RightPanelControls）承载
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState(true);
-  const [sidebarWidth, setSidebarWidth] = useState(280);
+  // 左栏宽度固定（不允许拖动调整宽度），仅保留折叠/展开能力
+  const sidebarWidth = 280;
   const [rightPanelWidth, setRightPanelWidth] = useState(260);
-  const dragRef = useRef<{ side: 'left' | 'right'; startX: number; startW: number } | null>(null);
+  // 文件预览停靠列宽与弹窗形态：默认停靠右栏右侧，可"弹窗查看"放大。
+  // 初始宽度受右栏整体 ≤ 1/2 屏上限约束（窄窗口下收敛，避免拖拽级联在
+  // 触底边界处产生跳变）
+  const [previewPanelWidth, setPreviewPanelWidth] = useState(() =>
+    Math.max(280, Math.min(420, Math.floor(window.innerWidth / 2) - 261)),
+  );
+  const [previewPopOut, setPreviewPopOut] = useState(false);
+  const dragRef = useRef<{ side: 'right' | 'preview'; startX: number; startW: number } | null>(null);
+  // 预览自动扩宽的防重入标记：记录已处理过的预览键（kind|path），
+  // 同一预览对象反复刷新（加载中→内容）时只扩宽一次
+  const autoWidenKeyRef = useRef<string | null>(null);
 
   // 内联选项状态：由 hook 按会话维护（session.inlineOptions / session.setInlineOptions），
   // 切换会话时选项随会话隔离，互不串扰
@@ -170,29 +183,74 @@ export default function App() {
   /**
    * 处理面板大小调整开始
    *
-   * 当用户开始拖拽面板边缘时触发，用于调整侧边栏或右侧面板的宽度。
+   * 右栏两条分隔条共用"触底级联"语义（任一侧触达最小宽度后不再卡住，
+   * 继续同向拖动 → 整个右栏整体联动缩放，聊天区同步让位/收窄）：
+   * - right：聊天区|右栏（向右拖右栏区块变窄）；上限约束的是右栏整体
+   *   （右栏 + 预览列）宽度 ≤ 1/2 屏；区块触底后继续右拖 → 预览列同步
+   *   收缩、整个右栏缩小
+   * - preview：右栏|预览列（等总量再分配——向右拖右栏变宽、预览列等量
+   *   变窄）；预览列触底后继续右拖 → 整个右栏缩小（区块收缩、聊天区变宽）；
+   *   区块触底后继续左拖 → 整个右栏增大（预览列继续变宽），镜像对称
    *
-   * @param side - 要调整的面板（'left' 或 'right'）
+   * @param side - 要调整的面板（'right' 右栏 / 'preview' 预览列）
    * @param e - 鼠标事件
    */
-  const handleResizeStart = useCallback((side: 'left' | 'right', e: React.MouseEvent) => {
+  const handleResizeStart = useCallback((side: 'right' | 'preview', e: React.MouseEvent) => {
     e.preventDefault();
-    const startW = side === 'left' ? sidebarWidth : rightPanelWidth;
+    const startW = side === 'right' ? rightPanelWidth : previewPanelWidth;
+    // 拖拽起点快照（preview 再分配需要两侧初始值）
+    const startRight = rightPanelWidth;
+    const startPreview = previewPanelWidth;
+    // 区块/预览列最小宽度保护
+    const MIN_RIGHT = 260;
+    const MIN_PREVIEW = 280;
+    // 右栏整体（右栏 + 可见预览列）宽度上限：1/2 屏
+    const maxTotal = Math.floor(window.innerWidth / 2);
+    const previewVisibleWidth = session.filePreview && !previewPopOut ? previewPanelWidth : 0;
+    const maxRightPanel = Math.max(MIN_RIGHT, maxTotal - previewVisibleWidth);
     dragRef.current = { side, startX: e.clientX, startW };
     const onMove = (ev: MouseEvent) => {
       if (!dragRef.current) return;
-      const maxW = window.innerWidth / 3;
       const dx = ev.clientX - dragRef.current.startX;
-      if (dragRef.current.side === 'left') {
-        setSidebarWidth(Math.min(maxW, Math.max(280, dragRef.current.startW + dx)));
+      if (dragRef.current.side === 'right') {
+        const newRight = dragRef.current.startW - dx;
+        if (newRight < MIN_RIGHT) {
+          // 区块触底：继续右拖 → 预览列同步收缩、整个右栏缩小（聊天区变宽）
+          setRightPanelWidth(MIN_RIGHT);
+          setPreviewPanelWidth(Math.max(MIN_PREVIEW, previewPanelWidth - (MIN_RIGHT - newRight)));
+        } else {
+          setRightPanelWidth(Math.min(maxRightPanel, newRight));
+        }
       } else {
-        setRightPanelWidth(Math.min(maxW, Math.max(260, dragRef.current.startW - dx)));
+        if (rightPanelCollapsed) {
+          // 右栏折叠时预览列紧邻聊天区：拖动分隔条直接调整预览列宽（向右拖变窄）
+          setPreviewPanelWidth(Math.min(maxTotal, Math.max(MIN_PREVIEW, dragRef.current.startW - dx)));
+          return;
+        }
+        // 预览分隔条：右栏与预览列等量再分配（总量不变）；任一侧触底后
+        // 继续同向拖动 → 整个右栏联动（预览触底=缩小、区块触底=增大）
+        const total = startRight + startPreview;
+        const raw = startRight + dx;         // 向右拖 → 区块变宽、预览变窄
+        const maxRight = total - MIN_PREVIEW; // 预览列最小保护下的区块上限
+        if (raw > maxRight) {
+          // 预览列触底：超出部分转为整体右栏缩小（区块收缩、预览保持最小）
+          setRightPanelWidth(Math.max(MIN_RIGHT, maxRight - (raw - maxRight)));
+          setPreviewPanelWidth(MIN_PREVIEW);
+        } else if (raw < MIN_RIGHT) {
+          // 区块触底：整体右栏增大（区块保持最小、预览继续变宽；受 3/5 屏上限
+          // 与预览列最小宽度双重约束，保证触底边界处宽度连续）
+          setRightPanelWidth(MIN_RIGHT);
+          setPreviewPanelWidth(Math.max(MIN_PREVIEW, Math.min(total - raw, maxTotal - MIN_RIGHT)));
+        } else {
+          setRightPanelWidth(raw);
+          setPreviewPanelWidth(total - raw);
+        }
       }
     };
     const onUp = () => { dragRef.current = null; document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
-  }, [sidebarWidth, rightPanelWidth]);
+  }, [rightPanelWidth, previewPanelWidth, rightPanelCollapsed, session.filePreview, previewPopOut]);
 
   /**
    * 处理用户提交的命令（三通道有序判定）
@@ -572,6 +630,49 @@ export default function App() {
     setRightPanelCollapsed((c) => !c);
   }, [rightPanelCollapsed, session.requestResources]);
 
+  // 右栏数据源回调：useCallback 稳定引用，避免内联箭头导致
+  // FileTreeSection / GitSection 的自动拉取 effect 每帧重跑（无效抖动）
+  const handleRequestFileTree = useCallback((path?: string, force?: boolean) => {
+    session.requestFileTree(path, force);
+  }, [session.requestFileTree]);
+  const handleRequestGitStatus = useCallback(() => {
+    session.requestGitStatus();
+  }, [session.requestGitStatus]);
+  const handleRefreshResources = useCallback(() => {
+    session.requestResources();
+  }, [session.requestResources]);
+
+  // 文件/diff 预览出现时自动将右栏扩展到最大宽度：右栏 + 预览列 = 1/2 屏，
+  // 右栏折叠态自动展开，便于查看。仅处理同一预览键（kind|path）的首次出现，
+  // 预览载荷反复刷新（加载中→内容）不重复扩宽；打开新文件/切视图时再次扩宽
+  useEffect(() => {
+    if (!session.filePreview || previewPopOut) return;
+    const key = `${session.filePreview.kind ?? 'content'}|${session.filePreview.path}`;
+    if (autoWidenKeyRef.current === key) return;
+    autoWidenKeyRef.current = key;
+    setRightPanelCollapsed(false);
+    const maxTotal = Math.floor(window.innerWidth / 2);
+    // 预览区域优先撑满（封顶 720 便于阅读），右栏占用其余；两者总量恒 ≤ 1/2 屏。
+    // 极限窄窗口（maxTotal < 480）时预览允许收缩至 220，仍保证聊天区不被右区挤没
+    const targetRight = Math.max(260, maxTotal - 720);
+    const targetPreview = Math.max(220, maxTotal - targetRight);
+    setPreviewPanelWidth(targetPreview);
+    setRightPanelWidth(targetRight);
+  }, [session.filePreview, previewPopOut]);
+
+  // 切换会话 / 切换目录时重置右栏：折叠右栏、关闭文件预览并清空目录相关资源，
+  // 避免右栏残留上一轮会话/目录的文件预览或资源快照（防止串档）。同时清空预览
+  // 扩宽的防重入标记，使新会话/新目录打开文件时能重新自动扩宽。
+  // 清空后由 hook 内部的 activeSessionId 统一刷新（refreshRightPanel）重拉新目录数据。
+  useEffect(() => {
+    if (!session.activeSessionId) return; // 尚未建立会话时不处理
+    setRightPanelCollapsed(true);
+    setPreviewPopOut(false);
+    autoWidenKeyRef.current = null;
+    session.resetWorkspaceResources();
+    session.closeFilePreview();
+  }, [session.activeSessionId, session.resetWorkspaceResources, session.closeFilePreview]);
+
   /**
    * 处理选择会话（A 通道，零 suppress）
    *
@@ -776,6 +877,22 @@ export default function App() {
     session.clearModal();
   };
 
+  /**
+   * 当前文件预览是否有 Git 变更（决定是否显示"Diff"切换按钮）
+   *
+   * - Git 快照未加载 / 文件未命名：返回 null（未知，默认显示以保留既有行为）
+   * - 非 Git 仓库：返回 false（无 diff 可看，隐藏 Diff 按钮）
+   * - 文件出现在变更列表（含未跟踪）中：返回 true
+   * - 其余（已跟踪但无变更）：返回 false，隐藏 Diff 按钮，避免展示空的 diff
+   */
+  const previewHasDiff = useMemo(() => {
+    const git = session.gitStatus;
+    if (!git || !session.filePreview) return null;
+    if (!git.is_repo) return false;
+    const p = session.filePreview.path;
+    return (git.files ?? []).some((f) => f.path === p);
+  }, [session.gitStatus, session.filePreview]);
+
   /** 输入框 + 工具栏合并为单卡片（欢迎态注入标题下方，非欢迎态置于底部） */
   const composer = (
     <div className="glass-surface rounded-3xl focus-within:shadow-glow">
@@ -823,10 +940,6 @@ export default function App() {
         collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
         width={sidebarWidth} restoringSessionId={session.restoringSessionId}
         onOpenSettings={() => { setSetupInitialTab('settings'); setShowSetupForm(true); }} />
-      {!sidebarCollapsed && (
-        <div className="w-1 cursor-col-resize hover:bg-primary/20 active:bg-primary/30 transition-colors shrink-0"
-          onMouseDown={(e) => handleResizeStart('left', e)} />
-      )}
       <div className="flex flex-col flex-1 min-w-0 min-h-0 relative">
         <ChatArea lang={lang} staticItems={session.staticItems} assistantBuffer={session.assistantBuffer}
           streamingReasoning={session.streamingReasoning} pendingToolCalls={session.pendingToolCalls}
@@ -882,10 +995,39 @@ export default function App() {
       {!rightPanelCollapsed && !welcomeVisible && (
       <RightPanel lang={lang} status={session.status}
         collapsed={rightPanelCollapsed} onToggle={toggleRightPanel}
-        onRefreshResources={() => session.requestResources()}
-        todoItems={session.todoItems} skills={session.skills} plugins={session.plugins}
+        onRefreshResources={handleRefreshResources}
+        todoItems={session.todoItems}
+        agentTasks={session.agentTasks}
+        onRequestAgentTasks={() => session.requestAgentTasks()}
+        onViewAgentTask={(id) => session.viewAgentSummary(id)}
+        fileTree={session.fileTree} fileTreeLoadingPaths={session.fileTreeLoadingPaths}
+        gitStatus={session.gitStatus} gitLoading={session.gitLoading}
+        onRequestFileTree={handleRequestFileTree}
+        onRequestGitStatus={handleRequestGitStatus}
+        onOpenFile={(path) => session.openFilePreview(path)}
+        onOpenFileDiff={(path) => session.openFileDiff(path)}
+        skills={session.skills} plugins={session.plugins}
         rules={session.rules} mcpServers={session.mcpServers}
         width={rightPanelWidth} />
+      )}
+
+      {/* 文件预览停靠列：右栏右侧独立显示（右栏折叠时仍在）；
+          与右栏逻辑一致——欢迎界面时隐藏，回到会话视图自动恢复 */}
+      {session.filePreview && !previewPopOut && !welcomeVisible && (
+        <>
+          <div className="w-1 cursor-col-resize hover:bg-primary/20 active:bg-primary/30 transition-colors shrink-0"
+            onMouseDown={(e) => handleResizeStart('preview', e)} />
+          <FilePreviewPanel
+            lang={lang}
+            payload={session.filePreview}
+            loading={session.filePreviewLoading}
+            width={previewPanelWidth}
+            hasDiff={previewHasDiff}
+            onOpenContent={(path) => session.openFilePreview(path)}
+            onOpenDiff={(path) => session.openFileDiff(path)}
+            onPopOut={() => setPreviewPopOut(true)}
+            onClose={() => { session.closeFilePreview(); setPreviewPopOut(false); }} />
+        </>
       )}
       </div>
 
@@ -1105,6 +1247,12 @@ export default function App() {
       {!session.connected && <ConnectingOverlay lang={lang} />}
       {/* 应用内图片预览（Lightbox）：点击 markdown 图片/图片链接时打开 */}
       <ImagePreview lang={lang} />
+      {/* 文件预览弹窗：停靠列"弹窗查看"按钮触发放大形态；关闭返回停靠列 */}
+      <FileViewerModal
+        lang={lang}
+        payload={previewPopOut ? session.filePreview : null}
+        loading={session.filePreviewLoading}
+        onClose={() => setPreviewPopOut(false)} />
     </div>
   );
 }

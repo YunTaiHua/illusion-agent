@@ -222,6 +222,123 @@ export interface RuleSnapshot {
   source: string;
 }
 
+/**
+ * 代理（子代理定义）快照接口
+ *
+ * web_resources 推送的单个代理条目（内置 + 用户级 + 项目级 + 插件的合并视图）。
+ */
+export interface AgentSnapshot {
+  /** 代理名称 */
+  name: string;
+  /** 使用时机描述 */
+  description: string;
+  /** 来源：'builtin'（内置）、'user'（用户级）、'plugin'（插件） */
+  source: string;
+  /** UI 颜色名（可选，AGENT_COLORS 之一） */
+  color?: string | null;
+  /** 模型覆盖（可选，null 表示继承默认） */
+  model?: string | null;
+  /** 是否为后台代理 */
+  background?: boolean;
+}
+
+/**
+ * 智能体与任务条目接口
+ *
+ * web_agent_tasks 推送的单个条目（复用 /agent 指令的双数据源：
+ * 前台 agent 工具结果 + 后台 task-notification）。
+ */
+export interface AgentTaskItem {
+  /** 条目 ID（前台 agent 为 tool_use_id；后台任务为 task_id，可传给 /agent 查摘要） */
+  id: string;
+  /** 展示标题（agent 的 description/name 或任务名） */
+  title: string;
+  /** 类型：'agent'（智能体）| 'task'（任务） */
+  type: 'agent' | 'task';
+  /** 状态：completed / failed / 运行中等原始状态 */
+  status: string;
+  /** 摘要（截断到 160 字） */
+  summary: string;
+}
+
+/**
+ * 文件树节点接口
+ *
+ * web_file_tree 推送的单个目录条目（单层，前端按需逐层拉取）。
+ */
+export interface FileTreeNode {
+  /** 条目名（不含路径） */
+  name: string;
+  /** 工作区内相对路径（/ 分隔） */
+  path: string;
+  /** 条目类型：'dir' | 'file' */
+  kind: 'dir' | 'file';
+  /** 文件字节大小（仅 file） */
+  size?: number;
+}
+
+/**
+ * Git 变更文件接口
+ *
+ * web_git_status 推送的单个变更文件。
+ */
+export interface GitFileStatus {
+  /** 工作区内相对路径 */
+  path: string;
+  /** 变更状态：'added' | 'modified' | 'deleted' | 'renamed' | 'untracked' | 'unmerged' */
+  status: string;
+  /** 是否已暂存 */
+  staged: boolean;
+  /** 重命名原始路径（仅 renamed） */
+  orig_path?: string | null;
+  /** 新增行数（可选，二进制/未跟踪为 null） */
+  insertions?: number | null;
+  /** 删除行数（可选） */
+  deletions?: number | null;
+}
+
+/**
+ * Git 状态快照接口
+ *
+ * web_git_status 推送的整份快照。
+ */
+export interface GitStatusSnapshot {
+  /** 是否为 Git 仓库（false 时前端隐藏区块） */
+  is_repo: boolean;
+  /** 当前分支（分离 HEAD 时为短提交号） */
+  branch?: string | null;
+  /** 上游分支名（可选） */
+  upstream?: string | null;
+  /** 领先上游的提交数（可选） */
+  ahead?: number | null;
+  /** 落后上游的提交数（可选） */
+  behind?: number | null;
+  /** 变更文件列表 */
+  files?: GitFileStatus[];
+}
+
+/**
+ * 文件预览载荷接口
+ *
+ * web_file_content 推送的内容快照（error 非空表示读取失败）。
+ */
+export interface FileContentPayload {
+  /** 工作区内相对路径 */
+  path: string;
+  /** 视图类型：'content' 文件当前内容（默认）| 'diff' 相对 HEAD 的变更 */
+  kind?: 'content' | 'diff';
+  /** 文件内容（二进制为空串；diff 视图为 unified diff 文本） */
+  content?: string;
+  /** 是否为二进制文件 */
+  binary?: boolean;
+  /** 文件字节大小 */
+  size?: number;
+  /** 是否因超过上限截断 */
+  truncated?: boolean;
+  /** 读取失败信息 */
+  error?: string;
+}
+
 // ---- 前端请求 ----
 
 /**
@@ -248,6 +365,11 @@ export type FrontendRequest =
   | { type: 'web_request_sessions'; limit?: number; offset?: number }
   | { type: 'web_request_models' }
   | { type: 'web_request_resources'; session_id?: string; cwd?: string }
+  | { type: 'web_request_file_tree'; path?: string; session_id?: string; cwd?: string }
+  | { type: 'web_request_git_status'; session_id?: string; cwd?: string }
+  | { type: 'web_read_file'; path: string; session_id?: string; cwd?: string }
+  | { type: 'web_file_diff'; path: string; session_id?: string; cwd?: string }
+  | { type: 'web_request_agent_tasks'; session_id?: string }
   | { type: 'web_query'; command: string; args?: string; request_id: string; session_id?: string }
   | { type: 'web_request_workspaces' }
   | { type: 'web_add_workspace'; path: string }
@@ -337,10 +459,19 @@ export interface BackendEvent {
   /** web_resources 推送的资源快照（可选） */
   web_resources?: {
     skills: SkillSnapshot[];
+    agents: AgentSnapshot[];
     plugins: PluginSnapshot[];
     rules: RuleSnapshot[];
     mcp_servers: McpServerSnapshot[];
   };
+  /** web_file_tree 推送的目录条目（可选；path 为请求的相对目录，空串为根） */
+  web_file_tree?: { path: string; entries: FileTreeNode[]; truncated?: boolean };
+  /** web_git_status 推送的 Git 状态快照（可选） */
+  web_git_status?: GitStatusSnapshot;
+  /** web_file_content 推送的文件预览载荷（可选） */
+  web_file_content?: FileContentPayload;
+  /** web_agent_tasks 推送的智能体与后台任务列表（可选） */
+  web_agent_tasks?: AgentTaskItem[];
   /** web_models 推送的模型选项（可选） */
   web_models?: SelectOption[];
   /** web_setting_changed 的键名（可选） */

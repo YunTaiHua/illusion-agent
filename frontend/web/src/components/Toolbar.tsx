@@ -71,10 +71,12 @@ const MODE_ENUM_VALUES = ['default', 'plan', 'full_auto', 'yolo'];
  * @param props.open - 是否展开（受控）
  * @param props.onOpenChange - 展开状态变更回调
  */
-function Dropdown({ value, matchValue, placeholder, options, onChange, onOpen, loading, title, open, onOpenChange }: {
+function Dropdown({ value, matchValue, placeholder, options, onChange, onOpen, loading, title, open, onOpenChange, displayMaxWidth }: {
   value: string; matchValue?: string; placeholder?: string; options: Option[];
   onChange: (v: string) => void; onOpen?: () => void; loading?: boolean; title?: string;
   open: boolean; onOpenChange: (open: boolean) => void;
+  /** 触发按钮显示文本的最大宽度（超出省略号截断）；不传则不限制（短固定文案不需要截断） */
+  displayMaxWidth?: string;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const displayValue = value || placeholder || '-';
@@ -97,16 +99,19 @@ function Dropdown({ value, matchValue, placeholder, options, onChange, onOpen, l
   }, [open, onOpenChange]);
 
   return (
-    <div ref={wrapRef} className="relative select-none" onBlur={(e) => { if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget as Node)) { onOpenChange(false); } }}>
-      <button onClick={() => { if (!open && onOpen) onOpen(); onOpenChange(!open); }}
-        className={`pill-badge flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-full cursor-pointer transition-colors ${open ? 'text-primary' : 'text-content-secondary hover:text-content-primary'}`}>
+    <div ref={wrapRef} className="relative select-none min-w-0" onBlur={(e) => { if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget as Node)) { onOpenChange(false); } }}>
+      <button title={displayValue} onClick={() => { if (!open && onOpen) onOpen(); onOpenChange(!open); }}
+        className={`pill-badge flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-full cursor-pointer transition-colors min-w-0 ${open ? 'text-primary' : 'text-content-secondary hover:text-content-primary'}`}>
         {loading ? (
-          <svg className="animate-spin w-3.5 h-3.5 text-primary" viewBox="0 0 24 24" fill="none">
+          <svg className="animate-spin w-3.5 h-3.5 text-primary flex-shrink-0" viewBox="0 0 24 24" fill="none">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
           </svg>
         ) : (
-          <span className={!value ? 'text-content-disabled' : ''}>{displayValue}</span>
+          <span className={`truncate ${!value ? 'text-content-disabled' : ''}`}
+            style={displayMaxWidth ? { maxWidth: displayMaxWidth } : undefined}>
+            {displayValue}
+          </span>
         )}
       </button>
       {open && (
@@ -170,7 +175,7 @@ export default function Toolbar({ lang, status, modelOptions, onSetSetting, onRe
   return (
     <div className="flex items-center gap-2 min-w-0 select-none">
       <Dropdown value={currentMode} matchValue={currentModeEnum} title="Mode" options={modeOptions} onChange={(v) => onSetSetting('permission_mode', v)} open={activeMenu === 'mode'} onOpenChange={(o) => onMenuOpen(o ? 'mode' : null)} />
-      <Dropdown value={currentModelLabel} matchValue={currentModel} title="Model" placeholder="Model" options={modelOpts} onChange={(v) => onSetSetting('model', v)} onOpen={onRequestModels} loading={modelSwitching} open={activeMenu === 'model'} onOpenChange={(o) => onMenuOpen(o ? 'model' : null)} />
+      <Dropdown value={currentModelLabel} matchValue={currentModel} title="Model" placeholder="Model" options={modelOpts} onChange={(v) => onSetSetting('model', v)} onOpen={onRequestModels} loading={modelSwitching} open={activeMenu === 'model'} onOpenChange={(o) => onMenuOpen(o ? 'model' : null)} displayMaxWidth="200px" />
       <Dropdown value={currentEffortLabel} matchValue={currentEffort} title="Effort" placeholder={t(lang, 'effort_default')} options={effortOpts} onChange={(v) => onSetSetting('effort', v)} open={activeMenu === 'effort'} onOpenChange={(o) => onMenuOpen(o ? 'effort' : null)} />
     </div>
   );
