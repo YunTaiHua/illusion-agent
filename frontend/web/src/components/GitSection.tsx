@@ -26,6 +26,8 @@ interface GitSectionProps {
   onRefresh: () => void;
   /** 点击文件（打开 diff 预览） */
   onOpenDiff: (path: string) => void;
+  /** 是否显示区块顶部分隔线（可选，默认显示） */
+  topBorder?: boolean;
 }
 
 /** 变更状态 → 展示字母与配色 */
@@ -44,7 +46,7 @@ const STATUS_META: Record<string, { letter: string; cls: string }> = {
  * @param props - 组件属性
  * @returns 返回 Git 区块的 JSX 元素（非仓库时区块常驻，显示占位提示）
  */
-export default function GitSection({ lang, status, loading, onRefresh, onOpenDiff }: GitSectionProps) {
+export default function GitSection({ lang, status, loading, onRefresh, onOpenDiff, topBorder = true }: GitSectionProps) {
   // 自动拉取/恢复：首次挂载或缓存被清空（切换工作区）后无需用户操作自动刷新；
   // pending 守卫防响应异常（error 事件不落地快照）时反复重试
   const pendingRef = useRef(false);
@@ -68,6 +70,7 @@ export default function GitSection({ lang, status, loading, onRefresh, onOpenDif
       onExpand={onRefresh}
       onRefresh={onRefresh}
       refreshLabel={t(lang, 'refresh')}
+      topBorder={topBorder}
       icon={
         <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="4" cy="3.5" r="1.75" />

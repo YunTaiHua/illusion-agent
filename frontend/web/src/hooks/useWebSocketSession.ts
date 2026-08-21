@@ -30,6 +30,7 @@ import type {
   PendingToolCall,
   PluginSnapshot,
   RuleSnapshot,
+  SessionFileItem,
   SkillSnapshot,
   SwarmNotificationSnapshot,
   SwarmTeammateSnapshot,
@@ -245,6 +246,10 @@ export interface WebSocketSessionState {
   fileTree: Record<string, FileTreeNode[]>;
   /** 文件树正在加载的目录路径列表（行内加载态） */
   fileTreeLoadingPaths: string[];
+  /** 会话内修改文件列表（web_session_files，随会话隔离；右栏会话文件区块数据源） */
+  sessionFiles: SessionFileItem[];
+  /** 会话文件拉取中（右栏会话文件区块加载态） */
+  sessionFilesLoading: boolean;
   /** Git 状态快照（null = 未拉取；is_repo=false 前端隐藏区块） */
   gitStatus: GitStatusSnapshot | null;
   /** Git 状态加载中 */
@@ -306,6 +311,10 @@ export interface WebSocketSessionState {
   requestAgentTasks: () => void;
   /** 查看智能体/任务摘要（复用 /agent 指令，结果在预览面板展示） */
   viewAgentSummary: (id: string) => void;
+  /** 拉取会话内修改文件列表（web_request_session_files，随活跃会话） */
+  requestSessionFiles: () => void;
+  /** 打开会话内修改文件预览（web_read_session_file；支持工作区外/非 Git 追踪的文件） */
+  openSessionFile: (path: string) => void;
   /** 会话级内联选项（活跃视图） */
   inlineOptions: SelectRequestPayload | null;
   /** 设置活跃会话的内联选项（/language 等前端本地弹出的选择框） */
@@ -421,6 +430,10 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   const [agentTasks, setAgentTasks] = useState<AgentTaskItem[]>([]);
   const [fileTree, setFileTree] = useState<Record<string, FileTreeNode[]>>({});
   const [fileTreeLoadingPaths, setFileTreeLoadingPaths] = useState<string[]>([]);
+  // 会话内修改文件列表（会话文件区块；随会话隔离，切会话清空后重拉）
+  const [sessionFiles, setSessionFiles] = useState<SessionFileItem[]>([]);
+  /** 会话文件拉取中（区块加载态） */
+  const [sessionFilesLoading, setSessionFilesLoading] = useState(false);
   const [gitStatus, setGitStatus] = useState<GitStatusSnapshot | null>(null);
   const [gitLoading, setGitLoading] = useState(false);
   const [filePreview, setFilePreview] = useState<FileContentPayload | null>(null);
@@ -852,8 +865,25 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     sendRequest({ type: 'web_request_agent_tasks' });
   }, [sendRequest]);
 
+  /** 拉取会话内修改文件列表（随活跃会话；显式绑定会话，切会话后由统一刷新重拉） */
+  const requestSessionFiles = useCallback((): void => {
+    setSessionFilesLoading(true);
+    sendRaw({ type: 'web_request_session_files', session_id: activeSessionIdRef.current ?? undefined });
+  }, [sendRaw]);
+
+  /** 打开会话内修改文件预览（内容视图；支持工作区外/非 Git 追踪的文件；
+   *  同样绑定当前活跃会话，同视图同路径读取中忽略连点） */
+  const openSessionFile = useCallback((path: string): void => {
+    const key = `content|${path}`;
+    if (filePreviewKeyRef.current === key) return;
+    filePreviewKeyRef.current = key;
+    setFilePreviewLoading(true);
+    setFilePreview({ path });
+    sendRaw({ type: 'web_read_session_file', path, session_id: activeSessionIdRef.current ?? undefined });
+  }, [sendRaw]);
+
   /**
-   * 统一刷新右栏数据（资源 + Git + 文件树根 + 智能体任务）
+   * 统一刷新右栏数据（资源 + Git + 文件树根 + 智能体任务 + 会话文件）
    *
    * 覆盖"切换目录 / 切换会话 / 调用变更工具"三类触发场景，作为唯一
    * 刷新入口统一管理。防抖合并：工具链内连续调用（多个变更工具先后
@@ -866,15 +896,14 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     if (rightPanelRefreshTimerRef.current) clearTimeout(rightPanelRefreshTimerRef.current);
     rightPanelRefreshTimerRef.current = setTimeout(() => {
       rightPanelRefreshTimerRef.current = null;
-      // 显式绑定当前活跃会话：本地切会话后后端活跃会话可能滞后，缺省按活跃取
-      // 会在快速多次切换时取到上一个会话/目录的数据（右栏整体串档）
       const sid = activeSessionIdRef.current ?? undefined;
       requestResources(sid);
       requestGitStatus();
       requestAgentTasks();
       requestFileTree(''); // 根目录（请求内部已绑定会话）
+      requestSessionFiles();
     }, 150);
-  }, [requestResources, requestGitStatus, requestAgentTasks, requestFileTree]);
+  }, [requestResources, requestGitStatus, requestAgentTasks, requestFileTree, requestSessionFiles]);
 
   // 切换会话 / 切换目录（新建会话）时统一刷新右栏：资源随目标会话工作区
   // 联动；跨目录时 Git/文件树由 resourcesCwd 变化的缓存失效 + 区块自拉取
@@ -898,6 +927,8 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     setPlugins([]);
     setRules([]);
     setAgentTasks([]);
+    setSessionFiles([]);
+    setSessionFilesLoading(false);
     setFileTree({});
     setFileTreeLoadingPaths([]);
     setGitStatus(null);
@@ -1482,6 +1513,16 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
         }
         return;
       }
+      if (evt.type === 'web_session_files') {
+        // 会话内修改文件（随会话隔离）：归属活跃会话或未标记时应用，
+        // 避免切换会话后迟到响应覆盖新会话的会话文件列表
+        const sid = evt.session_id;
+        if (!sid || !activeSessionIdRef.current || sid === activeSessionIdRef.current) {
+          setSessionFiles((evt.web_session_files as SessionFileItem[]) ?? []);
+        }
+        setSessionFilesLoading(false);
+        return;
+      }
       if (evt.type === 'web_file_tree') {
         // 目录单层条目（懒加载）；按事件携带目录归位。
         // 无论归属是否匹配都清理该目录的加载态，避免 cwd-guard 丢弃路径
@@ -1678,9 +1719,10 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       // 全局状态
       tasks, commands, mcpServers, skills, plugins, rules, modelOptions,
       agentTasks, fileTree, fileTreeLoadingPaths, gitStatus, gitLoading,
+      sessionFiles, sessionFilesLoading,
       filePreview, filePreviewLoading,
       requestFileTree, requestGitStatus, openFilePreview, openFileDiff, closeFilePreview,
-      requestAgentTasks, viewAgentSummary,
+      requestAgentTasks, viewAgentSummary, requestSessionFiles, openSessionFile,
       ready, firstLogin, showThinking,
       swarmTeammates, swarmNotifications, bgAgentLabel, connected,
       modelSwitching, setModelSwitching,
@@ -1727,9 +1769,10 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   }, [
     status, tasks, commands, mcpServers, skills, plugins, rules, modelOptions,
     agentTasks, fileTree, fileTreeLoadingPaths, gitStatus, gitLoading,
+    sessionFiles, sessionFilesLoading,
     filePreview, filePreviewLoading,
     requestFileTree, requestGitStatus, openFilePreview, openFileDiff, closeFilePreview,
-    requestAgentTasks, viewAgentSummary,
+    requestAgentTasks, viewAgentSummary, requestSessionFiles, openSessionFile,
     ready, firstLogin, showThinking, swarmTeammates, swarmNotifications,
     bgAgentLabel, connected, sessionViews, sessionList, activeSessionId,
     workspaces, resourcesCwd,

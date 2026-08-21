@@ -43,6 +43,11 @@ const TOAST_DURATION = 5000;
 /** B 通道允许的指令集合（前端识别并走 web_query） */
 const B_COMMANDS = ['rewind', 'compact', 'context', 'export', 'init', 'turns', 'output-style', 'language', 'max-tokens', 'rename'];
 
+/** 右栏（区块栏）最小宽度 */
+const MIN_RIGHT_PANEL = 260;
+/** 文件预览列最小宽度 */
+const MIN_PREVIEW_PANEL = 280;
+
 /**
  * 应用主组件
  *
@@ -76,16 +81,19 @@ export default function App() {
   const sidebarWidth = 280;
   const [rightPanelWidth, setRightPanelWidth] = useState(260);
   // 文件预览停靠列宽与弹窗形态：默认停靠右栏右侧，可"弹窗查看"放大。
-  // 初始宽度受右栏整体 ≤ 1/2 屏上限约束（窄窗口下收敛，避免拖拽级联在
+  // 初始宽度受右栏整体 ≤ 2/5 屏上限约束（窄窗口下收敛，避免拖拽级联在
   // 触底边界处产生跳变）
   const [previewPanelWidth, setPreviewPanelWidth] = useState(() =>
-    Math.max(280, Math.min(420, Math.floor(window.innerWidth / 2) - 261)),
+    Math.max(280, Math.min(420, Math.floor(window.innerWidth * 0.4) - 261)),
   );
   const [previewPopOut, setPreviewPopOut] = useState(false);
   const dragRef = useRef<{ side: 'right' | 'preview'; startX: number; startW: number } | null>(null);
   // 预览自动扩宽的防重入标记：记录已处理过的预览键（kind|path），
   // 同一预览对象反复刷新（加载中→内容）时只扩宽一次
   const autoWidenKeyRef = useRef<string | null>(null);
+  // 用户是否已手动调整过右栏：点开/折叠区块栏、拖动各栏宽度时置位。
+  // 置位后文件预览不再自动折叠区块栏或调整预览列宽度，尊重用户的自定义设置
+  const userAdjustedPanelsRef = useRef(false);
 
   // 内联选项状态：由 hook 按会话维护（session.inlineOptions / session.setInlineOptions），
   // 切换会话时选项随会话隔离，互不串扰
@@ -186,7 +194,7 @@ export default function App() {
    * 右栏两条分隔条共用"触底级联"语义（任一侧触达最小宽度后不再卡住，
    * 继续同向拖动 → 整个右栏整体联动缩放，聊天区同步让位/收窄）：
    * - right：聊天区|右栏（向右拖右栏区块变窄）；上限约束的是右栏整体
-   *   （右栏 + 预览列）宽度 ≤ 1/2 屏；区块触底后继续右拖 → 预览列同步
+   *   （右栏 + 预览列）宽度 ≤ 2/5 屏；区块触底后继续右拖 → 预览列同步
    *   收缩、整个右栏缩小
    * - preview：右栏|预览列（等总量再分配——向右拖右栏变宽、预览列等量
    *   变窄）；预览列触底后继续右拖 → 整个右栏缩小（区块收缩、聊天区变宽）；
@@ -197,15 +205,17 @@ export default function App() {
    */
   const handleResizeStart = useCallback((side: 'right' | 'preview', e: React.MouseEvent) => {
     e.preventDefault();
+    // 用户主动拖动分隔条调整各栏宽度：标记为已自定义，后续文件预览不再自动调整
+    userAdjustedPanelsRef.current = true;
     const startW = side === 'right' ? rightPanelWidth : previewPanelWidth;
     // 拖拽起点快照（preview 再分配需要两侧初始值）
     const startRight = rightPanelWidth;
     const startPreview = previewPanelWidth;
     // 区块/预览列最小宽度保护
-    const MIN_RIGHT = 260;
-    const MIN_PREVIEW = 280;
-    // 右栏整体（右栏 + 可见预览列）宽度上限：1/2 屏
-    const maxTotal = Math.floor(window.innerWidth / 2);
+    const MIN_RIGHT = MIN_RIGHT_PANEL;
+    const MIN_PREVIEW = MIN_PREVIEW_PANEL;
+    // 右栏整体（右栏 + 可见预览列）宽度上限：2/5 屏
+    const maxTotal = Math.floor(window.innerWidth * 0.4);
     const previewVisibleWidth = session.filePreview && !previewPopOut ? previewPanelWidth : 0;
     const maxRightPanel = Math.max(MIN_RIGHT, maxTotal - previewVisibleWidth);
     dragRef.current = { side, startX: e.clientX, startW };
@@ -624,11 +634,37 @@ export default function App() {
     session.newSession(cwd);
   };
 
-  /** 切换右栏折叠/展开：展开时按需请求资源快照（缺省 = 活跃会话所在工作区） */
+  /** 切换右栏折叠/展开：展开时按需请求资源快照（缺省 = 活跃会话所在工作区）。
+   *  仅当切换时已有文件预览（用户正在覆盖自动布局）才标记为已自定义，后续文件预览不再
+   *  自动重置该栏与预览列宽度；仅点开区块栏浏览文件（尚无预览）不标记，保证首次点选
+   *  文件后仍自动折叠区块栏并让预览列占满最大宽度。
+   *  展开时若已有文件预览，收紧预览列宽度，使「区块栏 + 预览列」总量不超出 2/5 屏上限
+   *  （避免在已有最大宽度预览列上继续叠加导致超限）。
+   *  收起（隐藏）区块栏时，若两栏之和已到达最大宽度，则预览列自动占满最大宽度（按需接管
+   *  释放的空间）；反之保持原预览宽度。关闭文件预览不受影响，保持正常逻辑。 */
   const toggleRightPanel = useCallback(() => {
-    if (rightPanelCollapsed) session.requestResources();
-    setRightPanelCollapsed((c) => !c);
-  }, [rightPanelCollapsed, session.requestResources]);
+    const willExpand = rightPanelCollapsed;
+    const previewActive = !!session.filePreview && !previewPopOut;
+    // 仅当切换时已有文件预览（用户在覆盖自动布局）才标记为已自定义，避免首次点选文件前的
+    // 普通展开被误判为用户自定义设置、从而跳过首次预览的自动折叠与满宽
+    if (previewActive) userAdjustedPanelsRef.current = true;
+    if (willExpand) {
+      session.requestResources();
+      // 展开区块栏时若已有文件预览，收紧预览列以便容纳区块栏，总量不超 2/5 屏上限
+      if (previewActive) {
+        const maxTotal = Math.floor(window.innerWidth * 0.4);
+        setPreviewPanelWidth(Math.max(MIN_PREVIEW_PANEL, Math.min(previewPanelWidth, maxTotal - MIN_RIGHT_PANEL)));
+      }
+    } else if (previewActive) {
+      // 收起（隐藏）区块栏时：若两栏之和已达到最大宽度，预览列自动占满最大宽度；
+      // 反之（未达最大宽度）保持原预览宽度
+      const maxTotal = Math.floor(window.innerWidth * 0.4);
+      if (rightPanelWidth + previewPanelWidth >= maxTotal) {
+        setPreviewPanelWidth(maxTotal);
+      }
+    }
+    setRightPanelCollapsed(willExpand ? false : true);
+  }, [rightPanelCollapsed, session.requestResources, session.filePreview, previewPopOut, previewPanelWidth, rightPanelWidth]);
 
   // 右栏数据源回调：useCallback 稳定引用，避免内联箭头导致
   // FileTreeSection / GitSection 的自动拉取 effect 每帧重跑（无效抖动）
@@ -641,34 +677,48 @@ export default function App() {
   const handleRefreshResources = useCallback(() => {
     session.requestResources();
   }, [session.requestResources]);
+  const handleRequestSessionFiles = useCallback(() => {
+    session.requestSessionFiles();
+  }, [session.requestSessionFiles]);
 
-  // 文件/diff 预览出现时自动将右栏扩展到最大宽度：右栏 + 预览列 = 1/2 屏，
-  // 右栏折叠态自动展开，便于查看。仅处理同一预览键（kind|path）的首次出现，
-  // 预览载荷反复刷新（加载中→内容）不重复扩宽；打开新文件/切视图时再次扩宽
+  // 文件/diff 预览出现时自动调整布局：折叠区块栏，让文件预览栏占满最大宽度（2/5 屏）。
+  // 仅处理同一预览键（kind|path）的首次出现，预览载荷反复刷新（加载中→内容）不重复调整；
+  // 打开新文件/切视图时再次调整。若用户已手动点开区块栏或调整过各栏宽度（userAdjustedPanelsRef），
+  // 不再自动折叠区块栏或调整预览列宽度，尊重用户自定义设置
   useEffect(() => {
     if (!session.filePreview || previewPopOut) return;
+    // 用户已手动调整过右栏：不重置其折叠状态与预览列宽度
+    if (userAdjustedPanelsRef.current) return;
     const key = `${session.filePreview.kind ?? 'content'}|${session.filePreview.path}`;
     if (autoWidenKeyRef.current === key) return;
     autoWidenKeyRef.current = key;
-    setRightPanelCollapsed(false);
-    const maxTotal = Math.floor(window.innerWidth / 2);
-    // 预览区域优先撑满（封顶 720 便于阅读），右栏占用其余；两者总量恒 ≤ 1/2 屏。
-    // 极限窄窗口（maxTotal < 480）时预览允许收缩至 220，仍保证聊天区不被右区挤没
-    const targetRight = Math.max(260, maxTotal - 720);
-    const targetPreview = Math.max(220, maxTotal - targetRight);
-    setPreviewPanelWidth(targetPreview);
-    setRightPanelWidth(targetRight);
+    // 首次打开该文件预览：折叠区块栏，让预览列占满最大宽度（2/5 屏）
+    setRightPanelCollapsed(true);
+    const maxTotal = Math.floor(window.innerWidth * 0.4);
+    setPreviewPanelWidth(maxTotal);
   }, [session.filePreview, previewPopOut]);
+
+  // 硬约束：区块栏与预览列同时可见时，两者总量不超 2/5 屏上限。
+  // 用户拖宽区块栏或调整宽度后触发，仅收紧预览列以保证不越界，不改其余用户设置
+  useEffect(() => {
+    if (!session.filePreview || previewPopOut || rightPanelCollapsed) return;
+    const maxTotal = Math.floor(window.innerWidth * 0.4);
+    if (rightPanelWidth + previewPanelWidth > maxTotal) {
+      setPreviewPanelWidth(Math.max(MIN_PREVIEW_PANEL, maxTotal - rightPanelWidth));
+    }
+  }, [session.filePreview, previewPopOut, rightPanelCollapsed, rightPanelWidth, previewPanelWidth]);
 
   // 切换会话 / 切换目录时重置右栏：折叠右栏、关闭文件预览并清空目录相关资源，
   // 避免右栏残留上一轮会话/目录的文件预览或资源快照（防止串档）。同时清空预览
-  // 扩宽的防重入标记，使新会话/新目录打开文件时能重新自动扩宽。
-  // 清空后由 hook 内部的 activeSessionId 统一刷新（refreshRightPanel）重拉新目录数据。
+  // 扩宽的防重入标记并复位"用户手动调整"标记（新工作区/新会话视为新上下文，
+  // 恢复首次文件预览的自动折叠 + 满宽）；清空后由 hook 内部的 activeSessionId
+  // 统一刷新（refreshRightPanel）重拉新目录数据。
   useEffect(() => {
     if (!session.activeSessionId) return; // 尚未建立会话时不处理
     setRightPanelCollapsed(true);
     setPreviewPopOut(false);
     autoWidenKeyRef.current = null;
+    userAdjustedPanelsRef.current = false;
     session.resetWorkspaceResources();
     session.closeFilePreview();
   }, [session.activeSessionId, session.resetWorkspaceResources, session.closeFilePreview]);
@@ -1002,6 +1052,10 @@ export default function App() {
         onViewAgentTask={(id) => session.viewAgentSummary(id)}
         fileTree={session.fileTree} fileTreeLoadingPaths={session.fileTreeLoadingPaths}
         gitStatus={session.gitStatus} gitLoading={session.gitLoading}
+        sessionFiles={session.sessionFiles}
+        sessionFilesLoading={session.sessionFilesLoading}
+        onRequestSessionFiles={handleRequestSessionFiles}
+        onOpenSessionFile={(path) => session.openSessionFile(path)}
         onRequestFileTree={handleRequestFileTree}
         onRequestGitStatus={handleRequestGitStatus}
         onOpenFile={(path) => session.openFilePreview(path)}

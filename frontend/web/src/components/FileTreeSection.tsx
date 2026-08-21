@@ -28,6 +28,8 @@ interface FileTreeSectionProps {
   onRequestDir: (path: string, force?: boolean) => void;
   /** 点击文件（打开预览） */
   onOpenFile: (path: string) => void;
+  /** 是否显示区块顶部分隔线（可选，默认显示） */
+  topBorder?: boolean;
 }
 
 /** 常见扩展名 → 图标颜色（无映射时用次级文本色） */
@@ -53,7 +55,7 @@ const EXT_COLORS: Record<string, string> = {
  * @param props - 组件属性
  * @returns 返回文件树区块的 JSX 元素
  */
-export default function FileTreeSection({ lang, fileTree, loadingPaths, onRequestDir, onOpenFile }: FileTreeSectionProps) {
+export default function FileTreeSection({ lang, fileTree, loadingPaths, onRequestDir, onOpenFile, topBorder = true }: FileTreeSectionProps) {
   // 展开的目录集合（相对路径 → 是否展开）
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
@@ -91,11 +93,8 @@ export default function FileTreeSection({ lang, fileTree, loadingPaths, onReques
       onExpand={() => { if (fileTree[''] === undefined) onRequestDir(''); }}
       onRefresh={handleRefresh}
       refreshLabel={t(lang, 'refresh')}
-      icon={
-        <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M1.5 4.5A1.5 1.5 0 0 1 3 3h2.6a1.5 1.5 0 0 1 1.1.5l.9 1H13a1.5 1.5 0 0 1 1.5 1.5v5A1.5 1.5 0 0 1 13 12.5H3a1.5 1.5 0 0 1-1.5-1.5v-6.5z" />
-        </svg>
-      }
+      topBorder={topBorder}
+      icon={<FolderClosedIcon className="w-3.5 h-3.5" />}
     >
       {rootLoading && rootEntries.length === 0 ? (
         <div className="px-2 py-1 text-xs text-content-disabled">{t(lang, 'loading')}</div>

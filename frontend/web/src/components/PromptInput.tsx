@@ -401,7 +401,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
           value={value}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
-          placeholder={connected ? t(lang, 'input_placeholder') : t(lang, 'disconnected')}
+          placeholder={connected ? (activeCwd ? t(lang, 'input_placeholder') : t(lang, 'input_placeholder_no_cwd')) : t(lang, 'disconnected')}
           rows={1}
           disabled={!connected}
           // 欢迎界面挂载时自动聚焦：删除会话/新建会话后输入框重新挂载，

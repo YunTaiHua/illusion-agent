@@ -39,6 +39,7 @@ const ZH: Record<string, string> = {
   session_busy: '会话忙，请稍候',
   press_enter: '按 Enter 发送，Shift+Enter 换行',
   input_placeholder: '幻想与实用，于此交融…',
+  input_placeholder_no_cwd: '请先选择目录，再开始对话',
   send: '发送',
   new_session: '新建会话',
   load_more: '加载更多',
@@ -375,12 +376,17 @@ const ZH: Record<string, string> = {
   rules_title: '规则',
   git_title: 'Git 文件变更',
   agents_title: '智能体与任务',
+  session_files_title: '会话文件',
   // ---- 区块空占位 ----
   no_skills: '暂无技能',
   no_mcp: '暂无 MCP 服务器',
   no_plugins: '暂无插件',
   no_rules: '暂无规则',
   no_files: '暂无文件',
+  no_session_files: '本会话暂无修改文件',
+  // 会话文件预览错误码（前端本地化）
+  session_file_session_not_found: '会话不存在',
+  session_file_not_in_session: '文件不在本会话修改记录中',
   // ---- 智能体与任务 ----
   agent_type_agent: '智能体',
   agent_type_task: '任务',
@@ -519,6 +525,7 @@ const EN: Record<string, string> = {
   session_busy: 'Session busy, please wait',
   press_enter: 'Press Enter to send, Shift+Enter for new line',
   input_placeholder: 'Where fantasy meets functionality...',
+  input_placeholder_no_cwd: 'Please select a directory first',
   send: 'Send',
   new_session: 'New Session',
   load_more: 'Load more',
@@ -855,12 +862,17 @@ const EN: Record<string, string> = {
   rules_title: 'Rules',
   git_title: 'Git Changes',
   agents_title: 'Agents & Tasks',
+  session_files_title: 'Session Files',
   // ---- section empty placeholders ----
   no_skills: 'No skills',
   no_mcp: 'No MCP servers',
   no_plugins: 'No plugins',
   no_rules: 'No rules',
   no_files: 'No files',
+  no_session_files: 'No modified files this session',
+  // Session-file preview error codes (localized on frontend)
+  session_file_session_not_found: 'Session not found',
+  session_file_not_in_session: 'Not in this session\'s modified files',
   // ---- agents & tasks ----
   agent_type_agent: 'agent',
   agent_type_task: 'task',

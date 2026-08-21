@@ -278,6 +278,22 @@ export interface FileTreeNode {
 }
 
 /**
+ * 会话内修改文件条目接口
+ *
+ * web_session_files 推送的单个条目（会话文件区块数据源）。
+ * 该列表独立于 Git 与工作区边界：可包含未纳入 Git 追踪、项目目录之外、
+ * 无 Git 环境的文件（均可经 web_read_session_file 直接预览）。
+ */
+export interface SessionFileItem {
+  /** 文件绝对路径（读取与安全校验的唯一键） */
+  path: string;
+  /** 展示路径：工作区内为相对路径，工作区外为绝对路径（/ 分隔） */
+  display: string;
+  /** 修改该文件的工具名（如 edit_file / write_file） */
+  tool: string;
+}
+
+/**
  * Git 变更文件接口
  *
  * web_git_status 推送的单个变更文件。
@@ -370,6 +386,8 @@ export type FrontendRequest =
   | { type: 'web_read_file'; path: string; session_id?: string; cwd?: string }
   | { type: 'web_file_diff'; path: string; session_id?: string; cwd?: string }
   | { type: 'web_request_agent_tasks'; session_id?: string }
+  | { type: 'web_request_session_files'; session_id?: string }
+  | { type: 'web_read_session_file'; path: string; session_id?: string }
   | { type: 'web_query'; command: string; args?: string; request_id: string; session_id?: string }
   | { type: 'web_request_workspaces' }
   | { type: 'web_add_workspace'; path: string }
@@ -472,6 +490,8 @@ export interface BackendEvent {
   web_file_content?: FileContentPayload;
   /** web_agent_tasks 推送的智能体与后台任务列表（可选） */
   web_agent_tasks?: AgentTaskItem[];
+  /** web_session_files 推送的会话内修改文件列表（可选，会话文件区块数据源） */
+  web_session_files?: SessionFileItem[];
   /** web_models 推送的模型选项（可选） */
   web_models?: SelectOption[];
   /** web_setting_changed 的键名（可选） */

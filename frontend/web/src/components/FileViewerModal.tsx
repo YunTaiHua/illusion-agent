@@ -17,6 +17,14 @@ import hljs from 'highlight.js/lib/common';
 import { t, type UiLanguage } from '../i18n';
 import type { FileContentPayload } from '../types/protocol';
 
+/** 本地化会话文件预览错误码：后端下发错误码（如 session_not_found），
+ *  前端经 i18n 文案展示；未知/系统错误原文（raw）原样返回。 */
+function locPreviewError(lang: UiLanguage, raw: string): string {
+  const key = `session_file_${raw}`;
+  const localized = t(lang, key);
+  return localized === key ? raw : localized;
+}
+
 /** 扩展名 → hljs 语言名（common 子集内） */
 const EXT_LANG: Record<string, string> = {
   ts: 'typescript', tsx: 'typescript',
@@ -136,7 +144,7 @@ export function FilePreviewBody({ lang, payload, loading }: {
     return <div className="h-full flex items-center justify-center text-sm text-content-secondary">{t(lang, 'loading')}</div>;
   }
   if (payload.error) {
-    return <div className="h-full flex items-center justify-center text-sm text-danger px-6 text-center">{payload.error}</div>;
+    return <div className="h-full flex items-center justify-center text-sm text-danger px-6 text-center">{locPreviewError(lang, payload.error)}</div>;
   }
   if (payload.binary) {
     return <div className="h-full flex items-center justify-center text-sm text-content-secondary">{t(lang, 'binary_file')}</div>;
@@ -328,7 +336,7 @@ export function PreviewMetaLine({ lang, payload, loading }: {
 }) {
   const content = payload.content ?? '';
   if (payload.binary && payload.kind !== 'diff') return <div className="text-xs text-content-secondary mt-0.5">{t(lang, 'binary_file')}</div>;
-  if (payload.error) return <div className="text-xs text-danger mt-0.5 truncate">{payload.error}</div>;
+  if (payload.error) return <div className="text-xs text-danger mt-0.5 truncate">{locPreviewError(lang, payload.error)}</div>;
   if (payload.kind === 'diff') {
     const lines = content ? content.split('\n').length : 0;
     return (

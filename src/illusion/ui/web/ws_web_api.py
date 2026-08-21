@@ -197,6 +197,8 @@ class WebApiDispatcher:
             "web_read_file": self.handle_web_read_file,
             "web_file_diff": self.handle_web_file_diff,
             "web_request_agent_tasks": self.handle_web_request_agent_tasks,
+            "web_request_session_files": self.handle_web_request_session_files,
+            "web_read_session_file": self.handle_web_read_session_file,
             "web_query": self.handle_web_query,
             "web_request_workspaces": self.handle_web_request_workspaces,
             "web_add_workspace": self.handle_web_add_workspace,
@@ -896,6 +898,76 @@ class WebApiDispatcher:
         await self._emit(BackendEvent(
             type="web_agent_tasks", session_id=session_id, web_agent_tasks=items))
 
+    async def handle_web_request_session_files(self, request: FrontendRequest) -> None:
+        """收集会话内变更工具修改的文件并推送 web_session_files 事件。
+
+        会话文件区块的数据源：从会话转录的 assistant 消息中提取
+        edit_file/write_file 等直接修改文件的工具调用，收集其目标路径。
+        该列表独立于 Git 与工作区边界：可包含未纳入 Git 追踪、项目目录
+        之外、以及无 Git 环境下的文件（均可直接预览）。随会话隔离
+        （切换会话 / 跨目录时前端清空并重新拉取）。
+
+        Args:
+            request: 前端请求（session_id 可选：目标会话；缺省为活跃会话）
+        """
+        host = self._host
+        if host._bundle is None:
+            return
+        session_id = request.session_id or host._active_session_id
+        session = host._sessions.get(session_id) if session_id else None
+        if session is None:
+            await self._emit(BackendEvent(
+                type="web_session_files", session_id=session_id,
+                cwd=host._bundle.cwd, web_session_files=[]))
+            return
+        files = await asyncio.to_thread(
+            _collect_session_files, session.engine.messages, session.bundle.cwd)
+        await self._emit(BackendEvent(
+            type="web_session_files", session_id=session_id,
+            cwd=session.bundle.cwd, web_session_files=files))
+
+    async def handle_web_read_session_file(self, request: FrontendRequest) -> None:
+        """读取会话内修改过的文件内容并推送 web_file_content 事件（预览）。
+
+        会话文件可能位于工作区之外或不被 Git 追踪，不能复用限定在工作区内
+        的 handle_web_read_file。安全模型：仅允许读取"当前会话确实修改过的
+        文件"（由 _collect_session_files 界定），杜绝任意绝对路径读取与
+        路径穿越。预览限制（二进制/大小/行数）与普通文件读取一致。
+
+        Args:
+            request: 前端请求（path 必填：会话内修改文件的路径；
+                session_id 可选：目标会话）
+        """
+        host = self._host
+        if host._bundle is None:
+            return
+        session_id = request.session_id or host._active_session_id
+        session = host._sessions.get(session_id) if session_id else None
+        if session is None:
+            await self._emit(BackendEvent(
+                type="web_file_content", session_id=session_id,
+                cwd=host._bundle.cwd,
+                # 错误码交由前端 i18n 本地化展示
+                web_file_content={"path": request.path or "", "error": "session_not_found"}))
+            return
+        tracked = {
+            f["path"]
+            for f in await asyncio.to_thread(
+                _collect_session_files, session.engine.messages, session.bundle.cwd)
+        }
+        raw = (request.path or "").strip()
+        if not raw or raw not in tracked:
+            # 错误码交由前端 i18n 本地化展示
+            await self._emit(BackendEvent(
+                type="web_file_content", session_id=session_id,
+                cwd=session.bundle.cwd,
+                web_file_content={"path": raw, "error": "not_in_session"}))
+            return
+        payload = await asyncio.to_thread(_read_session_file_payload, raw)
+        await self._emit(BackendEvent(
+            type="web_file_content", session_id=session_id,
+            cwd=session.bundle.cwd, web_file_content=payload))
+
     # === 工作区（目录空间）管理 ===
 
     async def handle_web_request_workspaces(self, request: FrontendRequest) -> None:
@@ -1583,6 +1655,85 @@ def _collect_agent_tasks(messages: list[Any]) -> list[dict[str, Any]]:
 
     items.reverse()  # 最近的在最前
     return items
+
+
+# 会话内直接修改文件的工具（输入含 file_path/path 字段，路径可界定）
+_SESSION_FILE_TOOLS = ("edit_file", "write_file")
+
+
+def _collect_session_files(
+    messages: list[Any], cwd: str
+) -> list[dict[str, Any]]:
+    """从会话转录收集变更工具修改过的文件列表（会话文件区块数据源）。
+
+    遍历 assistant 消息中的 edit_file/write_file 工具调用，提取目标路径
+    并解析为绝对路径（相对 cwd 或绝对均可），按首次出现顺序去重。
+    只会收录"调用成功"的文件：对应该次调用的 ToolResultBlock 若标记
+    失败（is_error=True）则跳过，避免把报错路径误当已修改文件。
+    该列表独立于 Git 与工作区边界：可包含工作区之外、不被 Git 追踪、
+    无 Git 环境下的文件（均可直接预览）。
+
+    Args:
+        messages: 会话引擎消息列表（engine.messages）
+        cwd: 工作区目录（相对路径解析基准）
+
+    Returns:
+        list[dict[str, Any]]: [{path, display, tool}]
+        path 为绝对路径（读取与安全校验键）；display 为展示路径
+        （工作区内相对路径，工作区外用绝对路径，统一 / 分隔）
+    """
+    from illusion.config.paths import resolve_relative_path
+    from illusion.engine.messages import ToolResultBlock, ToolUseBlock
+
+    # 失败的工具调用 id 集：user 消息里对应调用返回 is_error=True
+    failed_use_ids: set[str] = set()
+    for msg in messages:
+        if getattr(msg, "role", None) != "user":
+            continue
+        for block in getattr(msg, "content", []):
+            if isinstance(block, ToolResultBlock) and block.is_error and block.tool_use_id:
+                failed_use_ids.add(block.tool_use_id)
+
+    seen: set[str] = set()
+    root = Path(cwd).resolve()
+    result: list[dict[str, Any]] = []
+    for msg in messages:
+        if getattr(msg, "role", None) != "assistant":
+            continue
+        for block in getattr(msg, "content", []):
+            if not isinstance(block, ToolUseBlock) or block.name not in _SESSION_FILE_TOOLS:
+                continue
+            if block.id in failed_use_ids:
+                continue
+            inputs = block.input if isinstance(block.input, dict) else {}
+            raw = inputs.get("file_path") or inputs.get("path")
+            if not raw or not isinstance(raw, str) or not raw.strip():
+                continue
+            try:
+                abs_path = str(resolve_relative_path(root, raw.strip()))
+            except (ValueError, OSError):
+                continue
+            if abs_path in seen:
+                continue
+            seen.add(abs_path)
+            try:
+                display = Path(abs_path).relative_to(root).as_posix()
+            except ValueError:
+                display = Path(abs_path).as_posix()
+            result.append({"path": abs_path, "display": display, "tool": block.name})
+    return result
+
+
+def _read_session_file_payload(path: str) -> dict[str, Any]:
+    """读取会话内修改文件生成预览载荷（复用 _read_file_payload 限制）。
+
+    Args:
+        path: 文件绝对路径（已经过会话修改记录校验）
+
+    Returns:
+        dict[str, Any]: 与 _read_file_payload 相同的预览载荷结构
+    """
+    return _read_file_payload(Path(path), path)
 
 
 def _cap_preview_text(text: str) -> tuple[str, bool]:

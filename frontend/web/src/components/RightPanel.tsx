@@ -21,6 +21,7 @@ import { useTheme, type Theme } from '../hooks/useTheme';
 import TodoPanel from './TodoPanel';
 import FileTreeSection from './FileTreeSection';
 import GitSection from './GitSection';
+import SessionFilesSection from './SessionFilesSection';
 import type {
   AgentTaskItem,
   FileTreeNode,
@@ -28,6 +29,7 @@ import type {
   McpServerSnapshot,
   PluginSnapshot,
   RuleSnapshot,
+  SessionFileItem,
   SkillSnapshot,
   TodoItemSnapshot,
 } from '../types/protocol';
@@ -60,6 +62,14 @@ interface RightPanelProps {
   gitStatus: GitStatusSnapshot | null;
   /** Git 状态加载中 */
   gitLoading: boolean;
+  /** 会话内修改文件列表（随会话隔离） */
+  sessionFiles: SessionFileItem[];
+  /** 会话文件拉取中 */
+  sessionFilesLoading: boolean;
+  /** 拉取会话内修改文件 */
+  onRequestSessionFiles: () => void;
+  /** 打开会话内修改文件预览 */
+  onOpenSessionFile: (path: string) => void;
   /** 拉取文件树单层条目 */
   onRequestFileTree: (path: string, force?: boolean) => void;
   /** 拉取 Git 状态 */
@@ -94,6 +104,7 @@ export default function RightPanel({
   lang, status, collapsed, onToggle, todoItems,
   agentTasks, onRequestAgentTasks, onViewAgentTask,
   fileTree, fileTreeLoadingPaths, gitStatus, gitLoading,
+  sessionFiles, sessionFilesLoading, onRequestSessionFiles, onOpenSessionFile,
   onRequestFileTree, onRequestGitStatus, onOpenFile, onOpenFileDiff,
   skills, plugins, rules, mcpServers, width = 260, onRefreshResources,
 }: RightPanelProps) {
@@ -206,6 +217,7 @@ export default function RightPanel({
         loadingPaths={fileTreeLoadingPaths}
         onRequestDir={onRequestFileTree}
         onOpenFile={onOpenFile}
+        topBorder={false}
       />
 
       {/* Git（分支 + 变更文件；非 Git 仓库自动隐藏） */}
@@ -215,6 +227,17 @@ export default function RightPanel({
         loading={gitLoading}
         onRefresh={onRequestGitStatus}
         onOpenDiff={onOpenFileDiff}
+        topBorder={false}
+      />
+
+      {/* 会话文件（本会话内变更工具修改的文件；独立于 Git 与工作区边界，可直接预览） */}
+      <SessionFilesSection
+        lang={lang}
+        files={sessionFiles}
+        loading={sessionFilesLoading}
+        onRefresh={onRequestSessionFiles}
+        onOpenFile={onOpenSessionFile}
+        topBorder={false}
       />
 
       {/* 技能 */}
@@ -225,6 +248,7 @@ export default function RightPanel({
         onExpand={onRefreshResources}
         onRefresh={onRefreshResources}
         refreshLabel={t(lang, 'refresh')}
+        topBorder={false}
         icon={
           <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
             <path d="M8 1.5l1.8 4.2 4.2 1.8-4.2 1.8L8 13.5 6.2 9.3 2 7.5l4.2-1.8L8 1.5z" />
@@ -245,6 +269,7 @@ export default function RightPanel({
         onExpand={onRefreshResources}
         onRefresh={onRefreshResources}
         refreshLabel={t(lang, 'refresh')}
+        topBorder={false}
         icon={
           <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M9.94133 6.50173C11.3218 7.99603 11.3218 10.3011 9.94128 11.7954C9.88691 11.8542 9.82125 11.9196 9.72099 12.0198L7.75707 13.9838C7.65709 14.0838 7.592 14.1491 7.53334 14.2034C6.03906 15.5843 3.7327 15.5854 2.23827 14.2048C2.17933 14.1503 2.11374 14.0844 2.01315 13.9838C1.91318 13.8839 1.84922 13.8188 1.79495 13.7601C0.413857 12.2657 0.413909 9.95948 1.795 8.46503C1.84923 8.4064 1.91335 8.34115 2.01321 8.24129L3.79275 6.46313C3.71814 7.08101 3.75236 7.71445 3.90115 8.33518L3.00344 9.23151C2.89398 9.34097 2.8535 9.38307 2.82251 9.41658C1.93771 10.3744 1.93704 11.8514 2.82179 12.8092C2.85279 12.8427 2.89383 12.884 3.0034 12.9936C3.11272 13.1029 3.15429 13.1442 3.18777 13.1752C4.14561 14.0603 5.62381 14.0608 6.58178 13.1758C6.61532 13.1448 6.65722 13.1032 6.76685 12.9935L8.73077 11.0296C8.83999 10.9204 8.88142 10.8787 8.91238 10.8452C9.79744 9.88728 9.7969 8.40911 8.91173 7.45124C8.88074 7.41775 8.83944 7.3762 8.73011 7.26687C8.62082 7.15757 8.58061 7.11623 8.54712 7.08526C8.37347 6.92477 8.18243 6.79361 7.98088 6.69165L9.00289 5.66964C9.17506 5.78373 9.34035 5.91265 9.49663 6.05703C9.55538 6.11135 9.62026 6.17652 9.72036 6.27662C9.82094 6.3772 9.88686 6.4428 9.94133 6.50173Z" fill="currentColor" />
@@ -266,6 +291,7 @@ export default function RightPanel({
         onExpand={onRefreshResources}
         onRefresh={onRefreshResources}
         refreshLabel={t(lang, 'refresh')}
+        topBorder={false}
         icon={
           <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
             {/* 2×2 应用网格：左上方形、右上圆形、左下三角形、右下加号 */}
@@ -290,6 +316,7 @@ export default function RightPanel({
         onExpand={onRefreshResources}
         onRefresh={onRefreshResources}
         refreshLabel={t(lang, 'refresh')}
+        topBorder={false}
         icon={
           <svg className="w-3.5 h-3.5" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M13.3277 9.69629V10.976H7.28086V9.69629H13.3277Z" fill="currentColor" />
@@ -381,11 +408,11 @@ export default function RightPanel({
 /**
  * 可折叠区块组件（右栏各列表区块共用）
  *
- * 头部三段式：图标/指示器 + 标题与计数 + 刷新按钮。
- * 悬浮时整行高亮（含操作区）；刷新按钮默认隐藏，悬浮头部时浮现。
+ * 头部：图标/指示器 + 标题 + 右侧计数徽标槽位。
+ * 悬浮头部时：图标淡出为展开箭头指示器，右侧计数徽标淡出并原位替换为刷新按钮。
  */
 export function CollapsibleSection({
-  title, count, icon, children, defaultCollapsed = true, onExpand, onRefresh, refreshLabel,
+  title, count, icon, children, defaultCollapsed = true, onExpand, onRefresh, refreshLabel, topBorder = true,
 }: {
   title: string;
   count: number;
@@ -399,6 +426,8 @@ export function CollapsibleSection({
   onRefresh?: () => void;
   /** 刷新按钮的悬浮提示文案（调用方传入本地化文本） */
   refreshLabel?: string;
+  /** 是否显示区块顶部分隔线（默认显示；右栏各区块间隐藏，仅首个/末个边界保留） */
+  topBorder?: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
 
@@ -409,7 +438,7 @@ export function CollapsibleSection({
   };
 
   return (
-    <div className="border-t border-border-light">
+    <div className={topBorder ? 'border-t border-border-light' : undefined}>
       <div className="group/head w-full px-5 py-2 flex items-center gap-2 glass-option-hover transition-colors rounded-md">
         <button
           onClick={handleToggle}
@@ -430,21 +459,30 @@ export function CollapsibleSection({
             </svg>
           </span>
           <span className="text-xs font-semibold text-content-primary tracking-wide">{title}</span>
-          <span className="text-[10px] text-content-secondary bg-[var(--badge-bg)] px-1.5 py-0.5 rounded-full tabular-nums">{count}</span>
         </button>
-        {onRefresh && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onRefresh(); }}
-            title={refreshLabel}
-            aria-label={refreshLabel}
-            className="shrink-0 w-6 h-6 flex items-center justify-center rounded-md text-content-secondary opacity-0 group-hover/head:opacity-100 focus-visible:opacity-100 transition-[opacity,colors] duration-150 hover:text-content-primary hover:bg-[var(--glass-option-active-bg)] cursor-pointer"
-          >
-            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" />
-              <path d="M13.5 1.5v3h-3" />
-            </svg>
-          </button>
-        )}
+        {/* 右侧槽位：默认显示计数徽标；悬浮头部时计数淡出、刷新按钮淡入（同槽交叉替换，不位移） */}
+        <span className="relative min-w-6 h-6 shrink-0 flex items-center justify-center">
+          {onRefresh ? (
+            <>
+              <span className="absolute inset-0 flex items-center justify-center transition-opacity duration-100 group-hover/head:opacity-0">
+                <span className="text-[10px] text-content-secondary bg-[var(--badge-bg)] px-1.5 py-0.5 rounded-full tabular-nums">{count}</span>
+              </span>
+              <button
+                onClick={(e) => { e.stopPropagation(); onRefresh(); }}
+                title={refreshLabel}
+                aria-label={refreshLabel}
+                className="absolute inset-0 flex items-center justify-center w-6 h-6 rounded-md text-content-secondary opacity-0 group-hover/head:opacity-100 focus-visible:opacity-100 transition-[opacity,colors] duration-100 group-hover/head:duration-150 hover:text-content-primary hover:bg-[var(--glass-option-active-bg)] cursor-pointer"
+              >
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" />
+                  <path d="M13.5 1.5v3h-3" />
+                </svg>
+              </button>
+            </>
+          ) : (
+            <span className="text-[10px] text-content-secondary bg-[var(--badge-bg)] px-1.5 py-0.5 rounded-full tabular-nums">{count}</span>
+          )}
+        </span>
       </div>
       {/* 展开/折叠微动画（简洁 fade：纯透明度 150ms） */}
       {!collapsed && (

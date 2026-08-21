@@ -91,6 +91,8 @@ class FrontendRequest(BaseModel):
         "web_read_file",
         "web_file_diff",
         "web_request_agent_tasks",
+        "web_request_session_files",
+        "web_read_session_file",
         "web_query",
         "web_request_workspaces",
         "web_add_workspace",
@@ -273,6 +275,7 @@ class BackendEvent(BaseModel):
         "web_git_status",
         "web_file_content",
         "web_agent_tasks",
+        "web_session_files",
         "web_restore_started",
         "web_restore_completed",
         "web_query_result",
@@ -347,6 +350,7 @@ class BackendEvent(BaseModel):
     web_git_status: dict[str, Any] | None = None        # web_git_status 推送的 Git 快照（branch/upstream/files）
     web_file_content: dict[str, Any] | None = None      # web_file_content 推送的文件内容（预览）
     web_agent_tasks: list[dict[str, Any]] | None = None # web_agent_tasks 推送的智能体与后台任务列表
+    web_session_files: list[dict[str, Any]] | None = None  # web_session_files 推送的会话内修改文件列表（会话文件区块）
     # === agent 向导响应专属字段 ===
     request_id: str | None = None
     error: str | None = None
