@@ -42,6 +42,7 @@ Runtime 运行时模块
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
@@ -49,6 +50,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+
+log = logging.getLogger(__name__)
 
 from illusion.api.auth_status import auth_status
 from illusion.api.client import AnthropicApiClient, SupportsStreamingMessages
@@ -459,6 +462,32 @@ async def build_runtime(
         logging.getLogger("illusion").setLevel(logging.DEBUG)
     elif verbose:
         logging.getLogger("illusion").setLevel(logging.INFO)
+    # 计划文件清理：与日志/任务清理对称，统一在运行时构建入口显式触发。
+    # 三端（terminal / print / web）均经 build_runtime 启动，此处调用保证
+    # 每端都能清理超 TTL 的旧计划文件；用 once 标志避免多工作区/多会话
+    # 反复清理。放后台线程执行，不阻塞会话初始化。
+    # 惰性触发（挂在 get_plans_dir 上）在 Web/桌面等不 import plan_file 的
+    # 启动路径上永远不执行，故改为显式统一入口。
+    try:
+        from illusion.config.plan_file import get_plans_dir
+        from illusion.utils.log_cleanup import run_plans_cleanup_once
+
+        loop = asyncio.get_running_loop()
+
+        def _run_plan_cleanup() -> None:
+            # 目录 mkdir 与清理都在后台线程执行，避免事件循环线程同步建目录
+            run_plans_cleanup_once(get_plans_dir())
+
+        # 后台线程清理，避免阻塞会话初始化；目录不存在时清理函数静默返回。
+        # 消费 Future 的异常，避免后台线程抛异常时触发
+        # "exception was never retrieved" 告警。
+        future = loop.run_in_executor(None, _run_plan_cleanup)
+        future.add_done_callback(
+            lambda f: f.exception() if not f.cancelled() else None
+        )
+    except Exception:
+        # 计划清理失败不影响会话启动（与日志清理容忍单文件失败一致）
+        log.exception("计划文件清理调度失败")
     # 构建设置覆盖字典
     settings_overrides: dict[str, Any] = {
         "model": model,

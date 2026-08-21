@@ -33,6 +33,18 @@ let appUrl = '';
 // 是否处于"真正退出"流程（区分关闭到托盘与退出）
 let isQuitting = false;
 
+/**
+ * 加载页莫比乌斯环路径（复刻 web 端 ConnectedOverlay 的 MOBIUS_PATH，
+ * 80x80 viewBox，中心 40,40）。仅用于本地加载页的内联 SVG。
+ */
+const MOBIUS_PATH = [
+  'M 40 20',
+  'C 55 20, 65 32, 55 40',
+  'C 48 46, 44 36, 40 36',
+  'C 36 36, 32 46, 25 40',
+  'C 15 32, 25 20, 40 20',
+].join(' ');
+
 /** 窗口图标路径解析：打包资源 → 工程内 resources → 源 assets（开发时） */
 function resolveWindowIcon(): string | undefined {
   const candidates = [
@@ -50,7 +62,9 @@ function createWindow(): BrowserWindow {
     height: 800,
     minWidth: 800,
     minHeight: 600,
-    show: false, // 等后端就绪后再 show
+    show: false,               // 由 app.whenReady 在加载本地加载页后 show
+    // 遮罩层为浅色（白），窗口底色保持白色与其一致，避免遮罩阶段露出色差
+    backgroundColor: '#ffffff',
     title: 'Illusion Agent',
     icon: resolveWindowIcon(),
     autoHideMenuBar: true, // Windows/Linux 菜单栏自动隐藏（按 Alt 可唤出）
@@ -142,6 +156,43 @@ app.whenReady().then(async () => {
 
   const lang: UiLanguage = getUiLanguage();
 
+  // --- 先创建窗口并显示加载页 ---
+  // 后台启动可能耗时（运行时检测 + Python 初始化），若等后端就绪再建窗，
+  // 用户会长时间看到"空白/无响应"，造成"启动很慢"的体感。故先把窗口
+  // 亮出来并展示本地加载页，后端就绪后再切换到应用 URL。
+  // 加载页视觉复刻 web 端 ConnectedOverlay 的莫比乌斯环遮罩（青绿→淡紫→
+  // 珊瑚渐变光带 + 呼吸缩放），保证与启动后的应用 UI 谐和统一。
+  mainWindow = createWindow();
+  mainWindow.loadURL(
+    'data:text/html;charset=utf-8,' +
+      encodeURIComponent(
+        `<!DOCTYPE html><html><head><style>
+          html,body{margin:0;height:100%}
+          body{display:flex;align-items:center;justify-content:center;background:#ffffff}
+          #mobi{animation:pulseSoft 2.5s ease-in-out infinite;filter:drop-shadow(0 0 6px rgba(42,157,153,.35))}
+          #ring{fill:none;stroke-width:3.5;stroke-linecap:round;stroke-dasharray:100 28;animation:mobiFlow 1.8s linear infinite}
+          @keyframes pulseSoft{0%,100%{transform:scale(1);opacity:.9}50%{transform:scale(1.08);opacity:1}}
+          @keyframes mobiFlow{from{stroke-dashoffset:0}to{stroke-dashoffset:-128}}
+        </style></head><body>
+          <svg id="mobi" width="112" height="112" viewBox="0 0 80 80">
+            <defs>
+              <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stop-color="#2a9d99"><animate attributeName="stop-color" values="#2a9d99;#7c6fb0;#e8856c;#2a9d99" dur="4s" repeatCount="indefinite"/></stop>
+                <stop offset="50%" stop-color="#7c6fb0"><animate attributeName="stop-color" values="#7c6fb0;#e8856c;#2a9d99;#7c6fb0" dur="4s" repeatCount="indefinite"/></stop>
+                <stop offset="100%" stop-color="#e8856c"><animate attributeName="stop-color" values="#e8856c;#2a9d99;#7c6fb0;#e8856c" dur="4s" repeatCount="indefinite"/></stop>
+              </linearGradient>
+            </defs>
+            <path id="ring" stroke="url(#g)" d="${MOBIUS_PATH}"/>
+          </svg>
+        </body></html>`,
+      ),
+  );
+  mainWindow.show();
+  // 显示后再最大化：在 show:false 时调用 maximize 可能被随后的 show() 重置，
+  // 导致第二次启动不全屏（窗口状态被系统恢复为还原态）。先 show 再 maximize
+  // 保证窗口每次都以全屏呈现。
+  mainWindow.maximize();
+
   // --- 检测运行时 ---
   const runtime = resolveRuntime();
   if (!runtime.python) {
@@ -195,8 +246,7 @@ app.whenReady().then(async () => {
     }
   });
 
-  // --- 创建窗口并加载 ---
-  mainWindow = createWindow();
+  // --- 后端就绪后加载应用并显示（窗口已在启动时创建并展示加载页） ---
   await mainWindow.loadURL(url);
   mainWindow.show();
 

@@ -19,6 +19,13 @@
         } catch (e) { /* 忽略 */ }
       })();
     </script>
+    <style>
+      /* React 挂载前仅占位：不给 #root 设背景色，避免覆盖应用 body 背景
+         （--body-bg 灰蓝）。首帧背景由 body 的 CSS 变量统一决定。 */
+      #root {
+        min-height: 100vh;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

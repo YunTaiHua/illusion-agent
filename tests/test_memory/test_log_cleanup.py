@@ -6,7 +6,7 @@ import os
 import time
 from pathlib import Path
 
-from illusion.utils.log_cleanup import cleanup_old_files
+from illusion.utils.log_cleanup import cleanup_old_files, cleanup_old_plans, run_plans_cleanup_once
 
 
 def _make_old_file(path: Path, *, age_days: float) -> None:
@@ -116,3 +116,46 @@ def test_cleanup_glob_backup_pattern(tmp_path: Path):
         f.write_text("x", encoding="utf-8")
         _make_old_file(f, age_days=10)
     assert cleanup_old_files(tmp_path, "memory_*.log*", max_age_days=7) == 3
+
+
+def test_cleanup_old_plans_removes_old_only(tmp_path: Path):
+    """cleanup_old_plans 只删除超 TTL 的 .md 计划文件。"""
+    old_plan = tmp_path / "swift-phoenix.md"
+    _make_old_file(old_plan, age_days=10)
+    recent_plan = tmp_path / "cosmic-lighthouse.md"
+    recent_plan.write_text("x", encoding="utf-8")
+    non_md = tmp_path / "notes.txt"
+    non_md.write_text("x", encoding="utf-8")
+
+    removed = cleanup_old_plans(tmp_path)
+    assert removed == 1
+    assert not old_plan.exists()
+    assert recent_plan.exists()
+    assert non_md.exists()
+
+
+def test_cleanup_old_plans_missing_dir(tmp_path: Path):
+    """计划目录不存在时静默返回 0。"""
+    assert cleanup_old_plans(tmp_path / "no-plans") == 0
+
+
+def test_run_plans_cleanup_once_runs_only_once(tmp_path: Path):
+    """run_plans_cleanup_once 每进程只清理一次。"""
+    import illusion.utils.log_cleanup as _lc
+
+    old_plan = tmp_path / "old.md"
+    _make_old_file(old_plan, age_days=10)
+
+    try:
+        # 首次调用执行清理
+        assert run_plans_cleanup_once(tmp_path) == 1
+        assert not old_plan.exists()
+
+        # 再次放入旧文件，二次调用应被 once 标志拦截，不再清理
+        second = tmp_path / "second.md"
+        _make_old_file(second, age_days=10)
+        assert run_plans_cleanup_once(tmp_path) == 0
+        assert second.exists()
+    finally:
+        # 重置 once 标志，避免污染同进程后续测试
+        _lc._plans_cleanup_done = False

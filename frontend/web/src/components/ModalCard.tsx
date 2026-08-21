@@ -203,6 +203,8 @@ export function QuestionCard({ modal, lang, onRespond }: QuestionCardProps) {
   /** "其他"选项的输入内容（按题索引持久化） */
   const [allOtherText, setAllOtherText] = useState<Record<number, string>>({});
   const otherText = allOtherText[currentIndex] ?? '';
+  /** 已跳过的题目标头集合（跳过的问题不进入提交结果，提交按钮按其计数） */
+  const [skippedHeaders, setSkippedHeaders] = useState<Set<string>>(new Set());
   /** 单问题多选：当前是否有可提交的内容（勾选了普通选项或输入了"其他"文本） */
   const canSubmitMulti = filteredOptions.some((_, i) => selectedIndices.has(i)) || otherText.trim().length > 0;
   const setOtherText = (updater: ((prev: string) => string) | string) => {
@@ -251,6 +253,17 @@ export function QuestionCard({ modal, lang, onRespond }: QuestionCardProps) {
   // 多选：根据当前选中集合即时计算答案。
   // - 多问题多选：选中即时写入 multiAnswers（无确认按钮，最后统一提交）
   // - 单问题多选：选中只更新本地勾选状态，待失焦时统一提交（避免选一个就被提交）
+  /** 记录某题答案并清除该题的跳过标记（回头作答已跳过的问题时恢复提交计数） */
+  const recordAnswer = useCallback((header: string, value: string) => {
+    setMultiAnswers((prev) => ({ ...prev, [header]: value }));
+    setSkippedHeaders((prev) => {
+      if (!prev.has(header)) return prev;
+      const next = new Set(prev);
+      next.delete(header);
+      return next;
+    });
+  }, []);
+
   const commitMultiSelect = useCallback(
     (selected: Set<number>) => {
       const labels = filteredOptions
@@ -273,11 +286,11 @@ export function QuestionCard({ modal, lang, onRespond }: QuestionCardProps) {
       }
       if (isMultiQuestion) {
         // 多问题：选中即时记入，无确认按钮
-        setMultiAnswers((prev) => ({ ...prev, [currentHeader]: JSON.stringify(labels) }));
+        recordAnswer(currentHeader, JSON.stringify(labels));
       }
       // 单问题多选：不在此提交，交由卡片失焦时统一提交
     },
-    [filteredOptions, otherIdx, otherText, currentHeader, isMultiQuestion],
+    [filteredOptions, otherIdx, otherText, currentHeader, isMultiQuestion, recordAnswer],
   );
 
   // 单问题多选失焦提交：焦点离开问题卡片时，把当前全部选中项提交给后端
@@ -353,7 +366,7 @@ export function QuestionCard({ modal, lang, onRespond }: QuestionCardProps) {
       }
       // 单选
       if (isMultiQuestion) {
-        setMultiAnswers((prev) => ({ ...prev, [currentHeader]: `${idx + 1}. ${label}` }));
+        recordAnswer(currentHeader, `${idx + 1}. ${label}`);
       } else {
         // 单问题单选：更新选中状态并收起"其他"输入框，由提交按钮或失焦提交
         setSingleSelectedIdx(idx);
@@ -361,7 +374,7 @@ export function QuestionCard({ modal, lang, onRespond }: QuestionCardProps) {
         setOtherText('');
       }
     },
-    [isMultiSelect, otherIdx, isMultiQuestion, currentHeader, commitMultiSelect],
+    [isMultiSelect, otherIdx, isMultiQuestion, currentHeader, commitMultiSelect, recordAnswer],
   );
 
   // 多选"其他"输入回车时提交：
@@ -384,12 +397,44 @@ export function QuestionCard({ modal, lang, onRespond }: QuestionCardProps) {
     if (isMultiQuestion) {
       const text = otherText.trim();
       if (!text) return;
-      setMultiAnswers((prev) => ({ ...prev, [currentHeader]: text }));
+      recordAnswer(currentHeader, text);
     } else {
       // 单问题单选：统一由 submitSingleSelect 提交（普通选项或"其他"文本）
       submitSingleSelect();
     }
-  }, [isMultiSelect, isMultiQuestion, otherText, currentHeader, handleMultiConfirm, submitSingleSelect]);
+  }, [isMultiSelect, isMultiQuestion, otherText, currentHeader, handleMultiConfirm, submitSingleSelect, recordAnswer]);
+
+  /**
+   * 跳过当前问题。
+   * - 单问题：直接提交空答案（后端返回 "(no response)"）
+   * - 多问题：标记当前题为"已跳过"并前进；全部作答/跳过后方可提交
+   *   （跳过的问题不写入答案，提交按钮按其计数显示）
+   */
+  const handleSkip = useCallback(() => {
+    if (isMultiQuestion) {
+      // 若当前题已作答，先移除其答案再标记跳过，避免"已作答 + 已跳过"
+      // 重复计数导致提交按钮消失（与 recordAnswer 的对称语义）。
+      setSkippedHeaders((prev) => {
+        const next = new Set(prev);
+        next.add(currentHeader);
+        return next;
+      });
+      setMultiAnswers((prev) => {
+        if (!(currentHeader in prev)) return prev;
+        const next = { ...prev };
+        delete next[currentHeader];
+        return next;
+      });
+      if (currentIndex < questions.length - 1) {
+        setCurrentIndex(currentIndex + 1);
+      }
+    } else {
+      if (!submittedRef.current) {
+        submittedRef.current = true;
+        onRespond(requestId, '');
+      }
+    }
+  }, [isMultiQuestion, skippedHeaders, currentHeader, currentIndex, questions.length, submittedRef, requestId, onRespond]);
 
   const questionText = currentQuestion?.question ?? String(modal.question ?? 'Question');
   const hintText = isMultiSelect
@@ -625,9 +670,12 @@ export function QuestionCard({ modal, lang, onRespond }: QuestionCardProps) {
                   if (!text) return;
                   if (isMultiQuestion) {
                     const header = currentQuestion?.header ?? `Q${currentIndex + 1}`;
-                    setMultiAnswers((prev) => ({ ...prev, [header]: text }));
+                    recordAnswer(header, text);
                     setOtherText('');
                   } else {
+                    // 与 submitSingleSelect 一致：单问题已提交（含跳过）后不再重复提交
+                    if (submittedRef.current) return;
+                    submittedRef.current = true;
                     onRespond(requestId, text);
                   }
                 }
@@ -642,9 +690,12 @@ export function QuestionCard({ modal, lang, onRespond }: QuestionCardProps) {
                 if (!text) return;
                 if (isMultiQuestion) {
                   const header = currentQuestion?.header ?? `Q${currentIndex + 1}`;
-                  setMultiAnswers((prev) => ({ ...prev, [header]: text }));
+                  recordAnswer(header, text);
                   setOtherText('');
                 } else {
+                  // 与 submitSingleSelect 一致：单问题已提交（含跳过）后不再重复提交
+                  if (submittedRef.current) return;
+                  submittedRef.current = true;
                   onRespond(requestId, text);
                 }
               }}
@@ -665,6 +716,7 @@ export function QuestionCard({ modal, lang, onRespond }: QuestionCardProps) {
                 setMultiAnswers({});
                 setAllSelectedIndices({});
                 setAllOtherText({});
+                setSkippedHeaders(new Set());
                 setCurrentIndex(0);
               }}
               className="px-3 py-1.5 text-xs font-medium text-content-secondary glass-option-hover rounded-md transition-colors cursor-pointer"
@@ -683,9 +735,21 @@ export function QuestionCard({ modal, lang, onRespond }: QuestionCardProps) {
               {lang === 'zh-CN' ? '下一题' : 'Next'}
             </button>
           )}
-          {isMultiQuestion && Object.keys(multiAnswers).length === questions.length && (
+          {/* 跳过按钮：跳过当前问题（多问题标记跳过并前进，单问题直接提交空答案） */}
+          <button
+            type="button"
+            onClick={handleSkip}
+            className="px-3 py-1.5 text-xs font-medium text-content-secondary glass-option-hover rounded-md transition-colors cursor-pointer"
+          >
+            {t(lang, 'question_skip')}
+          </button>
+          {isMultiQuestion && (Object.keys(multiAnswers).length + skippedHeaders.size) === questions.length && (
             <button
               onClick={() => {
+                // 防重复提交：模态框需等后端 modal_request(modal=None) 回包才卸载，
+                // 期间快速连点会发多条 question_response，触发后端 future 重复 resolve
+                if (submittedRef.current) return;
+                submittedRef.current = true;
                 const result: Record<string, string | string[]> = {};
                 for (const [k, v] of Object.entries(multiAnswers)) {
                   try {

@@ -260,6 +260,8 @@ export interface WebSocketSessionState {
   filePreviewLoading: boolean;
   modelOptions: Option[];
   ready: boolean;
+  /** 首帧引导中：ready 后首个会话内容（web_restore_completed）尚未呈现 */
+  bootstrapping: boolean;
   /** 首次登录标识（后端 ready 事件携带，无 env_N 且无 working_directory 时为 true） */
   firstLogin: boolean;
   showThinking: boolean;
@@ -440,6 +442,9 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   const [filePreviewLoading, setFilePreviewLoading] = useState(false);
   const [modelOptions, setModelOptions] = useState<Option[]>([]);
   const [ready, setReady] = useState(false);
+  /** 首帧引导中：ready 后首个会话内容（web_restore_completed）尚未呈现。
+      期间用全屏遮罩覆盖，避免"连接→欢迎→恢复→欢迎"的时序翻转闪烁。 */
+  const [bootstrapping, setBootstrapping] = useState(true);
   const [showThinking, setShowThinking] = useState(true);
   const [swarmTeammates, setSwarmTeammates] = useState<SwarmTeammateSnapshot[]>([]);
   const [swarmNotifications, setSwarmNotifications] = useState<SwarmNotificationSnapshot[]>([]);
@@ -1333,10 +1338,15 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
 
         // 会话恢复
         if (evt.type === 'web_restore_started') {
+          // 视图可能尚未由 web_sessions 建立，先 ensureView 再置 restoring，
+          // 避免 patchView 对缺失 sid 静默丢弃导致恢复加载态不生效
+          ensureView(sid);
           patchView(sid, { restoring: true });
           return;
         }
         if (evt.type === 'web_restore_completed') {
+          // 首个会话内容呈现完成：首帧引导结束，解除遮罩
+          setBootstrapping(false);
           pendingToolCallsRef.current[sid] = [];
           optimisticUserRef.current[sid] = null;
           const items = stripReplayItems((evt.items ?? []).filter((i) => !(i.role === 'user' && i.is_command)));
@@ -1725,6 +1735,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       requestAgentTasks, viewAgentSummary, requestSessionFiles, openSessionFile,
       ready, firstLogin, showThinking,
       swarmTeammates, swarmNotifications, bgAgentLabel, connected,
+      bootstrapping,
       modelSwitching, setModelSwitching,
       // 多会话管理
       // busy/phase/active 以本地会话视图实时状态为准（事件驱动，无推送延迟）：

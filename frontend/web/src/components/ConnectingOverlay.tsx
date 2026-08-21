@@ -52,8 +52,8 @@ export default function ConnectingOverlay({ lang }: ConnectingOverlayProps) {
     >
       {/* 莫比乌斯环 — 整体呼吸 pulse：scale 1↔1.08，opacity 0.9↔1，2.5s */}
       <svg
-        width="80"
-        height="80"
+        width="112"
+        height="112"
         viewBox="0 0 80 80"
         className="animate-pulse-soft"
         style={{ filter: 'drop-shadow(0 0 6px rgba(42,157,153,0.35))' }}

@@ -17,6 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { normalizeLanguage, t, type UiLanguage } from './i18n';
 import { settingsApi } from './api';
 import { useWebSocketSession } from './hooks/useWebSocketSession';
+import { useTheme } from './hooks/useTheme';
 import Sidebar, { SidebarControls } from './components/Sidebar';
 import ChatArea from './components/ChatArea';
 import PromptInput, { type PromptInputHandle } from './components/PromptInput';
@@ -58,15 +59,20 @@ const MIN_PREVIEW_PANEL = 280;
 export default function App() {
   const session = useWebSocketSession(WS_URL);
 
-  // Electron 桌面壳：首次后端连接成功（遮罩层消失）后自动最大化窗口
-  // 仅触发一次（autoMaximizedRef 兜底），避免重连时反复最大化
-  const autoMaximizedRef = useRef(false);
+  // 在 App 顶层应用主题（dark class 写到 <html>）。
+  // 主界面在遮罩褪去前不渲染，若只靠子组件的 useTheme 挂载来应用主题，
+  // 深色模式会在遮罩褪去前从未生效，导致主界面以浅色呈现。
+  useTheme();
+
+  // 遮罩褪去时机：首个会话内容（web_restore_completed）呈现完成即褪去。
+  // 桌面端窗口启动即最大化（见 desktop createWindow maximized:true），
+  // 无需在此触发 maximize 或等待全屏时机。
+  const [revealReady, setRevealReady] = useState(false);
   useEffect(() => {
-    if (session.connected && !autoMaximizedRef.current) {
-      autoMaximizedRef.current = true;
-      window.illusionDesktop?.maximize();
+    if (session.connected && !session.bootstrapping) {
+      setRevealReady(true);
     }
-  }, [session.connected]);
+  }, [session.connected, session.bootstrapping]);
   const lang: UiLanguage = useMemo(
     () => normalizeLanguage(session.status?.ui_language),
     [session.status?.ui_language],
@@ -979,6 +985,10 @@ export default function App() {
     <div className="flex flex-col h-screen">
       {/* Electron 桌面壳自定义顶部栏（浏览器端返回 null） */}
       <TitleBar lang={lang} />
+      {/* 首帧引导（bootstrapping）未结束 / 遮罩未褪去（revealReady）期间
+          不渲染主界面，只保留全屏遮罩覆盖，避免"主界面先露出、遮罩后淡入"
+          的翻转闪烁；首个会话内容呈现完成后一次性渲染主界面。 */}
+      {revealReady && !session.bootstrapping && (
       <div className="flex flex-1 min-h-0">
       <Sidebar lang={lang} connected={session.connected} sessions={session.sessions}
         workspaces={session.workspaces} activeWorkspaceCwd={session.activeWorkspaceCwd}
@@ -1084,6 +1094,7 @@ export default function App() {
         </>
       )}
       </div>
+      )}
 
       {/* 删除会话弹窗（仅 sidebar 触发；按目录分组查看，支持整组删除） */}
       {deleteModalOpen && (
@@ -1297,8 +1308,10 @@ export default function App() {
         </div>
       )}
 
-      {/* 首次启动连接后端的全屏遮罩层（替代原顶部"正在连接..."横条） */}
-      {!session.connected && <ConnectingOverlay lang={lang} />}
+      {/* 全屏遮罩层：连接未建立 / 首帧引导（首个会话内容未呈现）/ 会话恢复中时覆盖，
+          首个会话内容呈现完成后褪去（桌面端窗口启动即最大化，无额外时机）。
+          避免"连接 → 欢迎 → 恢复 → 欢迎"的时序翻转在未就绪时露出主界面。 */}
+      {(!session.connected || session.bootstrapping || !revealReady || session.restoringSessionId) && <ConnectingOverlay lang={lang} />}
       {/* 应用内图片预览（Lightbox）：点击 markdown 图片/图片链接时打开 */}
       <ImagePreview lang={lang} />
       {/* 文件预览弹窗：停靠列"弹窗查看"按钮触发放大形态；关闭返回停靠列 */}

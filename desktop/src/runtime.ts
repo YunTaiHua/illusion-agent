@@ -150,25 +150,39 @@ export interface RuntimeChoice {
 export function resolveRuntime(): RuntimeChoice {
   const root = path.resolve(bundledResourcesRoot());
 
-  // --- Python: 优先用户环境（遍历 PATH 中所有 python/python3，取首个版本达标的）---
+  // --- Python 选择：内置运行时优先，用户 PATH 的 python 仅作内置缺失时的兜底 ---
+  // 该 python 用于启动后端进程，必须含可直接执行的 `python -m illusion`（内置
+  // python 打包了完整 illusion 包与全部依赖）；用户系统 python 可能是残缺安装
+  // （如仅有 illusion 包目录而无 __main__.py），若用它启动后端会导致后端一直
+  // 未就绪。开发模式（无内置运行时）自动回退到用户 python。
+  // pythonFromUser 表示"用户是否另有可用的 python 环境"，与后端用哪个 python
+  // 无关：main.ts 依据它决定是否把内置 python 注入 PATH——用户有环境时不注入，
+  // 使 LLM 的 bash 工具执行脚本用用户环境。
   let python = '';
   let pythonFromUser = false;
+  // 先判定用户是否有可用的 python 环境（决定脚本执行环境是否用用户侧）
   const userPythons = [...whichAll('python'), ...whichAll('python3')];
   for (const candidate of userPythons) {
     const v = getVersion(candidate);
     if (v && gte(v, MIN_PYTHON)) {
-      python = candidate;
       pythonFromUser = true;
       break;
     }
   }
+  // 后端进程用 python：内置优先（完整 illusion），缺失时回退用户 python
+  const bundled = bundledPythonPath();
+  if (bundled) {
+    const v = getVersion(bundled);
+    if (v && gte(v, MIN_PYTHON)) {
+      python = bundled;
+    }
+  }
   if (!python) {
-    const bundled = bundledPythonPath();
-    if (bundled) {
-      const v = getVersion(bundled);
+    for (const candidate of userPythons) {
+      const v = getVersion(candidate);
       if (v && gte(v, MIN_PYTHON)) {
-        python = bundled;
-        pythonFromUser = false;
+        python = candidate;
+        break;
       }
     }
   }
