@@ -426,8 +426,8 @@ export default function Sidebar({
   }
 
   return (
-    <aside className="glass-panel border-r border-white/30 flex flex-col h-full shrink-0 select-none transition-[width] duration-300 ease-in-out" style={{ width: `${width}px` }}>
-      <div className="flex items-center justify-between px-5 py-4 border-b border-border-light">
+    <aside className="glass-panel panel-below-titlebar flex flex-col h-full shrink-0 select-none transition-[width] duration-300 ease-in-out" style={{ width: `${width}px` }}>
+      <div className="flex items-center justify-between px-5 py-4">
         <button
           onClick={onToggle}
           className="w-8 h-8 flex items-center justify-center rounded-lg text-content-secondary hover:text-content-primary glass-option-hover transition-colors cursor-pointer"
@@ -440,7 +440,7 @@ export default function Sidebar({
         <span className="font-body font-bold text-content-primary text-sm tracking-wider">{t(lang, 'sidebar_title')}</span>
         <button
           onClick={onDeleteSessions}
-          className="w-8 h-8 flex items-center justify-center rounded-lg text-content-secondary hover:text-content-primary glass-option-hover transition-colors cursor-pointer"
+          className="w-8 h-8 flex items-center justify-center rounded-lg text-content-secondary hover:text-danger transition-colors cursor-pointer"
           title={t(lang, 'delete_session')}
           aria-label={t(lang, 'delete_session')}
         >
@@ -495,7 +495,7 @@ export default function Sidebar({
         )}
       </div>
       {/* 底部设置区 */}
-      <div className="px-4 py-3 border-t border-border-light">
+      <div className="px-4 py-3">
         <button
           onClick={onOpenSettings}
           title={t(lang, 'sidebarSettingsTooltip')}
@@ -547,7 +547,7 @@ export function SidebarControls({
         aria-label={t(lang, 'expand_panel')}
         className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-card-alt border border-border-light text-content-secondary glass-option-hover hover:text-primary transition-colors cursor-pointer"
       >
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
           <path d="M6 3l5 5-5 5" />
         </svg>
       </button>
@@ -559,7 +559,7 @@ export function SidebarControls({
         aria-label={t(lang, 'new_session')}
         className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-card-alt border border-border-light text-content-secondary glass-option-hover hover:text-primary transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
       >
-        <NewChatIcon className="w-4 h-4" />
+        <NewChatIcon className="w-[15px] h-[15px]" />
       </button>
       {/* 删除会话 */}
       <button
@@ -568,7 +568,7 @@ export function SidebarControls({
         aria-label={t(lang, 'delete_session')}
         className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-card-alt border border-border-light text-danger glass-option-hover transition-colors cursor-pointer"
       >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="3 6 5 6 21 6" />
           <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
           <line x1="10" y1="11" x2="10" y2="17" />

@@ -121,25 +121,25 @@
   --error: #e87474;
   --info-color: #60a5fa;
 
-  /* 背景色 - 深色基底 */
-  --bg-main: #1a1d24;
-  --bg-card: #20242d;
-  --bg-card-alt: #262b35;
-  --bg-hover: #2d3340;
-  --bg-input: #1a1d24;
+  /* 背景色 - 深色基底（中性灰黑，不偏蓝） */
+  --bg-main: #1b1b1f;
+  --bg-card: #222227;
+  --bg-card-alt: #28282e;
+  --bg-hover: #303036;
+  --bg-input: #1b1b1f;
 
   /* 边框色 */
-  --border-light: #2d3340;
-  --border-medium: #3a4150;
+  --border-light: #303036;
+  --border-medium: #3c3c44;
 
   /* 文本色 - 浅色 */
-  --text-primary: #e8ebf0;
-  --text-secondary: #a8b0c0;
-  --text-disabled: #5a6275;
+  --text-primary: #eaeaea;
+  --text-secondary: #a3a3ab;
+  --text-disabled: #5d5d66;
 
   /* 滚动条滑块：深色下保持与边框相近但略亮，清晰可辨 */
-  --scrollbar-thumb: #3a4150;
-  --scrollbar-thumb-hover: #4a5264;
+  --scrollbar-thumb: #3c3c44;
+  --scrollbar-thumb-hover: #4c4c55;
 
   /* 粉彩色块（深色模式下降低饱和度、提高亮度以适配深底） */
   --pastel-mint: #2a4a3a;
@@ -149,10 +149,10 @@
   --pastel-sky: #283548;
   --pastel-coral: #3d2e25;
 
-  /* 玻璃拟态 token（深色版：半透明深底 + 更强模糊） */
-  --glass-bg:         rgba(32, 36, 45, 0.62);
-  --glass-bg-panel:   rgba(26, 29, 36, 0.55);
-  --glass-bg-overlay: rgba(38, 43, 53, 0.78);
+  /* 玻璃拟态 token（深色版：半透明中性深灰底 + 更强模糊） */
+  --glass-bg:         rgba(34, 34, 39, 0.62);
+  --glass-bg-panel:   rgba(27, 27, 31, 0.55);
+  --glass-bg-overlay: rgba(40, 40, 46, 0.78);
   --glass-blur:         22px;
   --glass-blur-panel:   18px;
   --glass-blur-overlay: 30px;
@@ -209,11 +209,11 @@ body {
 
 /* 深色模式 body 背景（合并到上方 :root.dark 块的补充变量） */
 :root.dark {
-  --body-bg: #15171c;
-  --body-bg-highlight: #232730;
-  --body-bg-shadow: #0f1115;
-  --code-header-bg: #262b35;
-  --code-block-bg: #16191f;
+  --body-bg: #161618;
+  --body-bg-highlight: #26262b;
+  --body-bg-shadow: #101012;
+  --code-header-bg: #28282e;
+  --code-block-bg: #18181c;
   /* 玻璃交互态（深色版：浅色半透明叠加在深底上） */
   --glass-option-hover-bg: rgba(255, 255, 255, 0.06);
   --glass-option-active-bg: rgba(255, 255, 255, 0.09);
@@ -798,6 +798,12 @@ pre code.hljs,
   -webkit-backdrop-filter: blur(var(--glass-blur-panel)) saturate(var(--glass-saturate));
   border: 1px solid var(--glass-border);
   box-shadow: var(--glass-highlight);
+}
+
+/* 顶栏下方面板：顶部不渲染玻璃边框，避免与 TitleBar 底部
+   border-medium 分割线叠加成双重线（深色下尤其明显） */
+.glass-panel.panel-below-titlebar {
+  border-top: none;
 }
 
 /* 居中大弹窗：删除确认等 */

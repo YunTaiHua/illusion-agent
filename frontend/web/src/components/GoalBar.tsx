@@ -256,18 +256,21 @@ export function GoalBar({ goal, lang, actionError, onEdit, onPause, onResume, on
     );
   }
 
-  // blockedReason.message 可能很长：title 悬浮提示仅保留前 200 字符并压平换行，避免 tooltip 溢出
+  // 悬浮提示：完整目标原文（压平换行）；blocked 时附加受阻原因（截断防溢出）
+  const objectiveTooltip = goal.objective.replace(/\n/g, ' ');
   const title =
-    goal.phase === 'blocked' ? goal.blockedReason?.message?.slice(0, 200).replace(/\n/g, ' ') : undefined;
+    goal.phase === 'blocked' && goal.blockedReason?.message
+      ? `${objectiveTooltip} — ${goal.blockedReason.message.slice(0, 200).replace(/\n/g, ' ')}`
+      : objectiveTooltip;
   return (
-    <div data-goal-bar title={title} className="glass-surface rounded-xl flex items-center gap-2.5 min-w-0 h-9 px-3 py-1 overflow-hidden">
+    <div data-goal-bar title={title} className="glass-surface rounded-xl flex items-center gap-2.5 min-w-0 h-9 px-3 py-1 overflow-hidden cursor-default">
       <span className="inline-flex shrink-0 text-content-disabled">
         <GoalGlyph />
       </span>
       <span className="shrink-0 text-[13px] leading-6 font-medium text-content-primary">
         {t(lang, PHASE_LABEL_KEYS[goal.phase as 'active' | 'paused' | 'blocked'])}
       </span>
-      <span className="flex-1 min-w-0 overflow-hidden text-[13px] leading-5 text-content-secondary whitespace-nowrap text-ellipsis">
+      <span className="flex-1 min-w-0 overflow-hidden text-[13px] leading-5 text-content-secondary whitespace-nowrap text-ellipsis cursor-default">
         {goal.objective}
       </span>
       {/* 常驻轮次分数：roundsStarted/maxGoalRounds（受阻原因经 toast 呈现，

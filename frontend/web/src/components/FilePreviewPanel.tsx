@@ -53,7 +53,7 @@ export default function FilePreviewPanel({ lang, payload, loading, width, hasDif
 
   return (
     <aside
-      className="glass-panel border-l border-white/30 flex flex-col h-full shrink-0 overflow-hidden select-none"
+      className="glass-panel panel-below-titlebar flex flex-col h-full shrink-0 overflow-hidden select-none"
       style={{ width: `${width}px` }}
     >
       {/* 头部：文件名 + 元信息 + 视图切换/复制/弹窗/关闭 */}

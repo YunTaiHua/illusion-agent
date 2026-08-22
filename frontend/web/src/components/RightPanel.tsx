@@ -142,7 +142,7 @@ export default function RightPanel({
   if (collapsed) return null;
 
   return (
-    <aside className="glass-panel border-l border-white/30 flex flex-col h-full shrink-0 overflow-y-auto scrollbar-hidden select-none" style={{ width: `${width}px` }}>
+    <aside className="glass-panel panel-below-titlebar flex flex-col h-full shrink-0 overflow-y-auto scrollbar-hidden select-none" style={{ width: `${width}px` }}>
       {/* 标题行：主题切换按钮 + 居中标题 + 折叠按钮（3 列 grid 严格居中） */}
       <div className="grid grid-cols-3 items-center px-5 pt-3 pb-2">
         <button onClick={toggleTheme} title={themeTitle}
@@ -191,6 +191,7 @@ export default function RightPanel({
         onExpand={onRequestAgentTasks}
         onRefresh={onRequestAgentTasks}
         refreshLabel={t(lang, 'refresh')}
+        topBorder={false}
         icon={
           <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
             <rect x="3" y="5" width="10" height="8" rx="2" />
@@ -335,7 +336,7 @@ export default function RightPanel({
 
       {/* Context 使用量 */}
       {contextWindow > 0 && (
-        <div className="px-5 py-3 border-t border-border-light">
+        <div className="px-5 py-3">
           <div className="text-xs text-content-secondary font-medium mb-2">{t(lang, 'context_window')}</div>
           {/* 最后一次 API 调用的真实分项（无数据时显示估算汇总） */}
           {hasLastApiBreakdown ? (
@@ -381,7 +382,7 @@ export default function RightPanel({
 
       {/* 累积 API 用量区块 */}
       {(inputTokens > 0 || outputTokens > 0 || cacheReadTokens > 0 || cacheCreationTokens > 0) && (
-        <div className="px-5 py-3 border-t border-border-light">
+        <div className="px-5 py-3">
           <div className="text-xs text-content-secondary font-medium mb-2">{t(lang, 'cumulativeApiUsage')}</div>
           <div className="flex items-center justify-between text-xs mb-1">
             <span className="text-content-secondary">{t(lang, 'inputCachedLabel')}</span>
@@ -612,7 +613,7 @@ export function RightPanelControls({
         className="w-8 h-8 flex items-center justify-center rounded-full glass-surface text-content-secondary glass-option-hover hover:text-primary transition-colors cursor-pointer"
       >
         {/* 上级仅在折叠态渲染本按钮组，始终表示"展开右栏"（箭头朝左） */}
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           <path d="M10 3l-5 5 5 5" />
         </svg>
       </button>
@@ -646,16 +647,26 @@ export function RightPanelControls({
         )}
       </button>
 
-      {/* 上下文用量占比（以百分数展示，点击展开右栏查看明细） */}
+      {/* 上下文用量占比（环形饼状图，点击展开右栏查看明细） */}
       <button
         onClick={onToggle}
         title={usageTitle}
         aria-label={usageTitle}
-        className="w-9 h-9 flex items-center justify-center rounded-full glass-surface text-content-secondary glass-option-hover hover:text-content-primary transition-colors cursor-pointer"
+        className="w-8 h-8 flex items-center justify-center rounded-full glass-surface text-content-secondary glass-option-hover hover:text-content-primary transition-colors cursor-pointer"
       >
-        <span className="text-[10px] font-semibold tabular-nums leading-none" style={{ color: usageColor }}>
-          {contextPercent.toFixed(0)}%
-        </span>
+        <svg width="15" height="15" viewBox="0 0 30 30" aria-hidden="true">
+          {/* 轨道圆 */}
+          <circle cx="15" cy="15" r="11.5" fill="none" stroke="currentColor" strokeOpacity="0.15" strokeWidth="4" />
+          {/* 用量弧（从 12 点方向顺时针；0% 不渲染避免 round cap 残点，
+              上限 99.5% 周长避免 100% 时两端 cap 在接缝处重叠加粗） */}
+          {contextPercent > 0 && (
+            <circle
+              cx="15" cy="15" r="11.5" fill="none" stroke={usageColor} strokeWidth="4" strokeLinecap="round"
+              transform="rotate(-90 15 15)"
+              strokeDasharray={`${Math.min(contextPercent, 99.5) / 100 * 2 * Math.PI * 11.5} ${2 * Math.PI * 11.5}`}
+            />
+          )}
+        </svg>
       </button>
     </div>
   );

@@ -62,7 +62,7 @@ export default function TitleBar({ lang }: { lang: UiLanguage }) {
 
   return (
     <div
-      className="app-region-drag flex items-center h-9 shrink-0 select-none border-b border-white/10 relative z-50"
+      className="app-region-drag flex items-center h-9 shrink-0 select-none border-b border-border-medium relative z-50"
       style={{
         background: 'var(--glass-bg-panel)',
         backdropFilter: 'blur(var(--glass-blur-panel)) saturate(var(--glass-saturate))',
