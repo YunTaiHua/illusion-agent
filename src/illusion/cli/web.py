@@ -9,11 +9,12 @@ Web UI 子命令
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 import typer
 
 from illusion.cli import web_app
+from illusion.config.i18n import t as _t
 
 
 @web_app.callback(invoke_without_command=True)
@@ -23,15 +24,38 @@ def web_start(
     dev: bool = typer.Option(False, "--dev", help="开发模式（启用 CORS，不 serve 静态文件）"),
     model: str | None = typer.Option(None, "--model", "-m", help="指定模型"),
     prompt: str | None = typer.Option(None, "--prompt", help="初始提示词"),
+    trusted_host: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--trusted-host",
+            help="受信主机 authority（host[:port]，可多次传入），供非回环部署声明可达名称",
+        ),
+    ] = None,
 ) -> None:
-    """启动 Illusion Agent Web 界面 / Launch Illusion Agent Web UI"""
+    """启动 Illusion Agent Web UI / Launch Illusion Agent Web UI"""
     import threading
 
     import uvicorn
 
     # working_directory 已由主回调统一切换（见 cli/main.py）
+    from illusion.ui.web.security import (
+        assert_trusted_authority,
+        derive_lan_hosts,
+    )
     from illusion.ui.web.server import create_app
     from illusion.ui.web.ws_host import WebHostConfig
+
+    # 信任栅栏受信主机：显式声明优先，绑定所有接口时自动并入本机 LAN 地址。
+    # 非法条目在启动时响亮失败（fail loudly），绝不静默忽略。
+    explicit_hosts = tuple(trusted_host or ())
+    for entry in explicit_hosts:
+        try:
+            assert_trusted_authority(entry)
+        except ValueError as exc:
+            typer.echo(_t("web_invalid_trusted_host", reason=exc), err=True)
+            raise typer.Exit(code=1) from None
+    lan_hosts = derive_lan_hosts() if host in ("0.0.0.0", "::") else ()
+    trusted_hosts = explicit_hosts + lan_hosts
 
     # 渠道自动激活：与 illusion 主命令一致，有 enabled 渠道时 spawn 守护进程。
     # 渠道启用必须配置运行目录（working_directory，见 channel enable --working-directory
@@ -91,12 +115,20 @@ def web_start(
         model=model,
         channel_hint=pc_channel_hint,
         channel_tools=pc_channel_tools,
+        trusted_hosts=trusted_hosts,
     )
 
     app = create_app(dev=dev, host_config=config)
 
     url = f"http://{host}:{port}"
     typer.echo(f"Illusion Agent Web UI: {url}")
+    # 信任栅栏状态（栅栏非认证层；REST /api 特权平面仅限回环，
+    # 受信主机仅可接入 /ws 会话平面）
+    typer.echo(_t("web_trust_enabled"))
+    if trusted_hosts:
+        typer.echo(_t("web_trusted_hosts", hosts=", ".join(trusted_hosts)))
+    if host in ("0.0.0.0", "::"):
+        typer.echo(_t("web_bind_all_hint"))
     if not dev:
         import os
 

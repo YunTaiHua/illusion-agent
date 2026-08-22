@@ -150,6 +150,11 @@ MESSAGES: dict[str, dict[str, str]] = {
     "cron_error": {"zh-CN": "错误:", "en-US": "Error:"},
     "cron_no_history": {"zh-CN": "无执行历史", "en-US": "No execution history"},
     "cron_no_log": {"zh-CN": "未找到调度器日志，请先运行: illusion cron start", "en-US": "No scheduler log found. Start with: illusion cron start"},
+    # --- web ---
+    "web_invalid_trusted_host": {"zh-CN": "错误: --trusted-host {reason}", "en-US": "Error: --trusted-host {reason}"},
+    "web_trust_enabled": {"zh-CN": "浏览器信任栅栏已启用：Host 校验 + Sec-Fetch-Site + Origin 同源", "en-US": "Browser-trust fence enabled: Host check + Sec-Fetch-Site + same-origin Origin"},
+    "web_trusted_hosts": {"zh-CN": "受信主机（可接入 /ws）：{hosts}", "en-US": "Trusted hosts (may connect to /ws): {hosts}"},
+    "web_bind_all_hint": {"zh-CN": "提示: 已绑定所有接口，REST /api 仅限本机访问", "en-US": "Note: bound to all interfaces; REST /api is restricted to this machine"},
     # --- session ---
     "session_not_found_prev": {"zh-CN": "未找到之前的会话", "en-US": "No previous session found"},
     "session_continuing": {"zh-CN": "继续会话: {summary}", "en-US": "Continuing session: {summary}"},

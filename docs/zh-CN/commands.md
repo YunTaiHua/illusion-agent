@@ -104,6 +104,7 @@ illusion --name "debug-auth-issue"
 # Web UI
 illusion web                     # 启动 Web UI 浏览器界面（默认端口 3000）
 illusion web --port 8080         # 自定义端口启动
+illusion web --trusted-host nas.example  # 声明受信主机（非回环部署时供局域网设备接入 /ws）
 
 # 认证管理
 illusion auth login              # 交互式配置提供商（首次登录后会引导设置工作目录）

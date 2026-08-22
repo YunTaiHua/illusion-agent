@@ -41,9 +41,28 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:3000',
+        // 后端启用浏览器信任栅栏（Host 回环校验 + Origin 严格同源）。
+        // changeOrigin 把 Host 改写为回环地址过 Host 栅栏；浏览器附带的
+        // Origin（http://localhost:5173）与后端 Host 不同源，须剥除，
+        // 使代理转发的请求以「非浏览器客户端」身份仅凭 Host 栅栏放行。
+        changeOrigin: true,
+        configure(proxy) {
+          proxy.on('proxyReq', (proxyReq) => {
+            proxyReq.removeHeader('origin');
+          });
+        },
+      },
       '/ws': {
         target: 'ws://127.0.0.1:3000',
         ws: true,
+        changeOrigin: true,
+        configure(proxy) {
+          proxy.on('proxyReqWs', (proxyReq) => {
+            proxyReq.removeHeader('origin');
+          });
+        },
       },
     },
   },

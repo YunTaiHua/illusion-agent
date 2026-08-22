@@ -88,6 +88,7 @@ from illusion.ui.runtime import (
     start_runtime,
     sync_app_state,
 )
+from illusion.ui.web.security import assert_trusted_authority
 from illusion.ui.web.session_runtime import MAX_MATERIALIZED_SESSIONS, SessionRuntime
 from illusion.ui.web.ws_web_api import build_replay_items
 from illusion.utils.aioqueue import Queue, QueueShutDown
@@ -221,6 +222,7 @@ class WebHostConfig:
         restore_session_id: 恢复的会话 ID
         enforce_max_turns: 是否强制限制最大轮次
         effort: 推理强度级别（low/medium/high/xhigh/max）
+        trusted_hosts: 信任栅栏受信主机（host[:port] 规范形，仅放行 /ws）
     """
 
     model: str | None = None
@@ -237,6 +239,13 @@ class WebHostConfig:
     # 渠道感知：与 illusion 主命令一致，注入渠道提示词和跨渠道工具
     channel_hint: str | None = None
     channel_tools: list[Any] | None = None
+    # 信任栅栏：非回环受信 authority（host[:port]）。空元组表示仅回环可信；
+    # 条目须为规范形（见 security.assert_trusted_authority）
+    trusted_hosts: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        for entry in self.trusted_hosts:
+            assert_trusted_authority(entry)
 
 
 class WebBackendHost:

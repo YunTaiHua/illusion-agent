@@ -19,7 +19,8 @@ def app(tmp_path, monkeypatch):
 
 @pytest.fixture
 def client(app):
-    return TestClient(app)
+    # 浏览器信任栅栏要求 Host 为回环地址（TestClient 默认 host 是 testserver）
+    return TestClient(app, base_url="http://127.0.0.1")
 
 
 def test_get_envs_returns_empty_when_no_config(client):

@@ -102,6 +102,7 @@ illusion --name "debug-auth-issue"
 # Web UI
 illusion web                     # Launch Web UI in browser (default port 3000)
 illusion web --port 8080         # Launch with custom port
+illusion web --trusted-host nas.example  # Declare a trusted host (for LAN access to /ws in non-loopback deployments)
 
 # Authentication management
 illusion auth login              # Interactive provider setup (first login guides working directory setup)
