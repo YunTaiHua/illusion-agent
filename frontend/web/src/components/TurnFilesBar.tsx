@@ -64,7 +64,7 @@ const TurnFilesBar = memo(function TurnFilesBar({ lang, rawPaths, stats, onReque
           标题 + 右侧计数徽标；整行为点击目标 */}
       <button
         onClick={() => setOpen(!open)}
-        className="group/head w-full px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer glass-option-hover"
+        className="group/head w-full px-3 py-2.5 flex items-center gap-1.5 transition-colors cursor-pointer glass-option-hover"
       >
         {/* 16px 图标槽位：常显铅笔图标；hover 时图标淡出、三角指示器淡入 */}
         <span className="relative w-4 h-4 shrink-0 flex items-center justify-center">
@@ -82,16 +82,17 @@ const TurnFilesBar = memo(function TurnFilesBar({ lang, rawPaths, stats, onReque
             <path d="M4.25 2.82782L4.25 11.1722C4.25 11.6622 4.84243 11.9076 5.18891 11.5611L9.36109 7.38891C9.57588 7.17412 9.57588 6.82588 9.36109 6.61109L5.18891 2.43891C4.84243 2.09243 4.25 2.33782 4.25 2.82782Z" fill="currentColor" />
           </svg>
         </span>
-        {/* 标题：普通正文大小 + 加粗；py-2 补偿 text-sm 行高差保持卡片高度 */}
+        {/* 标题：普通正文大小 + 加粗；py-2.5 与侧栏目录项同高（text-sm 行高 20px + 20px = 40px） */}
         <span className="text-sm font-bold text-content-primary tracking-wide">{t(lang, 'turn_files_title')}</span>
         <span className="ml-auto shrink-0 text-[10px] text-content-secondary bg-[var(--badge-bg-subtle)] px-1.5 py-0.5 rounded-full tabular-nums">
           {rawPaths.length}
         </span>
       </button>
-      {/* 展开/折叠微动画（简洁 fade：纯透明度 150ms） */}
+      {/* 展开/折叠微动画（简洁 fade：纯透明度 150ms）；容器无垂直内边距，
+          文件行紧贴分隔线与卡片底边，hover 高亮连续不留间隙 */}
       {open && (
         <div className="animate-fade">
-          <div className="flex flex-col border-t border-border-light py-1">
+          <div className="flex flex-col border-t border-border-light">
             {rawPaths.map((raw) => (
               <TurnFileRow key={raw} raw={raw} stat={stats.get(raw)} onOpenFile={onOpenFile} />
             ))}
@@ -144,7 +145,7 @@ function TurnFileRow({ raw, stat, onOpenFile }: { raw: string; stat?: FileStatIt
     <button
       onClick={handleClick}
       disabled={!canOpen}
-      className="w-full flex items-center gap-1.5 py-1 px-3 rounded-md text-sm transition-colors glass-option-hover disabled:cursor-default disabled:hover:bg-transparent"
+      className="w-full flex items-center gap-1.5 py-2.5 px-3 text-sm transition-colors glass-option-hover disabled:cursor-default disabled:hover:bg-transparent"
       title={display}
     >
       {/* 空占位：与触发器图标槽位同宽，文件名缩进对齐触发器文本 */}
