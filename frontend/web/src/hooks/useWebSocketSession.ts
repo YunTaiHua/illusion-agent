@@ -24,6 +24,7 @@ import type {
   BackendEvent,
   FileContentPayload,
   FileTreeNode,
+  FileMentionCandidate,
   FileStatItem,
   GitStatusSnapshot,
   GoalStatus,
@@ -255,6 +256,10 @@ export interface WebSocketSessionState {
   fileStats: Map<string, FileStatItem>;
   /** 批量拉取文件增删行数统计（已缓存/在途的路径自动跳过） */
   requestFileStats: (paths: string[]) => void;
+  /** @ 提及补全最近一次结果（requestId/query 用于丢弃过期响应；null = 尚无结果） */
+  fileMentionResult: { requestId: string; query: string; candidates: FileMentionCandidate[] } | null;
+  /** 拉取 @ 提及补全候选（web_request_file_mentions，绑定当前活跃会话工作区） */
+  requestFileMentions: (query: string, requestId: string) => void;
   /** Git 状态快照（null = 未拉取；is_repo=false 前端隐藏区块） */
   gitStatus: GitStatusSnapshot | null;
   /** Git 状态加载中 */
@@ -446,6 +451,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   const fileStatsRef = useRef<Map<string, FileStatItem>>(fileStats);
   // 已发出未返回的统计请求去重（ref 不触发渲染）
   const fileStatsInFlightRef = useRef<Set<string>>(new Set());
+  const [fileMentionResult, setFileMentionResult] = useState<{ requestId: string; query: string; candidates: FileMentionCandidate[] } | null>(null);
   const [gitStatus, setGitStatus] = useState<GitStatusSnapshot | null>(null);
   const [gitLoading, setGitLoading] = useState(false);
   const [filePreview, setFilePreview] = useState<FileContentPayload | null>(null);
@@ -857,6 +863,16 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   const requestGitStatus = useCallback((): void => {
     setGitLoading(true);
     sendRaw({ type: 'web_request_git_status', session_id: activeSessionIdRef.current ?? undefined });
+  }, [sendRaw]);
+
+  /** 拉取 @ 提及补全候选（requestId 由调用方生成，响应原样回显用于丢弃过期结果） */
+  const requestFileMentions = useCallback((query: string, requestId: string): void => {
+    sendRaw({
+      type: 'web_request_file_mentions',
+      query,
+      request_id: requestId,
+      session_id: activeSessionIdRef.current ?? undefined,
+    });
   }, [sendRaw]);
 
   /** 打开文件预览（内容视图；同视图同路径读取中直接忽略连点；
@@ -1666,6 +1682,18 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
         setGitLoading(false);
         return;
       }
+      if (evt.type === 'web_file_mentions') {
+        // @ 提及补全候选：requestId 不匹配的迟到响应由 PromptInput 侧丢弃
+        const payload = evt.web_file_mentions;
+        if (payload) {
+          setFileMentionResult({
+            requestId: payload.request_id ?? evt.request_id ?? '',
+            query: payload.query,
+            candidates: payload.candidates ?? [],
+          });
+        }
+        return;
+      }
       if (evt.type === 'web_file_content') {
         // 文件预览载荷（error 字段非空表示读取失败）；与发起请求的
         // kind|path 一致才应用（内容/diff 两视图按键精确关联）
@@ -1840,6 +1868,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       agentTasks, fileTree, fileTreeLoadingPaths, gitStatus, gitLoading,
       sessionFiles, sessionFilesLoading,
       fileStats, requestFileStats,
+      fileMentionResult, requestFileMentions,
       filePreview, filePreviewLoading,
       requestFileTree, requestGitStatus, openFilePreview, openFileDiff, closeFilePreview,
       requestAgentTasks, viewAgentSummary, requestSessionFiles, openSessionFile,
@@ -1892,6 +1921,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     agentTasks, fileTree, fileTreeLoadingPaths, gitStatus, gitLoading,
     sessionFiles, sessionFilesLoading,
     fileStats, requestFileStats,
+    fileMentionResult, requestFileMentions,
     filePreview, filePreviewLoading,
     requestFileTree, requestGitStatus, openFilePreview, openFileDiff, closeFilePreview,
     requestAgentTasks, viewAgentSummary, requestSessionFiles, openSessionFile,

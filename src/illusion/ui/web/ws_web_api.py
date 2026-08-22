@@ -26,6 +26,7 @@ import asyncio
 import logging
 import os
 import subprocess
+from collections import deque
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -200,6 +201,7 @@ class WebApiDispatcher:
             "web_request_session_files": self.handle_web_request_session_files,
             "web_read_session_file": self.handle_web_read_session_file,
             "web_request_file_stats": self.handle_web_request_file_stats,
+            "web_request_file_mentions": self.handle_web_request_file_mentions,
             "web_query": self.handle_web_query,
             "web_request_workspaces": self.handle_web_request_workspaces,
             "web_add_workspace": self.handle_web_add_workspace,
@@ -1056,6 +1058,31 @@ class WebApiDispatcher:
             type="web_file_stats", session_id=session_id,
             cwd=session.bundle.cwd, web_file_stats=allowed))
 
+    async def handle_web_request_file_mentions(self, request: FrontendRequest) -> None:
+        """收集 @ 提及补全候选并推送 web_file_mentions 事件。
+
+        仅返回工作区内路径候选（不读内容），选中后的提及文本保持
+        普通 prompt 文本，内容由模型自行调用 read 工具获取。
+        安全边界与 web_request_file_tree 一致：BFS 限定在目标工作区
+        根内，过滤规则复用文件树可见性。
+
+        Args:
+            request: 前端请求（query 可选：@ 后的路径片段；
+                session_id/cwd 同资源解析；request_id 原样回显供前端丢弃过期响应）
+        """
+        host = self._host
+        if host._bundle is None:
+            return
+        bundle = self._resolve_resource_bundle(request)
+        query = _normalize_mention_query(request.query)
+        candidates, truncated = await asyncio.to_thread(_file_mention_candidates, bundle.cwd, query)
+        await self._emit(BackendEvent(
+            type="web_file_mentions",
+            cwd=bundle.cwd,
+            request_id=request.request_id,
+            web_file_mentions={"query": query, "candidates": candidates, "truncated": truncated},
+        ))
+
     # === 工作区（目录空间）管理 ===
 
     async def handle_web_request_workspaces(self, request: FrontendRequest) -> None:
@@ -1499,6 +1526,96 @@ def _list_dir_entries(directory: Path, root: str) -> tuple[list[dict[str, Any]],
         return [], False
     entries.sort(key=lambda x: (x["kind"] != "dir", x["name"].lower()))
     return entries, truncated
+
+
+# @ 提及补全候选上限（下拉菜单容量）
+_MENTION_MAX_CANDIDATES = 20
+# @ 提及补全扫描条目上限（防止巨型仓库全量遍历；超出标记截断）
+_MENTION_MAX_SCANNED = 5000
+# @ 提及补全目录深度上限
+_MENTION_MAX_DEPTH = 12
+
+
+def _normalize_mention_query(query: str | None) -> str:
+    """规范化 @ 提及查询串：统一 / 分隔、去首尾空白与多余前缀。
+
+    Args:
+        query: 前端输入的原始查询（@ 之后、光标之前的路径片段）
+
+    Returns:
+        str: 规范化后的查询串（可能为空串）
+    """
+    q = (query or "").strip().replace("\\", "/")
+    while q.startswith("./"):
+        q = q[2:]
+    if q.startswith("/"):
+        q = q.lstrip("/")
+    return q.strip()
+
+
+def _file_mention_candidates(root: str, query: str) -> tuple[list[dict[str, Any]], bool]:
+    """在工作区内收集 @ 提及补全候选（仅路径，不读内容）。
+
+    以 root 为界 BFS 遍历，过滤规则与文件树一致（_tree_entry_visible）。
+    每层条目按「目录优先 + 名称不区分大小写」排序，BFS 天然浅层优先，
+    因此凑满上限即可提前返回。匹配为大小写不敏感的子串包含
+    （query 为空串时全部可见条目命中，等价于从根浏览）。
+
+    Args:
+        root: 工作区根目录（绝对路径）
+        query: 规范化后的查询串
+
+    Returns:
+        tuple[list[dict[str, Any]], bool]: (候选列表, 是否因扫描/深度上限截断)；
+        候选为 {path: 根相对路径(/ 分隔), kind: dir|file}
+    """
+    root_path = Path(root)
+    lowered = query.lower()
+    candidates: list[dict[str, Any]] = []
+    truncated = False
+    scanned = 0
+    # FIFO 队列：元素为 (相对目录, 深度)；根目录 rel="" depth=0。
+    # 多收集 1 个候选用于判定截断：恰好凑满上限时无法区分"正好这么多"
+    # 与"还有更多"，找到上限+1 个才可靠地标记 truncated。
+    queue: deque[tuple[str, int]] = deque([("", 0)])
+    while queue and len(candidates) <= _MENTION_MAX_CANDIDATES and scanned < _MENTION_MAX_SCANNED:
+        dir_rel, depth = queue.popleft()
+        try:
+            with os.scandir(root_path / dir_rel if dir_rel else root_path) as it:
+                def _dir_key(e: os.DirEntry[str]) -> tuple[bool, str]:
+                    try:
+                        return (not e.is_dir(follow_symlinks=False), e.name.lower())
+                    except OSError:
+                        return (True, e.name.lower())
+                children = sorted(it, key=_dir_key)
+        except OSError:
+            continue
+        for child in children:
+            scanned += 1
+            if scanned > _MENTION_MAX_SCANNED:
+                truncated = True
+                break
+            try:
+                is_dir = child.is_dir(follow_symlinks=False)
+            except OSError:
+                continue
+            if not _tree_entry_visible(child.name, is_dir):
+                continue
+            child_rel = f"{dir_rel}/{child.name}" if dir_rel else child.name
+            if lowered in child_rel.lower():
+                candidates.append({"path": child_rel, "kind": "dir" if is_dir else "file"})
+                if len(candidates) > _MENTION_MAX_CANDIDATES:
+                    break
+            if is_dir and depth < _MENTION_MAX_DEPTH:
+                queue.append((child_rel, depth + 1))
+        else:
+            continue
+        # 内层 break（凑满上限+1 或超扫描上限）：外层同步退出
+        if len(candidates) > _MENTION_MAX_CANDIDATES:
+            break
+    if len(candidates) > _MENTION_MAX_CANDIDATES:
+        truncated = True
+    return candidates[:_MENTION_MAX_CANDIDATES], truncated
 
 
 def _run_git(cwd: str, *args: str, ok_codes: tuple[int, ...] = (0,)) -> str | None:

@@ -278,6 +278,18 @@ export interface FileTreeNode {
 }
 
 /**
+ * @ 提及补全候选接口
+ *
+ * web_file_mentions 推送的单个路径候选（仅路径，不读内容）。
+ */
+export interface FileMentionCandidate {
+  /** 工作区内相对路径（/ 分隔） */
+  path: string;
+  /** 条目类型：'dir' | 'file'（目录选中后继续下钻，文件选中后闭合提及） */
+  kind: 'dir' | 'file';
+}
+
+/**
  * 会话内修改文件条目接口
  *
  * web_session_files 推送的单个条目（会话文件区块数据源）。
@@ -410,6 +422,7 @@ export type FrontendRequest =
   | { type: 'web_request_agent_tasks'; session_id?: string }
   | { type: 'web_request_session_files'; session_id?: string }
   | { type: 'web_read_session_file'; path: string; session_id?: string }
+  | { type: 'web_request_file_mentions'; query?: string; request_id?: string; session_id?: string; cwd?: string }
   | { type: 'web_query'; command: string; args?: string; request_id: string; session_id?: string }
   | { type: 'web_request_workspaces' }
   | { type: 'web_add_workspace'; path: string }
@@ -506,6 +519,8 @@ export interface BackendEvent {
   };
   /** web_file_tree 推送的目录条目（可选；path 为请求的相对目录，空串为根） */
   web_file_tree?: { path: string; entries: FileTreeNode[]; truncated?: boolean };
+  /** web_file_mentions 推送的 @ 提及补全候选（query 为规范化后的查询串，request_id 回显） */
+  web_file_mentions?: { query: string; candidates: FileMentionCandidate[]; truncated?: boolean; request_id?: string };
   /** web_git_status 推送的 Git 状态快照（可选） */
   web_git_status?: GitStatusSnapshot;
   /** web_file_content 推送的文件预览载荷（可选） */

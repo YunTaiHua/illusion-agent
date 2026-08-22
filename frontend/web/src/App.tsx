@@ -982,6 +982,8 @@ export default function App() {
         onManageWorkspaces={() => { setSetupInitialTab('workspaces'); setShowSetupForm(true); }}
         initialDraft={rewindDraft ?? undefined}
         onConsumeInitialDraft={() => setRewindDraft(null)}
+        fileMentionResult={session.fileMentionResult}
+        onRequestFileMentions={session.requestFileMentions}
         activeMenu={activeMenu} onMenuOpen={setActiveMenu}>
         <Toolbar lang={lang} status={session.status}
           modelOptions={session.modelOptions}

@@ -4,6 +4,7 @@
  * Web 前端的用户输入组件，支持：
  * - 多行文本输入
  * - 命令自动补全（/ 前缀触发）
+ * - 文件提及补全（@ 前缀触发；仅插入路径文本，内容由模型自行读取）
  * - 内联选项选择
  * - 快捷键支持（Enter 发送、Ctrl+Enter 换行、Esc 关闭）
  * - 忙碌状态下的停止按钮
@@ -13,7 +14,7 @@
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { t, type UiLanguage } from '../i18n';
-import type { WebWorkspaceItem } from '../types/protocol';
+import type { FileMentionCandidate, WebWorkspaceItem } from '../types/protocol';
 
 /**
  * Web 端允许的 B 类指令集合（自动补全只显示这些）
@@ -33,6 +34,62 @@ export const WEB_COMMANDS = [
 
 /** 输入框最大高度（px）：内容超过后输入框内部滚动，不再继续撑大 */
 const MAX_TEXTAREA_HEIGHT = 240;
+
+/** @ 提及补全防抖间隔（ms）：连续输入时减少补全请求 */
+const MENTION_DEBOUNCE_MS = 120;
+
+/**
+ * @ 提及 token（光标处正在输入的提及片段）
+ */
+interface MentionToken {
+  /** '@' 字符在文本中的下标 */
+  start: number;
+  /** 光标位置（token 结束边界） */
+  end: number;
+  /** 查询串：@ 之后、光标之前的路径片段（引号形式为引号内内容） */
+  query: string;
+  /** 是否以 @" 开启的引号形式（路径含空格时使用） */
+  quoted: boolean;
+}
+
+/**
+ * 检测光标处是否处于 @ 提及输入中。
+ *
+ * 规则：'@' 必须位于输入开头或空白字符之后（邮箱等文本不触发）；
+ * 未加引号时 token 内不允许空格；@" 开启的引号形式允许空格，
+ * 出现闭合引号即视为提及结束。
+ *
+ * @param text - 输入框全文
+ * @param pos - 光标位置
+ * @returns 提及 token；不在提及上下文返回 null
+ */
+export function detectMentionToken(text: string, pos: number): MentionToken | null {
+  const before = text.slice(0, pos);
+  const at = before.lastIndexOf('@');
+  if (at === -1) return null;
+  if (at > 0 && !/\s/.test(before[at - 1] ?? '')) return null;
+  const rest = before.slice(at + 1);
+  if (rest.startsWith('"')) {
+    if (rest.indexOf('"', 1) !== -1) return null; // 引号已闭合：提及结束
+    return { start: at, end: pos, query: rest.slice(1), quoted: true };
+  }
+  if (/\s/.test(rest)) return null; // 未引号形式不允许空格
+  return { start: at, end: pos, query: rest, quoted: false };
+}
+
+/**
+ * 格式化提及插入文本：
+ * 路径含空格或引号时用 @"..." 形式；目录保留尾部 / 继续下钻，
+ * 文件追加空格闭合 token。
+ *
+ * @param candidate - 选中的候选
+ * @returns 插入到输入框的完整文本
+ */
+export function formatMentionInsertion(candidate: FileMentionCandidate): string {
+  const needsQuote = /[\s"]/.test(candidate.path);
+  if (candidate.kind === 'dir') return needsQuote ? `@"${candidate.path}/` : `@${candidate.path}/`;
+  return needsQuote ? `@"${candidate.path}" ` : `@${candidate.path} `;
+}
 
 /**
  * 内联选项接口
@@ -104,6 +161,10 @@ interface PromptInputProps {
   initialDraft?: string;
   /** 消费初始草稿后的回调（父组件据此清空持久化草稿，避免残留影响下次会话） */
   onConsumeInitialDraft?: (draft: string) => void;
+  /** @ 提及补全最近一次结果（requestId 不匹配视为过期丢弃；null = 尚无结果） */
+  fileMentionResult?: { requestId: string; query: string; candidates: FileMentionCandidate[] } | null;
+  /** 拉取 @ 提及补全候选（query 为 @ 后路径片段） */
+  onRequestFileMentions?: (query: string, requestId: string) => void;
   /** 当前展开的唯一下拉标识（plus/ws 或 Toolbar 的 mode/model/effort），null 表示全部收起 */
   activeMenu: string | null;
   /** 菜单展开/收起回调（打开时传 key，收起时传 null），用于和 Toolbar 下拉互斥收起 */
@@ -123,7 +184,7 @@ export interface PromptInputHandle {
   setDraft: (text: string) => void;
 }
 
-const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function PromptInput({ lang, busy, stopping, hasActiveTasks, connected, commands, onSubmit, onStop, inlineOptions, onInlineSelect, onInlineClose, workspaces, activeCwd, welcomeVisible, onPickWorkspace, onAddWorkspace, onManageWorkspaces, children, initialDraft, onConsumeInitialDraft, activeMenu, onMenuOpen }, ref) {
+const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function PromptInput({ lang, busy, stopping, hasActiveTasks, connected, commands, onSubmit, onStop, inlineOptions, onInlineSelect, onInlineClose, workspaces, activeCwd, welcomeVisible, onPickWorkspace, onAddWorkspace, onManageWorkspaces, children, initialDraft, onConsumeInitialDraft, fileMentionResult, onRequestFileMentions, activeMenu, onMenuOpen }, ref) {
   const [value, setValue] = useState(initialDraft ?? '');
 
   // 挂载时若携带初始草稿（欢迎界面重挂载回填），通知父组件消费清空，避免残留
@@ -142,6 +203,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
   useImperativeHandle(ref, () => ({
     setDraft: (text: string) => {
       setValue(text);
+      setCaret(text.length);
       // 回填草稿：聚焦、光标移到末尾，按内容撑高并滚动到底部
       requestAnimationFrame(() => {
         const ta = textareaRef.current;
@@ -222,9 +284,76 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
     }
   }, [selectedIndex, showCommands]);
 
+  // === @ 提及补全（仅插入路径文本，不读内容） ===
+  const [caret, setCaret] = useState(0);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [acceptedMentionReqId, setAcceptedMentionReqId] = useState<string | null>(null);
+  const [mentionDismissed, setMentionDismissed] = useState(false);
+  const mentionReqIdRef = useRef(0);
+  const mentionListRef = useRef<HTMLDivElement>(null);
+
+  // 光标处提及 token 检测（输入/点击/方向键移动光标都会触发重算）
+  const mentionToken = useMemo(() => detectMentionToken(value, caret), [value, caret]);
+  const tokenKey = mentionToken ? `${mentionToken.start}:${mentionToken.query}` : null;
+
+  // token 变化时防抖拉取候选；token 消失自动收起菜单；Esc 关闭后继续输入自动重新武装
+  useEffect(() => { setMentionDismissed(false); }, [tokenKey]);
+  useEffect(() => {
+    if (!tokenKey || !onRequestFileMentions) return;
+    const timer = setTimeout(() => {
+      const rid = `m${++mentionReqIdRef.current}`;
+      setAcceptedMentionReqId(rid);
+      onRequestFileMentions(tokenKey.slice(tokenKey.indexOf(':') + 1), rid);
+    }, MENTION_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [tokenKey, onRequestFileMentions]);
+
+  useEffect(() => { if (!mentionToken) setMentionIndex(0); }, [mentionToken]);
+
+  // 仅采纳最新请求的响应，并按当前 query 二次过滤（防抖窗口内的旧结果避免闪烁）
+  const mentionCandidates = useMemo(() => {
+    if (!fileMentionResult || fileMentionResult.requestId !== acceptedMentionReqId) return [] as FileMentionCandidate[];
+    const q = (mentionToken?.query ?? '').toLowerCase();
+    return q ? fileMentionResult.candidates.filter((c) => c.path.toLowerCase().includes(q)) : fileMentionResult.candidates;
+  }, [fileMentionResult, acceptedMentionReqId, mentionToken]);
+  const showMentionMenu = mentionToken !== null && !mentionDismissed && mentionCandidates.length > 0 && !inlineOptions;
+
+  useEffect(() => {
+    if (showMentionMenu && mentionListRef.current) {
+      mentionListRef.current.children[mentionIndex]?.scrollIntoView({ block: 'nearest' });
+    }
+  }, [mentionIndex, showMentionMenu]);
+
+  // 点击输入卡片外部时收起 @ 提及菜单（点击内部交由光标/token 检测自然处理）
+  useEffect(() => {
+    if (!showMentionMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setMentionDismissed(true);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showMentionMenu]);
+
+  /** 应用选中的提及候选：替换 @token 为提及文本；目录保留尾部 / 继续下钻 */
+  const applyMention = useCallback((candidate: FileMentionCandidate) => {
+    const ta = textareaRef.current;
+    if (!ta || !mentionToken) return;
+    const insertion = formatMentionInsertion(candidate);
+    const nextCaret = mentionToken.start + insertion.length;
+    setValue((prev) => prev.slice(0, mentionToken.start) + insertion + prev.slice(mentionToken.end));
+    setCaret(nextCaret);
+    requestAnimationFrame(() => {
+      ta.focus();
+      ta.setSelectionRange(nextCaret, nextCaret);
+    });
+  }, [mentionToken]);
+
   const handleChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newValue = e.target.value;
     setValue(newValue);
+    setCaret(e.target.selectionStart ?? newValue.length);
     onMenuOpen(null);
     setShowCommands(newValue.startsWith('/') && newValue.length > 0 && filteredCommands.length > 0 && !inlineOptions);
   }, [filteredCommands.length, inlineOptions, onMenuOpen]);
@@ -267,6 +396,31 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
         return;
       }
 
+      // @ 提及补全模式（优先级在内联选项之后、斜杠补全之前）
+      if (showMentionMenu) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          setMentionIndex((i) => Math.min(i + 1, mentionCandidates.length - 1));
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          setMentionIndex((i) => Math.max(i - 1, 0));
+          return;
+        }
+        if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+          e.preventDefault();
+          const picked = mentionCandidates[mentionIndex];
+          if (picked) applyMention(picked);
+          return;
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          setMentionDismissed(true);
+          return;
+        }
+      }
+
       // 自动补全模式
       if (showCommands) {
         if (e.key === 'ArrowDown') {
@@ -302,6 +456,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
           const end = target.selectionEnd;
           const newValue = value.slice(0, start) + '\n' + value.slice(end);
           setValue(newValue);
+          setCaret(start + 1);
           requestAnimationFrame(() => {
             target.selectionStart = target.selectionEnd = start + 1;
             // 高度由 useLayoutEffect 撑高；光标在末尾附近时滚到底部，便于看到新行
@@ -323,7 +478,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
         onMenuOpen(null);
       }
     },
-    [value, busy, connected, onSubmit, showCommands, filteredCommands, selectedIndex, selectCommand, inlineOptions, onInlineSelect, onInlineClose, onMenuOpen, noWorkspaceOnWelcome],
+    [value, busy, connected, onSubmit, showCommands, filteredCommands, selectedIndex, selectCommand, inlineOptions, onInlineSelect, onInlineClose, onMenuOpen, noWorkspaceOnWelcome, showMentionMenu, mentionCandidates, mentionIndex, applyMention],
   );
 
   const handleSend = () => {
@@ -372,6 +527,44 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
         </div>
       )}
 
+      {/* @ 提及补全弹窗（与斜杠命令弹窗同位置同样式；标题沿用英文 uppercase 惯例） */}
+      {showMentionMenu && (
+        <div
+          ref={mentionListRef}
+          className="absolute bottom-full left-0 right-0 mb-1 glass-surface rounded-3xl max-h-56 overflow-y-auto py-1.5 z-20 scrollbar-hidden"
+        >
+          <div className="px-3 py-1.5 text-[10px] text-content-disabled font-semibold uppercase tracking-widest">Files</div>
+          {mentionCandidates.map((c, idx) => {
+            const name = c.path.split('/').pop() || c.path;
+            const dir = c.kind === 'dir';
+            return (
+              <button
+                key={c.path}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => applyMention(c)}
+                title={c.path}
+                className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors cursor-pointer animate-fade rounded-md ${
+                  idx === mentionIndex ? 'glass-option-active text-content-primary' : 'text-content-secondary glass-option-hover'
+                }`}
+              >
+                {dir ? (
+                  <svg className="w-3.5 h-3.5 shrink-0 text-primary/70" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M1.5 4.5v7a1.5 1.5 0 001.5 1.5h10a1.5 1.5 0 001.5-1.5V6.5a1.5 1.5 0 00-1.5-1.5H8L6.4 3.1a1.5 1.5 0 00-1.1-.6H3a1.5 1.5 0 00-1.5 1.5v.5z" />
+                  </svg>
+                ) : (
+                  <svg className="w-3.5 h-3.5 shrink-0 text-primary/70" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M4 1.5h5L13 5v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2.5a1 1 0 011-1z" />
+                    <path d="M9 1.5V5h4" />
+                  </svg>
+                )}
+                <span className={`truncate flex-1 text-left font-mono ${dir ? '' : 'text-content-primary'}`}>{c.path}</span>
+                <span className="text-xs text-content-disabled shrink-0">{name}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* + 号 / 斜杠共用的命令弹窗（同一位置、同一样式） */}
       {showMenu && (
         <div
@@ -401,6 +594,8 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
           value={value}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
+          // 点击/方向键移动光标时同步 caret 状态，驱动提及 token 重算（移出 token 自动收起菜单）
+          onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
           placeholder={connected ? (activeCwd ? t(lang, 'input_placeholder') : t(lang, 'input_placeholder_no_cwd')) : t(lang, 'disconnected')}
           rows={1}
           disabled={!connected}
