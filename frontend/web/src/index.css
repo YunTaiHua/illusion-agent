@@ -196,11 +196,13 @@ html {
 body {
   font-family: 'Inter', 'Inter Fallback', system-ui, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
   font-feature-settings: 'cv01', 'ss01', 'ss03';
-  /* 简约高级：冷灰底 + 亮高光，明暗对比拉大供 backdrop-filter 磨出清晰层次 */
+  /* 简约高级：冷灰底 + 左上→右下轻微线性渐变（单层渐变，无 radial 双层交叠的断层感）。
+     浅色高光用微亮灰白而非纯白，与玻璃边栏（半透明白）保持可辨对比 */
   background-color: var(--body-bg, #e9ecf2);
-  background-image:
-    radial-gradient(at 0% 0%, var(--body-bg-highlight, #ffffff) 0%, transparent 55%),
-    radial-gradient(at 100% 100%, var(--body-bg-shadow, #dfe3ec) 0%, transparent 60%);
+  background-image: linear-gradient(135deg,
+    var(--body-bg-highlight, #f5f6f9) 0%,
+    var(--body-bg, #e9ecf2) 45%,
+    var(--body-bg-shadow, #cbd1dc) 100%);
   background-attachment: fixed;
   color: var(--text-primary);
   min-height: 100vh;
@@ -210,8 +212,9 @@ body {
 /* 深色模式 body 背景（合并到上方 :root.dark 块的补充变量） */
 :root.dark {
   --body-bg: #161618;
-  --body-bg-highlight: #26262b;
-  --body-bg-shadow: #101012;
+  /* 色差拉开（左上 #26262c / 右下 #0e0e11），单层线性渐变平滑无断层 */
+  --body-bg-highlight: #26262c;
+  --body-bg-shadow: #0e0e11;
   --code-header-bg: #28282e;
   --code-block-bg: #18181c;
   /* 玻璃交互态（深色版：浅色半透明叠加在深底上） */
@@ -963,24 +966,66 @@ pre code.hljs,
 .dropdown-panel > button { border-radius: inherit; }
 .dropdown-panel > button:hover { border-color: var(--border-light); }
 
-/* ========== 欢迎屏标题样式（静态渐变文字，无动画） ========== */
+/* ========== 欢迎屏标题样式 ========== */
 
-/* 渐变文字 — GradientText（保留三色渐变样式，取消流动动画） */
+/* 渐变文字 — GradientText（三色渐变，静态；
+   浅色主题：沿用深色主题的粉彩三色（青/紫/珊瑚），50% 闪光带用柔粉替代白；
+   in oklch 感知色彩空间插值：相邻色沿色相环路径过渡，
+   避免 sRGB 空间下紫↔橙互补混色的浑浊灰带；
+   深色主题沿用 --primary/--secondary/--accent + 白闪光带（sRGB 插值，原样保留） */
 .gradient-text {
-  background: linear-gradient(90deg, var(--primary), var(--secondary), var(--accent), var(--primary));
-  background-size: 300% 100%;
+  /* 青/紫 双色对称渐变（oklch 插值，过渡沿色相环干净路径） */
+  background: linear-gradient(120deg in oklch,
+    #2ba79e 0%,
+    #8e83c4 50%,
+    #2ba79e 100%);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+:root.dark .gradient-text {
+  background: linear-gradient(120deg,
+    var(--primary) 0%,
+    var(--secondary) 25%,
+    var(--accent) 40%,
+    rgba(255, 255, 255, 0.65) 50%,
+    var(--accent) 60%,
+    var(--secondary) 75%,
+    var(--primary) 100%);
+  background-size: 200% auto;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
-/* 闪光扫过文字 — ShinyText（保留灰度渐变样式，取消闪光动画） */
+/* 闪光扫过文字 — ShinyText（灰度渐变，静态；鼠标扫过标题时同步扫描）
+   亮带置于渐变 60% 处：静态视野（background-position 0% → 渐变 [0%,50%]）内
+   全部为 --text-disabled 中灰，行尾字母清晰；闪光时亮带才进入视野扫过 */
 .shiny-text {
-  background: linear-gradient(120deg, var(--text-disabled) 0%, var(--text-disabled) 36%, var(--border-light) 50%, var(--text-disabled) 64%, var(--text-disabled) 100%);
+  background: linear-gradient(120deg,
+    var(--text-disabled) 0%,
+    var(--text-disabled) 55%,
+    var(--border-light) 60%,
+    var(--text-disabled) 65%,
+    var(--text-disabled) 100%);
   background-size: 200% auto;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+}
+
+/* 点击触发的一次性闪光扫描：background-position 从 200% 平移到 0%，
+   恰好平移一个渐变周期（background-repeat 平铺下 200% 与 0% 视觉一致），
+   无缝衔接静态样式且只扫过一轮；主标题/副标题共用同动画同频触发。
+   注：prefers-reduced-motion 下由全局规则降级为 0.01ms 瞬时动画，
+   不使用 animation: none（否则 animationend 不触发，React 状态无法复位） */
+.flash-once {
+  animation: shiny-sweep-once 2.5s ease-in-out;
+}
+@keyframes shiny-sweep-once {
+  0%   { background-position: 200% center; }
+  100% { background-position: 0% center; }
 }
 
 @media (prefers-reduced-motion: reduce) {

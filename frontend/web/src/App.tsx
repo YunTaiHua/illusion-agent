@@ -73,6 +73,21 @@ export default function App() {
       setRevealReady(true);
     }
   }, [session.connected, session.bootstrapping]);
+
+  // 遮罩淡出：条件满足后不立即卸载，先播 fade-out 动画（150ms，与
+  // tailwind animate-fade-out 时长一致），动画期间放行下层交互，
+  // 结束后再真正卸载，避免遮罩"闪没"的生硬感
+  const overlayVisible = !session.connected || session.bootstrapping || !revealReady;
+  const [overlayMounted, setOverlayMounted] = useState(overlayVisible);
+  useEffect(() => {
+    if (overlayVisible) {
+      setOverlayMounted(true);
+      return;
+    }
+    if (!overlayMounted) return;
+    const timer = setTimeout(() => setOverlayMounted(false), 150);
+    return () => clearTimeout(timer);
+  }, [overlayVisible, overlayMounted]);
   const lang: UiLanguage = useMemo(
     () => normalizeLanguage(session.status?.ui_language),
     [session.status?.ui_language],
@@ -1329,10 +1344,11 @@ export default function App() {
       )}
 
       {/* 全屏遮罩层：仅覆盖连接未建立 / 首帧引导（首个会话内容未呈现）期间，
-          首个会话内容呈现完成后褪去。会话恢复不再走全屏遮罩——由 ChatArea 的
-          局部加载卡承担反馈，侧栏/右栏保持可见可交互，避免切换会话时整屏闪烁。
-          避免"连接 → 欢迎 → 恢复 → 欢迎"的时序翻转在未就绪时露出主界面。 */}
-      {(!session.connected || session.bootstrapping || !revealReady) && <ConnectingOverlay lang={lang} />}
+          首个会话内容呈现完成后先播淡出动画再卸载。会话恢复不再走全屏遮罩——
+          由 ChatArea 的局部加载卡承担反馈，侧栏/右栏保持可见可交互，避免切换
+          会话时整屏闪烁。避免"连接 → 欢迎 → 恢复 → 欢迎"的时序翻转在未就绪时
+          露出主界面。 */}
+      {overlayMounted && <ConnectingOverlay lang={lang} fading={!overlayVisible} />}
       {/* 应用内图片预览（Lightbox）：点击 markdown 图片/图片链接时打开 */}
       <ImagePreview lang={lang} />
       {/* 文件预览弹窗：停靠列"弹窗查看"按钮触发放大形态；关闭返回停靠列 */}

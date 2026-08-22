@@ -5,7 +5,7 @@
  * 零外部依赖，纯 SVG + CSS 动画。
  *
  * 视觉：莫比乌斯环 — 一条连续的光带沿路径流动，
- * 渐变色彩取自欢迎界面（primary 青绿 → secondary 淡紫 → accent 珊瑚橙）。
+ * 渐变色彩为浅色主题的青紫两色循环，无光晕，遮罩底色保持白色。
  * 整体缓慢呼吸缩放，象征"持续连接、无限循环"。
  *
  * @module ConnectingOverlay
@@ -19,6 +19,8 @@ import type { UiLanguage } from '../i18n';
 interface ConnectingOverlayProps {
   /** 当前 UI 语言（用于无障碍 aria-label 国际化） */
   lang: UiLanguage;
+  /** 淡出中：播放退出动画并放行下层交互（父组件在动画结束后卸载本组件） */
+  fading?: boolean;
 }
 
 /**
@@ -43,32 +45,26 @@ const MOBIUS_PATH = [
  * @param props - 组件属性
  * @returns 遮罩层 JSX 元素
  */
-export default function ConnectingOverlay({ lang }: ConnectingOverlayProps) {
+export default function ConnectingOverlay({ lang, fading }: ConnectingOverlayProps) {
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-[#ffffff]/95 backdrop-blur-2xl animate-fade-in"
+      className={`fixed inset-0 z-[60] flex items-center justify-center bg-[#ffffff]/95 backdrop-blur-2xl ${fading ? 'animate-fade-out pointer-events-none' : 'animate-fade-in'}`}
       aria-label={lang === 'zh-CN' ? '正在连接...' : 'Connecting...'}
       role="status"
     >
-      {/* 莫比乌斯环 — 整体呼吸 pulse：scale 1↔1.08，opacity 0.9↔1，2.5s */}
-      <svg
-        width="112"
-        height="112"
-        viewBox="0 0 80 80"
-        className="animate-pulse-soft"
-        style={{ filter: 'drop-shadow(0 0 6px rgba(42,157,153,0.35))' }}
-      >
-        {/* 定义流动渐变：青绿→紫→珊瑚三色循环 */}
+      {/* 莫比乌斯环 — 整体呼吸 pulse：scale 1↔1.08，opacity 0.9↔1，2.5s（无光晕） */}
+      <svg width="112" height="112" viewBox="0 0 80 80" className="animate-pulse-soft">
+        {/* 定义流动渐变：浅色主题青紫两色循环 */}
         <defs>
           <linearGradient id="mobi-grad" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#2a9d99">
-              <animate attributeName="stop-color" values="#2a9d99;#7c6fb0;#e8856c;#2a9d99" dur="4s" repeatCount="indefinite" />
+            <stop offset="0%" stopColor="#2ba79e">
+              <animate attributeName="stop-color" values="#2ba79e;#8e83c4;#2ba79e" dur="4s" repeatCount="indefinite" />
             </stop>
-            <stop offset="50%" stopColor="#7c6fb0">
-              <animate attributeName="stop-color" values="#7c6fb0;#e8856c;#2a9d99;#7c6fb0" dur="4s" repeatCount="indefinite" />
+            <stop offset="50%" stopColor="#8e83c4">
+              <animate attributeName="stop-color" values="#8e83c4;#2ba79e;#8e83c4" dur="4s" repeatCount="indefinite" />
             </stop>
-            <stop offset="100%" stopColor="#e8856c">
-              <animate attributeName="stop-color" values="#e8856c;#2a9d99;#7c6fb0;#e8856c" dur="4s" repeatCount="indefinite" />
+            <stop offset="100%" stopColor="#2ba79e">
+              <animate attributeName="stop-color" values="#2ba79e;#8e83c4;#2ba79e" dur="4s" repeatCount="indefinite" />
             </stop>
           </linearGradient>
         </defs>

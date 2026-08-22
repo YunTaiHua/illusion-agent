@@ -160,8 +160,8 @@ app.whenReady().then(async () => {
   // 后台启动可能耗时（运行时检测 + Python 初始化），若等后端就绪再建窗，
   // 用户会长时间看到"空白/无响应"，造成"启动很慢"的体感。故先把窗口
   // 亮出来并展示本地加载页，后端就绪后再切换到应用 URL。
-  // 加载页视觉复刻 web 端 ConnectedOverlay 的莫比乌斯环遮罩（青绿→淡紫→
-  // 珊瑚渐变光带 + 呼吸缩放），保证与启动后的应用 UI 谐和统一。
+  // 加载页视觉复刻 web 端 ConnectingOverlay 的莫比乌斯环遮罩（白色底 +
+  // 浅色主题青紫两色光带 + 呼吸缩放，无光晕），保证与启动后的应用 UI 谐和统一。
   mainWindow = createWindow();
   mainWindow.loadURL(
     'data:text/html;charset=utf-8,' +
@@ -169,7 +169,7 @@ app.whenReady().then(async () => {
         `<!DOCTYPE html><html><head><style>
           html,body{margin:0;height:100%}
           body{display:flex;align-items:center;justify-content:center;background:#ffffff}
-          #mobi{animation:pulseSoft 2.5s ease-in-out infinite;filter:drop-shadow(0 0 6px rgba(42,157,153,.35))}
+          #mobi{animation:pulseSoft 2.5s ease-in-out infinite}
           #ring{fill:none;stroke-width:3.5;stroke-linecap:round;stroke-dasharray:100 28;animation:mobiFlow 1.8s linear infinite}
           @keyframes pulseSoft{0%,100%{transform:scale(1);opacity:.9}50%{transform:scale(1.08);opacity:1}}
           @keyframes mobiFlow{from{stroke-dashoffset:0}to{stroke-dashoffset:-128}}
@@ -177,9 +177,9 @@ app.whenReady().then(async () => {
           <svg id="mobi" width="112" height="112" viewBox="0 0 80 80">
             <defs>
               <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="0%">
-                <stop offset="0%" stop-color="#2a9d99"><animate attributeName="stop-color" values="#2a9d99;#7c6fb0;#e8856c;#2a9d99" dur="4s" repeatCount="indefinite"/></stop>
-                <stop offset="50%" stop-color="#7c6fb0"><animate attributeName="stop-color" values="#7c6fb0;#e8856c;#2a9d99;#7c6fb0" dur="4s" repeatCount="indefinite"/></stop>
-                <stop offset="100%" stop-color="#e8856c"><animate attributeName="stop-color" values="#e8856c;#2a9d99;#7c6fb0;#e8856c" dur="4s" repeatCount="indefinite"/></stop>
+                <stop offset="0%" stop-color="#2ba79e"><animate attributeName="stop-color" values="#2ba79e;#8e83c4;#2ba79e" dur="4s" repeatCount="indefinite"/></stop>
+                <stop offset="50%" stop-color="#8e83c4"><animate attributeName="stop-color" values="#8e83c4;#2ba79e;#8e83c4" dur="4s" repeatCount="indefinite"/></stop>
+                <stop offset="100%" stop-color="#2ba79e"><animate attributeName="stop-color" values="#2ba79e;#8e83c4;#2ba79e" dur="4s" repeatCount="indefinite"/></stop>
               </linearGradient>
             </defs>
             <path id="ring" stroke="url(#g)" d="${MOBIUS_PATH}"/>
