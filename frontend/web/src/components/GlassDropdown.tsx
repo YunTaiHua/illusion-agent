@@ -7,11 +7,12 @@
  *
  * 特性：
  * - 触发器为简洁输入风格（无玻璃），聚焦时外圈阴影散光
- * - 下拉面板使用 glass-surface 玻璃质感
+ * - 下拉面板使用实色卡片背景（bg-surface-card-alt），无玻璃模糊
  * - 通过 React Portal 渲染到 document.body，避免被父容器 overflow 裁剪
  * - 动态计算面板位置（基于触发器 getBoundingClientRect），支持滚动跟随
  * - 支持键盘导航（↑↓ 选择、Enter 确认、Esc 关闭）
  * - 点击外部自动关闭
+ * - 面板动画与输入区底部 ToolBar 下拉一致（animate-fade），滚动条隐藏
  *
  * @module GlassDropdown
  */
@@ -214,7 +215,7 @@ export function GlassDropdown({
       {open && panelPos && createPortal(
         <div
           ref={listRef}
-          className="fixed z-50 glass-surface rounded-lg max-h-56 overflow-y-auto py-1 animate-fade-in-up shadow-card"
+          className="fixed z-50 bg-surface-card-alt border border-border-medium rounded-lg max-h-56 overflow-y-auto p-1 animate-fade dropdown-scroll shadow-card dropdown-panel"
           style={{ top: `${panelPos.top}px`, left: `${panelPos.left}px`, width: `${panelPos.width}px` }}
         >
           {options.map((opt, idx) => {
@@ -225,9 +226,9 @@ export function GlassDropdown({
                 key={opt.value}
                 type="button"
                 onClick={() => handleSelect(opt.value)}
-                className={`w-full text-left px-3 py-1.5 text-sm transition-colors cursor-pointer flex items-center gap-2 ${
+                className={`w-full text-left px-3 py-2 border border-transparent hover:border-border-light text-sm transition-colors cursor-pointer flex items-center gap-2 ${
                   isSelected
-                    ? 'text-primary font-medium'
+                    ? 'text-primary font-medium glass-option-hover'
                     : isHighlighted
                       ? 'glass-option-active text-content-primary'
                       : 'text-content-secondary glass-option-hover'

@@ -758,7 +758,7 @@ function DeliverToPicker({ lang, channels, value, onChange }: DeliverToPickerPro
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute top-full left-0 mt-1 w-full glass-surface rounded-xl z-20 py-1.5 max-h-56 overflow-y-auto animate-scale-in dropdown-origin-top-left dropdown-scroll shadow-card">
+          <div className="absolute top-full left-0 mt-1 w-full bg-surface-card-alt border border-border-medium rounded-xl z-20 p-1 max-h-56 overflow-y-auto animate-fade dropdown-scroll shadow-card dropdown-panel">
             {totalCount === 0 ? (
               <div className="px-3 py-2 text-xs text-content-disabled">{t(lang, 'cronChannelSessionsNone')}</div>
             ) : (
@@ -777,7 +777,7 @@ function DeliverToPicker({ lang, channels, value, onChange }: DeliverToPickerPro
                         <button
                           key={target}
                           onClick={() => toggleTarget(target)}
-                          className={`w-full text-left px-3 py-1.5 text-xs transition-colors cursor-pointer flex items-center gap-2 ${checked ? 'text-primary font-medium' : 'text-content-secondary glass-option-hover'}`}
+                          className={`w-full text-left px-3 py-1.5 border border-transparent hover:border-border-light text-xs transition-colors cursor-pointer flex items-center gap-2 ${checked ? 'text-primary font-medium glass-option-hover' : 'text-content-secondary glass-option-hover'}`}
                         >
                           <span className={`w-3 h-3 rounded border shrink-0 flex items-center justify-center ${checked ? 'bg-primary border-primary' : 'border-border-light'}`}>
                             {checked && (

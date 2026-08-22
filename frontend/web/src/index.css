@@ -224,7 +224,7 @@ body {
   --pill-border: rgba(255, 255, 255, 0.1);
   --pill-hover-bg: rgba(255, 255, 255, 0.1);
   --pill-hover-border: rgba(255, 255, 255, 0.16);
-  --danger-hover: #f58888;
+  --danger-hover: #e5484d;
 }
 
 /* ========== 代码块样式 ========== */
@@ -945,13 +945,17 @@ pre code.hljs,
 }
 
 /* ========== 动画工具 ========== */
-.dropdown-origin-bottom-left { transform-origin: bottom left; }
-.dropdown-origin-top-left { transform-origin: top left; }
 .modal-origin-center { transform-origin: center; }
 
 /* 下拉菜单隐藏滚动条 */
 .dropdown-scroll::-webkit-scrollbar { display: none; }
 .dropdown-scroll { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* 下拉面板等距内边距 + 选项圆角继承面板；hover 边框由 unlayered 规则统一提供，
+   避免被 glass-option-active 的边框覆盖（与 model/mode 选中项 hover 行为一致） */
+.dropdown-panel { padding: 4px; }
+.dropdown-panel > button { border-radius: inherit; }
+.dropdown-panel > button:hover { border-color: var(--border-light); }
 
 /* ========== 欢迎屏标题样式（静态渐变文字，无动画） ========== */
 

@@ -535,14 +535,14 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
     <div className="relative px-3 pt-3" ref={containerRef}>
       {/* 内联选项 */}
       {showInline && (
-        <div className="absolute bottom-full left-3 right-3 mb-1 glass-surface rounded-2xl max-h-64 overflow-y-auto py-1.5 z-20">
+        <div className="absolute bottom-full left-3 right-3 mb-1 bg-surface-card-alt border border-border-medium rounded-2xl max-h-64 overflow-y-auto p-1 z-20 dropdown-scroll dropdown-panel">
           <div className="px-3 py-1.5 text-[10px] text-content-disabled font-semibold uppercase tracking-widest">{inlineOptions.title}</div>
           {inlineOptions.options.map((opt, idx) => (
             <button
               key={opt.value}
               onClick={() => onInlineSelect?.(inlineOptions.command, opt.value)}
-              className={`w-full text-left px-3 py-2 text-sm transition-colors cursor-pointer flex flex-col gap-0.5 rounded-md ${
-                idx === selectedIndex ? 'glass-option-active text-content-primary' : opt.active ? 'text-primary/70 glass-option-hover' : 'text-content-secondary glass-option-hover'
+              className={`w-full text-left px-3 py-2 border border-transparent hover:border-border-light text-sm transition-colors cursor-pointer flex flex-col gap-0.5 ${
+                idx === selectedIndex ? 'glass-option-active text-content-primary glass-option-hover' : opt.active ? 'text-primary/70 glass-option-hover' : 'text-content-secondary glass-option-hover'
               }`}
             >
               <span className="font-medium">{opt.label}</span>
@@ -556,16 +556,16 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
       {showMentionMenu && (
         <div
           ref={mentionListRef}
-          className="absolute bottom-full left-0 right-0 mb-1 glass-surface rounded-3xl max-h-56 overflow-y-auto py-1.5 z-20 scrollbar-hidden"
+          className="absolute bottom-full left-0 right-0 mb-1 bg-surface-card-alt border border-border-medium rounded-3xl max-h-56 overflow-y-auto p-1 z-20 scrollbar-hidden dropdown-panel"
         >
           {mentionSkillCount > 0 && (
-            <div className="px-3 py-1.5 text-[10px] text-content-disabled font-semibold uppercase tracking-widest text-center">Skills</div>
+            <div className="px-3 py-1.5 text-[10px] text-content-disabled font-semibold uppercase tracking-widest text-center border-b border-border-light mb-1">Skills</div>
           )}
           {mentionCandidates.map((c, idx) => {
             // 文件区标题在首个文件行处渲染（有技能区时在其后，无技能区时在列表头）
             if (c.kind !== 'skill' && idx === (mentionSkillCount > 0 ? mentionSkillCount : 0)) {
               return (
-                <div key="section-files" className="px-3 pt-2 pb-1 text-[10px] text-content-disabled font-semibold uppercase tracking-widest text-center border-t border-border-light mt-1">Files</div>
+                <div key="section-files" className={`px-3 pt-2 pb-1 text-[10px] text-content-disabled font-semibold uppercase tracking-widest text-center ${mentionSkillCount > 0 ? 'border-t border-border-light mt-1' : ''} border-b border-border-light mb-1`}>Files</div>
               );
             }
             // 行索引与渲染 idx 解耦：分区标题占掉 idx 但不算行，否则标题后所有行
@@ -581,8 +581,8 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => applyMention(c)}
                 title={c.path}
-                className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors cursor-pointer animate-fade rounded-md ${
-                  rowIdx === mentionIndex ? 'glass-option-active text-content-primary' : 'text-content-secondary glass-option-hover'
+                className={`w-full flex items-center gap-2 px-3 py-2 border border-transparent hover:border-border-light text-sm transition-colors cursor-pointer animate-fade ${
+                  rowIdx === mentionIndex ? 'glass-option-active text-content-primary glass-option-hover' : 'text-content-secondary glass-option-hover'
                 }`}
               >
                 {dir ? (
@@ -617,20 +617,20 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
       {showMenu && (
         <div
           ref={listRef}
-          className="absolute bottom-full left-0 right-0 mb-1 glass-surface rounded-3xl max-h-56 overflow-y-auto py-1.5 z-20 scrollbar-hidden"
+          className="absolute bottom-full left-0 right-0 mb-1 bg-surface-card-alt border border-border-medium rounded-3xl max-h-56 overflow-y-auto p-1 z-20 scrollbar-hidden dropdown-panel"
         >
-          <div className="px-3 py-1.5 text-[10px] text-content-disabled font-semibold uppercase tracking-widest text-center">Commands</div>
+          <div className="px-3 py-1.5 text-[10px] text-content-disabled font-semibold uppercase tracking-widest text-center border-b border-border-light mb-1">Commands</div>
           {menuCommands.map((cmd, idx) => (
             <button
               key={cmd}
               data-command-row
               onClick={() => selectCommand(cmd)}
-              className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors cursor-pointer animate-fade rounded-md ${
-                (!plusOpen && idx === selectedIndex) ? 'glass-option-active text-content-primary' : 'text-content-secondary glass-option-hover'
+              className={`w-full flex items-center gap-2 px-3 py-2 border border-transparent hover:border-border-light text-sm transition-colors cursor-pointer animate-fade ${
+                (!plusOpen && idx === selectedIndex) ? 'glass-option-active text-content-primary glass-option-hover' : 'text-content-secondary glass-option-hover'
               }`}
             >
-              <span className="font-mono shrink-0">{cmd}</span>
-              <span className="text-xs text-content-disabled truncate flex-1 text-left">{t(lang, `cmd_${cmd.slice(1).replace(/-/g, '_')}`)}</span>
+              <span className="font-mono truncate flex-1 text-left">{cmd}</span>
+              <span className="text-xs text-content-disabled shrink-0 max-w-[45%] truncate">{t(lang, `cmd_${cmd.slice(1).replace(/-/g, '_')}`)}</span>
             </button>
           ))}
         </div>
@@ -676,6 +676,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
             className={`pill-badge w-8 h-8 flex items-center justify-center rounded-full transition-colors cursor-pointer select-none ${
               plusOpen ? 'text-primary' : 'text-content-secondary hover:text-content-primary'
             }`}
+            style={{ borderColor: 'var(--border-medium)' }}
           >
             <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
               <path d="M8 3v10M3 8h10" />
@@ -692,6 +693,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
               className={`pill-badge flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-full transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed select-none ${
                 wsOpen ? 'text-primary' : 'text-content-secondary hover:text-content-primary'
               }`}
+              style={{ borderColor: 'var(--border-medium)' }}
             >
               <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M1.5 4.5v7a1.5 1.5 0 001.5 1.5h10a1.5 1.5 0 001.5-1.5V6.5a1.5 1.5 0 00-1.5-1.5H8L6.4 3.1a1.5 1.5 0 00-1.1-.6H3a1.5 1.5 0 00-1.5 1.5v.5z" />
@@ -701,7 +703,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
               </span>
             </button>
             {wsOpen && (
-              <div className="absolute bottom-full left-0 mb-1 glass-surface rounded-2xl z-20 min-w-[260px] max-w-[380px] py-1.5 max-h-[40vh] overflow-y-auto dropdown-scroll">
+              <div className="absolute bottom-full left-0 mb-1 bg-surface-card-alt border border-border-medium rounded-2xl z-20 min-w-[260px] max-w-[380px] p-1 max-h-[40vh] overflow-y-auto dropdown-scroll dropdown-panel">
                 {/* 标题与 ToolBar 下拉一致：英文、10px、uppercase、居中，无截断 */}
                 <div className="px-3 py-1.5 text-[10px] text-content-disabled font-semibold uppercase tracking-widest text-center border-b border-border-light mb-1">New session in</div>
                 {(workspaces ?? []).map((ws) => {
@@ -711,8 +713,8 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
                       key={ws.path}
                       onClick={() => { onMenuOpen(null); onPickWorkspace?.(ws.path); }}
                       title={ws.path}
-                      className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors cursor-pointer rounded-md animate-fade ${
-                        isActive ? 'text-primary font-medium' : 'text-content-secondary glass-option-hover'
+                      className={`w-full flex items-center gap-2 px-3 py-2 border border-transparent hover:border-border-light text-sm transition-colors cursor-pointer animate-fade ${
+                        isActive ? 'text-primary font-medium glass-option-hover' : 'text-content-secondary glass-option-hover'
                       } ${!ws.available ? 'opacity-50' : ''}`}
                     >
                       <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
@@ -729,7 +731,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
                   );
                 })}
                 {wsAddMode ? (
-                  <div className="px-2.5 py-2 border-t border-border-light mt-1">
+                  <div className="px-2.5 py-2">
                     <div className="flex items-center gap-1.5">
                       <input
                         ref={wsInputRef}
@@ -760,7 +762,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
                 ) : (
                   <button
                     onClick={() => { setWsAddMode(true); requestAnimationFrame(() => wsInputRef.current?.focus()); }}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-content-secondary glass-option-hover transition-colors cursor-pointer rounded-md border-t border-border-light mt-1"
+                    className="w-full flex items-center gap-2 px-3 py-2 border border-transparent hover:border-border-light text-sm text-content-secondary glass-option-hover transition-colors cursor-pointer"
                   >
                     <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M8 3v10M3 8h10" />
@@ -771,7 +773,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
                 {onManageWorkspaces && (
                   <button
                     onClick={() => { onMenuOpen(null); onManageWorkspaces(); }}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-content-secondary glass-option-hover transition-colors cursor-pointer rounded-md"
+                    className="w-full flex items-center gap-2 px-3 py-2 border border-transparent hover:border-border-light text-sm text-content-secondary glass-option-hover transition-colors cursor-pointer"
                   >
                     <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <circle cx="12" cy="12" r="3" />

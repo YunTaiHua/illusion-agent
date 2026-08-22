@@ -101,7 +101,8 @@ function Dropdown({ value, matchValue, placeholder, options, onChange, onOpen, l
   return (
     <div ref={wrapRef} className="relative select-none min-w-0" onBlur={(e) => { if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget as Node)) { onOpenChange(false); } }}>
       <button title={displayValue} onClick={() => { if (!open && onOpen) onOpen(); onOpenChange(!open); }}
-        className={`pill-badge flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-full cursor-pointer transition-colors min-w-0 ${open ? 'text-primary' : 'text-content-secondary hover:text-content-primary'}`}>
+        className={`pill-badge flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-full cursor-pointer transition-colors min-w-0 ${open ? 'text-primary' : 'text-content-secondary hover:text-content-primary'}`}
+        style={{ borderColor: 'var(--border-medium)' }}>
         {loading ? (
           <svg className="animate-spin w-3.5 h-3.5 text-primary flex-shrink-0" viewBox="0 0 24 24" fill="none">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
@@ -115,13 +116,13 @@ function Dropdown({ value, matchValue, placeholder, options, onChange, onOpen, l
         )}
       </button>
       {open && (
-        <div className="absolute bottom-full left-0 mb-1 glass-surface rounded-2xl z-20 min-w-[160px] py-1.5 max-h-[40vh] overflow-y-auto dropdown-scroll">
+        <div className="absolute bottom-full left-0 mb-1 bg-surface-card-alt border border-border-medium rounded-2xl z-20 min-w-[160px] p-1 max-h-[40vh] overflow-y-auto dropdown-scroll dropdown-panel">
           {title && <div className="px-3 py-1.5 text-[10px] text-content-disabled font-semibold uppercase tracking-widest border-b border-border-light mb-1 text-center">{title}</div>}
           {options.map((opt) => {
             const active = isActive(opt);
             return (
               <button key={opt.value} onClick={() => { onChange(opt.value); onOpenChange(false); }}
-                className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-sm glass-option-hover transition-colors cursor-pointer animate-fade ${active ? 'text-primary font-medium' : 'text-content-secondary'}`}>
+                className={`w-full flex items-center justify-between gap-2 px-3 py-2 border border-transparent hover:border-border-light text-sm glass-option-hover transition-colors cursor-pointer animate-fade ${active ? 'text-primary font-medium' : 'text-content-secondary'}`}>
                 <span className="truncate">{opt.label}</span>
                 {active && (
                   <svg className="w-4 h-4 text-primary shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
