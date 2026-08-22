@@ -139,23 +139,23 @@ def test_cleanup_old_plans_missing_dir(tmp_path: Path):
     assert cleanup_old_plans(tmp_path / "no-plans") == 0
 
 
-def test_run_plans_cleanup_once_runs_only_once(tmp_path: Path):
+def test_run_plans_cleanup_once_runs_only_once(tmp_path: Path, monkeypatch):
     """run_plans_cleanup_once 每进程只清理一次。"""
     import illusion.utils.log_cleanup as _lc
+
+    # 前序测试经 build_runtime 触发过 once 标志时会污染本测试的初始状态，
+    # 先显式重置保证从「未清理」状态开始（monkeypatch 结束时自动还原）
+    monkeypatch.setattr(_lc, "_plans_cleanup_done", False)
 
     old_plan = tmp_path / "old.md"
     _make_old_file(old_plan, age_days=10)
 
-    try:
-        # 首次调用执行清理
-        assert run_plans_cleanup_once(tmp_path) == 1
-        assert not old_plan.exists()
+    # 首次调用执行清理
+    assert run_plans_cleanup_once(tmp_path) == 1
+    assert not old_plan.exists()
 
-        # 再次放入旧文件，二次调用应被 once 标志拦截，不再清理
-        second = tmp_path / "second.md"
-        _make_old_file(second, age_days=10)
-        assert run_plans_cleanup_once(tmp_path) == 0
-        assert second.exists()
-    finally:
-        # 重置 once 标志，避免污染同进程后续测试
-        _lc._plans_cleanup_done = False
+    # 再次放入旧文件，二次调用应被 once 标志拦截，不再清理
+    second = tmp_path / "second.md"
+    _make_old_file(second, age_days=10)
+    assert run_plans_cleanup_once(tmp_path) == 0
+    assert second.exists()
