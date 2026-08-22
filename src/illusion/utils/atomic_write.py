@@ -18,7 +18,28 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 from pathlib import Path
+
+# os.replace 重试参数：Windows 上目标文件可能被其他进程短暂占用
+# （杀毒软件实时扫描、编辑器索引、并发的原子写入竞争），导致 WinError 5。
+_REPLACE_RETRIES: int = 3
+_REPLACE_BASE_DELAY: float = 0.1  # 指数退避：0.1s / 0.2s / 0.4s
+
+
+def _replace_with_retry(tmp_path: str, target: str) -> None:
+    """原子替换目标文件，失败时指数退避重试。
+
+    仅重试 OSError（含 WinError 5 权限拒绝），最终失败时抛出原异常。
+    """
+    for attempt in range(_REPLACE_RETRIES):
+        try:
+            os.replace(tmp_path, target)
+            return
+        except OSError:
+            if attempt == _REPLACE_RETRIES - 1:
+                raise
+            time.sleep(_REPLACE_BASE_DELAY * (2**attempt))
 
 
 def atomic_write_text(
@@ -49,7 +70,7 @@ def atomic_write_text(
             f.write(content)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp_path, str(path))
+        _replace_with_retry(tmp_path, str(path))
     except BaseException:
         # 写入失败时清理临时文件
         try:

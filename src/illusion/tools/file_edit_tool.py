@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import os
 from difflib import unified_diff
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
@@ -93,6 +94,22 @@ Usage:
 - Use the smallest old_string that's clearly unique — usually 2-4 adjacent lines is sufficient. Avoid including 10+ lines of context when less uniquely identifies the target."""
     input_model = FileEditToolInput
 
+    def __init__(self) -> None:
+        super().__init__()
+        # 文件级互斥锁：同一文件的读-改-写必须串行化。
+        # 引擎并发执行同一消息中的多个工具调用（见 query.py 多工具分支），
+        # 若两个 edit_file 并行编辑同一文件，后写者会覆盖先写者的修改
+        # （读-改-写竞争，表现为"工具返回成功但修改丢失"）。
+        self._file_locks: dict[str, asyncio.Lock] = {}
+
+    def _get_file_lock(self, abs_path: str) -> asyncio.Lock:
+        """获取指定文件的互斥锁（按绝对路径，跨调用复用）。"""
+        lock = self._file_locks.get(abs_path)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._file_locks[abs_path] = lock
+        return lock
+
     async def execute(
         self,
         arguments: FileEditToolInput,
@@ -142,8 +159,21 @@ Usage:
             preview = _generate_create_preview(str(path), arguments.new_string)
             return ToolResult(output=f"Created {path}\n{preview}")
 
-        # 读后编辑强制检查（基于缓存）
+        # 已存在文件编辑：加文件级互斥锁，防止并发读-改-写竞争
         abs_path = str(path)
+        async with self._get_file_lock(abs_path):
+            return await self._do_edit(path, abs_path, arguments, context, cache)
+
+    async def _do_edit(
+        self,
+        path: Path,
+        abs_path: str,
+        arguments: FileEditToolInput,
+        context: ToolExecutionContext,
+        cache: FileStateCache | None,
+    ) -> ToolResult:
+        """对已存在的文件执行编辑（在文件级互斥锁内调用，不会并发执行）。"""
+        # 读后编辑强制检查（基于缓存）
         if cache is not None:
             cached = cache.get(abs_path)
             if cached is None:
@@ -156,10 +186,10 @@ Usage:
                     is_error=True,
                 )
 
-            # mtime 过期检测
+            # mtime 过期检测（使用容差比较，避免 Windows 浮点精度误判）
             try:
                 current_mtime = await asyncio.to_thread(os.path.getmtime, path)
-                if current_mtime > cached.timestamp:
+                if current_mtime - cached.timestamp > 1e-6:
                     # 对于完整读取（offset=None, limit=None），进行内容比较回退
                     # 这解决了 Windows 上 mtime 误报的问题（云同步、杀毒软件等）
                     if cached.offset is None and cached.limit is None:

@@ -186,10 +186,12 @@ Usage:
                 and cached.offset == arguments.offset
                 and cached.limit == arguments.limit
             ):
-                # 检查 mtime
+                # 检查 mtime（使用容差比较：NTFS 100ns 精度在 Python float
+                # 双精度下无法精确表示，`==` 可能把"已被外部修改"误判为未变，
+                # 导致返回过期内容存根）
                 try:
                     current_mtime = await asyncio.to_thread(os.path.getmtime, path)
-                    if current_mtime == cached.timestamp:
+                    if current_mtime - cached.timestamp < 1e-6:
                         return ToolResult(
                             output="File unchanged since last read. "
                             "The content from the earlier Read is still current."

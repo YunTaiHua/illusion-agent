@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -60,6 +61,67 @@ async def test_file_write_read_and_edit(tmp_path: Path):
     )
     assert edit_result.is_error is False
     assert "TWO" in (tmp_path / "notes.txt").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_concurrent_edits_same_file_serialized(tmp_path: Path):
+    """并发编辑同一文件时文件级互斥锁生效，两个修改都不丢失。
+
+    回归：引擎并发执行同一消息中的多个工具调用，若无文件级锁，
+    两个 edit_file 基于同一快照读-改-写，后写者覆盖先写者
+    （表现为"工具返回成功但修改丢失"）。
+    """
+    context = _make_context(tmp_path)
+    (tmp_path / "notes.txt").write_text("a\nb\nc\nd\n", encoding="utf-8")
+    # 读取以满足编辑前置检查（读后编辑强制检查基于缓存）
+    read_result = await FileReadTool().execute(
+        FileReadToolInput(path="notes.txt"),
+        context,
+    )
+    assert read_result.is_error is False
+
+    # 同一实例并发编辑同一文件的不同位置（模拟引擎多工具并发分支）
+    tool = FileEditTool()
+    results = await asyncio.gather(
+        tool.execute(
+            FileEditToolInput(path="notes.txt", old_string="b", new_string="B"),
+            context,
+        ),
+        tool.execute(
+            FileEditToolInput(path="notes.txt", old_string="c", new_string="C"),
+            context,
+        ),
+    )
+    assert all(r.is_error is False for r in results), [r.output for r in results]
+    content = (tmp_path / "notes.txt").read_text(encoding="utf-8")
+    assert "B" in content, "第一个编辑被并发覆盖"
+    assert "C" in content, "第二个编辑丢失"
+    assert content == "a\nB\nC\nd\n"
+
+
+def test_atomic_write_replace_retries_on_oserror(tmp_path: Path, monkeypatch):
+    """atomic_write 的 os.replace 在 OSError 时指数退避重试。"""
+    import illusion.utils.atomic_write as aw
+
+    src = tmp_path / "src.txt"
+    dst = tmp_path / "dst.txt"
+    src.write_text("hello", encoding="utf-8")
+    calls = {"n": 0}
+    real_replace = os.replace
+
+    class FlakyOS:
+        def replace(self, s, d):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise OSError(5, "拒绝访问")
+            return real_replace(s, d)
+
+    monkeypatch.setattr(aw, "os", FlakyOS())
+    # 缩短重试延迟，避免测试等待
+    monkeypatch.setattr(aw, "_REPLACE_BASE_DELAY", 0.01)
+    aw._replace_with_retry(str(src), str(dst))
+    assert dst.read_text(encoding="utf-8") == "hello"
+    assert calls["n"] == 2
 
 
 @pytest.mark.asyncio

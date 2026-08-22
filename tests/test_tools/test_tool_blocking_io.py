@@ -64,12 +64,16 @@ def test_file_read_tool_helpers_are_async():
 
 
 def test_file_edit_tool_uses_asyncio_to_thread():
-    """FileEditTool.execute 应使用 asyncio.to_thread 包装同步 I/O。"""
+    """FileEditTool.execute/_do_edit 应使用 asyncio.to_thread 包装同步 I/O。"""
     src = _src(FileEditTool.execute)
     assert "asyncio.to_thread(path.exists)" in src
     assert "asyncio.to_thread(atomic_write_text" in src
     assert "asyncio.to_thread(os.path.getmtime" in src
-    assert "asyncio.to_thread(path.read_text" in src
+    # 已存在文件编辑逻辑提取到 _do_edit（execute 中加文件级互斥锁调用）
+    do_src = _src(FileEditTool._do_edit)
+    assert "asyncio.to_thread(path.read_text" in do_src
+    assert "asyncio.to_thread(atomic_write_text" in do_src
+    assert "asyncio.to_thread(os.path.getmtime" in do_src
 
 
 def test_file_write_tool_uses_asyncio_to_thread():
