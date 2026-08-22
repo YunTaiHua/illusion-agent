@@ -1061,7 +1061,7 @@ class WebApiDispatcher:
     async def handle_web_request_file_mentions(self, request: FrontendRequest) -> None:
         """收集 @ 提及补全候选并推送 web_file_mentions 事件。
 
-        仅返回工作区内路径候选（不读内容），选中后的提及文本保持
+        仅返回工作区内路径与技能名候选（不读内容），选中后的提及文本保持
         普通 prompt 文本，内容由模型自行调用 read 工具获取。
         安全边界与 web_request_file_tree 一致：BFS 限定在目标工作区
         根内，过滤规则复用文件树可见性。
@@ -1076,11 +1076,17 @@ class WebApiDispatcher:
         bundle = self._resolve_resource_bundle(request)
         query = _normalize_mention_query(request.query)
         candidates, truncated = await asyncio.to_thread(_file_mention_candidates, bundle.cwd, query)
+        skills = await asyncio.to_thread(_skill_mention_candidates, bundle.cwd, query)
         await self._emit(BackendEvent(
             type="web_file_mentions",
             cwd=bundle.cwd,
             request_id=request.request_id,
-            web_file_mentions={"query": query, "candidates": candidates, "truncated": truncated},
+            web_file_mentions={
+                "query": query,
+                "candidates": candidates,
+                "skills": skills,
+                "truncated": truncated,
+            },
         ))
 
     # === 工作区（目录空间）管理 ===
@@ -1616,6 +1622,64 @@ def _file_mention_candidates(root: str, query: str) -> tuple[list[dict[str, Any]
     if len(candidates) > _MENTION_MAX_CANDIDATES:
         truncated = True
     return candidates[:_MENTION_MAX_CANDIDATES], truncated
+
+
+# @ 技能提及候选上限
+_MENTION_MAX_SKILLS = 8
+
+
+# 技能注册表短 TTL 缓存（补全按击键触发请求，避免每次重读/解析全部 SKILL.md）
+_SKILL_REGISTRY_TTL = 5.0
+_skill_registry_cache: dict[str, tuple[float, Any]] = {}
+
+
+def _skill_mention_candidates(cwd: str, query: str) -> list[dict[str, str]]:
+    """收集 @ 技能提及候选（名称 + 描述，按查询串过滤并按相关度排序）。
+
+    与文件候选同走一个补全菜单；匹配为大小写不敏感的子串包含。
+    排序按相关度分层：名称前缀命中 > 名称包含 > 仅描述命中，
+    层内按名称字母序——避免描述含常见字母的长尾技能把精确
+    前缀候选挤出上限窗口。注册表按 cwd 缓存 5 秒（TTL），
+    加载失败返回空列表，补全菜单静默降级。
+
+    Args:
+        cwd: 工作区根目录（技能注册表按此解析用户级/项目级技能）
+        query: 规范化后的查询串
+
+    Returns:
+        list[dict[str, str]]: 候选列表，元素为 {name, description}
+    """
+    import time
+
+    now = time.monotonic()
+    cached = _skill_registry_cache.get(cwd)
+    if cached is not None and now - cached[0] <= _SKILL_REGISTRY_TTL:
+        registry = cached[1]
+    else:
+        try:
+            from illusion.skills.loader import load_skill_registry
+            registry = load_skill_registry(cwd)
+        except Exception:
+            log.exception("收集技能提及候选失败")
+            return []
+        _skill_registry_cache[cwd] = (now, registry)
+    lowered = query.lower()
+
+    def _rank(s: dict[str, str]) -> tuple[int, str]:
+        name = s["name"].lower()
+        if not lowered or name.startswith(lowered):
+            return (0, name)
+        if lowered in name:
+            return (1, name)
+        return (2, name)
+
+    skills = [
+        {"name": s.name, "description": s.description or ""}
+        for s in registry.list_skills()
+        if lowered in s.name.lower() or lowered in (s.description or "").lower()
+    ]
+    skills.sort(key=_rank)
+    return skills[:_MENTION_MAX_SKILLS]
 
 
 def _run_git(cwd: str, *args: str, ok_codes: tuple[int, ...] = (0,)) -> str | None:

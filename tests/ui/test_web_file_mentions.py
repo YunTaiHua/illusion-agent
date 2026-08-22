@@ -12,10 +12,15 @@ import pytest
 from illusion.ui.protocol import BackendEvent, FrontendRequest
 from illusion.ui.web.ws_web_api import (
     _MENTION_MAX_CANDIDATES,
+    _MENTION_MAX_SKILLS,
     WebApiDispatcher,
     _file_mention_candidates,
     _normalize_mention_query,
+    _skill_mention_candidates,
 )
+
+# 仓库根：从本文件位置推导（tests/ui/ → 上两级），避免硬编码平台路径
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class TestNormalizeMentionQuery:
@@ -165,3 +170,44 @@ class TestHandleWebRequestFileMentions:
         assert evt.web_file_mentions["query"] == "src/"
         paths = [c["path"] for c in evt.web_file_mentions["candidates"]]
         assert "src/main.py" in paths
+
+
+class TestSkillMentionCandidates:
+    """技能提及候选测试（真实注册表：illusion-agent 仓库自带 skills）"""
+
+    def test_query_filters_by_name(self):
+        skills = _skill_mention_candidates(str(REPO_ROOT), "docx")
+        names = [s["name"] for s in skills]
+        assert "docx" in names
+        # 名称与描述都不含 docx 的不应入选
+        assert all("docx" in n.lower() or "docx" in s["description"].lower()
+                   for s, n in zip(skills, names))
+
+    def test_empty_query_returns_bounded_list(self):
+        skills = _skill_mention_candidates(str(REPO_ROOT), "")
+        assert len(skills) <= _MENTION_MAX_SKILLS
+        assert all(set(s) == {"name", "description"} for s in skills)
+
+    def test_sorted_by_name(self):
+        skills = _skill_mention_candidates(str(REPO_ROOT), "")
+        names = [s["name"].lower() for s in skills]
+        assert names == sorted(names)
+
+    def test_no_match_returns_empty(self):
+        assert _skill_mention_candidates(str(REPO_ROOT), "zzz-no-such-skill") == []
+
+
+class TestSkillMentionRanking:
+    """技能候选相关度排序测试（前缀命中优先于仅描述命中）"""
+
+    def test_prefix_match_not_crowded_out_by_description_matches(self):
+        # 回归：'r' 查询下描述含 r 的长尾技能曾把 requesting-code-review
+        # 挤出上限窗口（字母序第 9 位）；前缀分层后必须入选
+        skills = _skill_mention_candidates(str(REPO_ROOT), "r")
+        names = [s["name"] for s in skills]
+        assert "requesting-code-review" in names
+
+    def test_name_prefix_tiers_before_description_only(self):
+        skills = _skill_mention_candidates(str(REPO_ROOT), "requ")
+        names = [s["name"] for s in skills]
+        assert names[0] == "requesting-code-review"

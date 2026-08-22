@@ -15,6 +15,7 @@ import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkSuperscript from '../remarkSuperscript';
+import { highlightMentions } from '../utils/mention';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeRaw from 'rehype-raw';
 import rehypeSanitize, { defaultSchema, type Options as SanitizeOptions } from 'rehype-sanitize';
@@ -350,7 +351,7 @@ function MessageBubble({ item, toolInputMap, lang = 'zh-CN', onRewind, onRegener
       <div className="flex justify-end py-1.5 group">
         <div className="flex flex-col items-end max-w-[min(82%,64ch)]">
           <div className="bg-surface-card-alt border border-border-light rounded-lg px-3 py-2 text-sm text-content-primary whitespace-pre-wrap break-words select-text">
-            {item.text}
+            {highlightMentions(item.text)}
           </div>
           {showActions && <MessageActions text={item.text} lang={lang} onRewind={onRewind} disabled={actionsDisabled} />}
         </div>

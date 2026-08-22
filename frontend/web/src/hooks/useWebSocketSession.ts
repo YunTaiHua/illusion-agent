@@ -1683,13 +1683,17 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
         return;
       }
       if (evt.type === 'web_file_mentions') {
-        // @ 提及补全候选：requestId 不匹配的迟到响应由 PromptInput 侧丢弃
+        // @ 提及补全候选：requestId 不匹配的迟到响应由 PromptInput 侧丢弃；
+        // skills 排在文件前面（搜索结果 skills 优先），kind='skill' 供菜单分区渲染
         const payload = evt.web_file_mentions;
         if (payload) {
           setFileMentionResult({
             requestId: payload.request_id ?? evt.request_id ?? '',
             query: payload.query,
-            candidates: payload.candidates ?? [],
+            candidates: [
+              ...(payload.skills ?? []).map((s) => ({ path: s.name, kind: 'skill' as const, description: s.description })),
+              ...(payload.candidates ?? []),
+            ],
           });
         }
         return;

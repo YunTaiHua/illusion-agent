@@ -280,13 +280,15 @@ export interface FileTreeNode {
 /**
  * @ 提及补全候选接口
  *
- * web_file_mentions 推送的单个路径候选（仅路径，不读内容）。
+ * web_file_mentions 推送的单个候选（仅名称/路径文本，不读内容）。
  */
 export interface FileMentionCandidate {
-  /** 工作区内相对路径（/ 分隔） */
+  /** 工作区内相对路径（/ 分隔）；skill 类型为技能名 */
   path: string;
-  /** 条目类型：'dir' | 'file'（目录选中后继续下钻，文件选中后闭合提及） */
-  kind: 'dir' | 'file';
+  /** 条目类型：'dir' | 'file' | 'skill'（目录选中后继续下钻，其余选中后闭合提及） */
+  kind: 'dir' | 'file' | 'skill';
+  /** 技能描述（仅 skill 类型，菜单副标题展示） */
+  description?: string;
 }
 
 /**
@@ -520,7 +522,7 @@ export interface BackendEvent {
   /** web_file_tree 推送的目录条目（可选；path 为请求的相对目录，空串为根） */
   web_file_tree?: { path: string; entries: FileTreeNode[]; truncated?: boolean };
   /** web_file_mentions 推送的 @ 提及补全候选（query 为规范化后的查询串，request_id 回显） */
-  web_file_mentions?: { query: string; candidates: FileMentionCandidate[]; truncated?: boolean; request_id?: string };
+  web_file_mentions?: { query: string; candidates: FileMentionCandidate[]; skills?: { name: string; description: string }[]; truncated?: boolean; request_id?: string };
   /** web_git_status 推送的 Git 状态快照（可选） */
   web_git_status?: GitStatusSnapshot;
   /** web_file_content 推送的文件预览载荷（可选） */

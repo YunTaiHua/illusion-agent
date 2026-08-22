@@ -15,6 +15,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { t, type UiLanguage } from '../i18n';
 import type { FileMentionCandidate, WebWorkspaceItem } from '../types/protocol';
+import { highlightMentions } from '../utils/mention';
 
 /**
  * Web 端允许的 B 类指令集合（自动补全只显示这些）
@@ -70,7 +71,7 @@ export function detectMentionToken(text: string, pos: number): MentionToken | nu
   if (at > 0 && !/\s/.test(before[at - 1] ?? '')) return null;
   const rest = before.slice(at + 1);
   if (rest.startsWith('"')) {
-    if (rest.indexOf('"', 1) !== -1) return null; // 引号已闭合：提及结束
+    if (rest.indexOf('"', 1) !== -1 || rest.includes('\n')) return null; // 引号已闭合或跨行：提及结束
     return { start: at, end: pos, query: rest.slice(1), quoted: true };
   }
   if (/\s/.test(rest)) return null; // 未引号形式不允许空格
@@ -79,8 +80,8 @@ export function detectMentionToken(text: string, pos: number): MentionToken | nu
 
 /**
  * 格式化提及插入文本：
- * 路径含空格或引号时用 @"..." 形式；目录保留尾部 / 继续下钻，
- * 文件追加空格闭合 token。
+ * 名称含空格或引号时用 @"..." 形式；目录保留尾部 / 继续下钻，
+ * 文件与技能追加空格闭合 token。
  *
  * @param candidate - 选中的候选
  * @returns 插入到输入框的完整文本
@@ -231,6 +232,8 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
     if (!ta) return;
     ta.style.height = 'auto';
     ta.style.height = `${Math.min(ta.scrollHeight, MAX_TEXTAREA_HEIGHT)}px`;
+    // 高度变化可能改变内部滚动位置，镜像层同步偏移保持高亮对齐
+    if (mirrorRef.current) mirrorRef.current.scrollTop = ta.scrollTop;
   }, [value]);
 
   // 点击外部关闭内联选项
@@ -278,9 +281,15 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
   });
 
   useEffect(() => {
+    // 只在命令行元素（data-command-row）中定位，跳过标题等非行子元素——
+    // children[selectedIndex] 会把标题算进索引导致滚动与选中错位（选中项漂出可视区）；
+    // 索引 0 直接回顶：nearest 会把首行顶到滚动区上缘，标题被推出可视区
     if (showCommands && listRef.current) {
-      const selected = listRef.current.children[selectedIndex] as HTMLElement;
-      selected?.scrollIntoView({ block: 'nearest' });
+      if (selectedIndex === 0) {
+        listRef.current.scrollTop = 0;
+      } else {
+        listRef.current.querySelectorAll('[data-command-row]')[selectedIndex]?.scrollIntoView({ block: 'nearest' });
+      }
     }
   }, [selectedIndex, showCommands]);
 
@@ -291,6 +300,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
   const [mentionDismissed, setMentionDismissed] = useState(false);
   const mentionReqIdRef = useRef(0);
   const mentionListRef = useRef<HTMLDivElement>(null);
+  const mirrorRef = useRef<HTMLDivElement>(null);
 
   // 光标处提及 token 检测（输入/点击/方向键移动光标都会触发重算）
   const mentionToken = useMemo(() => detectMentionToken(value, caret), [value, caret]);
@@ -310,19 +320,34 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
 
   useEffect(() => { if (!mentionToken) setMentionIndex(0); }, [mentionToken]);
 
-  // 仅采纳最新请求的响应，并按当前 query 二次过滤（防抖窗口内的旧结果避免闪烁）
+  // 仅采纳最新请求的响应，并按响应回显的规范化 query 二次过滤（防抖窗口内的旧结果避免闪烁；
+  // 用服务端规范化后的 query，避免 @./src、@\path 等原始串过滤全部落空）
   const mentionCandidates = useMemo(() => {
     if (!fileMentionResult || fileMentionResult.requestId !== acceptedMentionReqId) return [] as FileMentionCandidate[];
-    const q = (mentionToken?.query ?? '').toLowerCase();
+    const q = fileMentionResult.query.toLowerCase();
     return q ? fileMentionResult.candidates.filter((c) => c.path.toLowerCase().includes(q)) : fileMentionResult.candidates;
-  }, [fileMentionResult, acceptedMentionReqId, mentionToken]);
+  }, [fileMentionResult, acceptedMentionReqId]);
   const showMentionMenu = mentionToken !== null && !mentionDismissed && mentionCandidates.length > 0 && !inlineOptions;
 
+  // 菜单分区：技能在前、文件在后（候选顺序即导航顺序）；行元素带 data-mention-row 供滚动定位
+  const mentionFileRows = mentionCandidates.filter((c) => c.kind !== 'skill');
+  const mentionSkillCount = mentionCandidates.length - mentionFileRows.length;
+
   useEffect(() => {
+    // 索引 0 直接回顶：nearest 会把首行顶到滚动区上缘，标题（Skills/Files）被推出可视区
     if (showMentionMenu && mentionListRef.current) {
-      mentionListRef.current.children[mentionIndex]?.scrollIntoView({ block: 'nearest' });
+      if (mentionIndex === 0) {
+        mentionListRef.current.scrollTop = 0;
+      } else {
+        mentionListRef.current.querySelectorAll('[data-mention-row]')[mentionIndex]?.scrollIntoView({ block: 'nearest' });
+      }
     }
   }, [mentionIndex, showMentionMenu]);
+
+  // 候选列表变化时钳制选中索引（防抖响应可能缩窄列表，避免索引越界产生死高亮）
+  useEffect(() => {
+    setMentionIndex((i) => (mentionCandidates.length === 0 ? 0 : Math.min(i, mentionCandidates.length - 1)));
+  }, [mentionCandidates.length]);
 
   // 点击输入卡片外部时收起 @ 提及菜单（点击内部交由光标/token 检测自然处理）
   useEffect(() => {
@@ -527,29 +552,50 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
         </div>
       )}
 
-      {/* @ 提及补全弹窗（与斜杠命令弹窗同位置同样式；标题沿用英文 uppercase 惯例） */}
+      {/* @ 提及补全弹窗（与斜杠命令弹窗同位置同样式；分区标题沿用英文 uppercase 惯例） */}
       {showMentionMenu && (
         <div
           ref={mentionListRef}
           className="absolute bottom-full left-0 right-0 mb-1 glass-surface rounded-3xl max-h-56 overflow-y-auto py-1.5 z-20 scrollbar-hidden"
         >
-          <div className="px-3 py-1.5 text-[10px] text-content-disabled font-semibold uppercase tracking-widest">Files</div>
+          {mentionSkillCount > 0 && (
+            <div className="px-3 py-1.5 text-[10px] text-content-disabled font-semibold uppercase tracking-widest text-center">Skills</div>
+          )}
           {mentionCandidates.map((c, idx) => {
+            // 文件区标题在首个文件行处渲染（有技能区时在其后，无技能区时在列表头）
+            if (c.kind !== 'skill' && idx === (mentionSkillCount > 0 ? mentionSkillCount : 0)) {
+              return (
+                <div key="section-files" className="px-3 pt-2 pb-1 text-[10px] text-content-disabled font-semibold uppercase tracking-widest text-center border-t border-border-light mt-1">Files</div>
+              );
+            }
+            // 行索引与渲染 idx 解耦：分区标题占掉 idx 但不算行，否则标题后所有行
+            // 的 idx !== mentionIndex，高亮/滚动定位全部失效（对应"上移异常"）
+            const rowIdx = c.kind === 'skill' ? idx : idx - (mentionSkillCount > 0 ? 1 : 0);
             const name = c.path.split('/').pop() || c.path;
             const dir = c.kind === 'dir';
+            const skill = c.kind === 'skill';
             return (
               <button
-                key={c.path}
+                key={`${c.kind}:${c.path}`}
+                data-mention-row
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => applyMention(c)}
                 title={c.path}
                 className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors cursor-pointer animate-fade rounded-md ${
-                  idx === mentionIndex ? 'glass-option-active text-content-primary' : 'text-content-secondary glass-option-hover'
+                  rowIdx === mentionIndex ? 'glass-option-active text-content-primary' : 'text-content-secondary glass-option-hover'
                 }`}
               >
                 {dir ? (
                   <svg className="w-3.5 h-3.5 shrink-0 text-primary/70" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M1.5 4.5v7a1.5 1.5 0 001.5 1.5h10a1.5 1.5 0 001.5-1.5V6.5a1.5 1.5 0 00-1.5-1.5H8L6.4 3.1a1.5 1.5 0 00-1.1-.6H3a1.5 1.5 0 00-1.5 1.5v.5z" />
+                  </svg>
+                ) : skill ? (
+                  <svg className="w-3.5 h-3.5 shrink-0 text-primary/70" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                    {/* 技能：四点网格（与右栏 Skills 图标同语义） */}
+                    <rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1" />
+                    <rect x="9" y="2.5" width="4.5" height="4.5" rx="1" />
+                    <rect x="2.5" y="9" width="4.5" height="4.5" rx="1" />
+                    <rect x="9" y="9" width="4.5" height="4.5" rx="1" />
                   </svg>
                 ) : (
                   <svg className="w-3.5 h-3.5 shrink-0 text-primary/70" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
@@ -558,7 +604,9 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
                   </svg>
                 )}
                 <span className={`truncate flex-1 text-left font-mono ${dir ? '' : 'text-content-primary'}`}>{c.path}</span>
-                <span className="text-xs text-content-disabled shrink-0">{name}</span>
+                {skill
+                  ? c.description && <span className="text-xs text-content-disabled shrink-0 max-w-[45%] truncate">{c.description}</span>
+                  : <span className="text-xs text-content-disabled shrink-0">{name}</span>}
               </button>
             );
           })}
@@ -571,10 +619,11 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
           ref={listRef}
           className="absolute bottom-full left-0 right-0 mb-1 glass-surface rounded-3xl max-h-56 overflow-y-auto py-1.5 z-20 scrollbar-hidden"
         >
-          <div className="px-3 py-1.5 text-[10px] text-content-disabled font-semibold uppercase tracking-widest">Commands</div>
+          <div className="px-3 py-1.5 text-[10px] text-content-disabled font-semibold uppercase tracking-widest text-center">Commands</div>
           {menuCommands.map((cmd, idx) => (
             <button
               key={cmd}
+              data-command-row
               onClick={() => selectCommand(cmd)}
               className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors cursor-pointer animate-fade rounded-md ${
                 (!plusOpen && idx === selectedIndex) ? 'glass-option-active text-content-primary' : 'text-content-secondary glass-option-hover'
@@ -587,8 +636,15 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
         </div>
       )}
 
-      {/* 输入区：仅 textarea（字体与主聊天区普通 text 一致） */}
-      <div className="flex items-end">
+      {/* 输入区：镜像层渲染 @token 主题色，textarea 文字透明只留光标/选区（两者排版参数完全一致） */}
+      <div className="flex items-end relative">
+        <div
+          ref={mirrorRef}
+          aria-hidden
+          className={`absolute inset-0 pointer-events-none select-none overflow-hidden whitespace-pre-wrap break-words text-base text-content-primary leading-[1.8] py-2 pl-3 pr-2 [scrollbar-gutter:stable] ${connected ? '' : 'opacity-50'}`}
+        >
+          {highlightMentions(value)}
+        </div>
         <textarea
           ref={textareaRef}
           value={value}
@@ -596,13 +652,15 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
           onKeyDown={handleKeyDown}
           // 点击/方向键移动光标时同步 caret 状态，驱动提及 token 重算（移出 token 自动收起菜单）
           onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
+          // 内容超限内部滚动时镜像层同步偏移，保证高亮与光标对齐
+          onScroll={(e) => { if (mirrorRef.current) mirrorRef.current.scrollTop = e.currentTarget.scrollTop; }}
           placeholder={connected ? (activeCwd ? t(lang, 'input_placeholder') : t(lang, 'input_placeholder_no_cwd')) : t(lang, 'disconnected')}
           rows={1}
           disabled={!connected}
           // 欢迎界面挂载时自动聚焦：删除会话/新建会话后输入框重新挂载，
           // 显式聚焦避免焦点悬空导致用户无法直接输入
           autoFocus={welcomeVisible}
-          className="flex-1 resize-none bg-transparent text-base text-content-primary placeholder-content-disabled min-h-[36px] focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed leading-[1.8] py-2 pl-3 pr-2 [scrollbar-gutter:stable]"
+          className="flex-1 relative resize-none bg-transparent text-base [color:transparent] [caret-color:var(--text-primary)] placeholder-content-disabled min-h-[36px] focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed leading-[1.8] py-2 pl-3 pr-2 [scrollbar-gutter:stable]"
           style={{ height: 'auto', maxHeight: `${MAX_TEXTAREA_HEIGHT}px`, overflowY: 'auto' }}
         />
       </div>

@@ -618,8 +618,14 @@ pre code.hljs,
 /* ========== 分割线 ========== */
 .prose hr {
   border: none;
-  border-top: 1px solid var(--border-light);
+  /* 浅色主题与"任务完成"折叠区分隔线（--border-medium）同色 */
+  border-top: 1px solid var(--border-medium);
   margin: 1.5em 0;
+}
+
+/* 深色主题保持原分隔线颜色 */
+:root.dark .prose hr {
+  border-top-color: var(--border-light);
 }
 
 /* ========== 标题样式 ========== */
@@ -633,9 +639,15 @@ pre code.hljs,
   margin-bottom: 0.5em;
 }
 
-.prose h1 { font-size: 1.5em; border-bottom: 2px solid var(--border-light); padding-bottom: 0.3em; }
-.prose h2 { font-size: 1.25em; border-bottom: 1px solid var(--border-light); padding-bottom: 0.3em; }
+/* 浅色主题标题下划线与 hr/"任务完成"分隔线同色（--border-medium），深色保持 --border-light */
+.prose h1 { font-size: 1.5em; border-bottom: 2px solid var(--border-medium); padding-bottom: 0.3em; }
+.prose h2 { font-size: 1.25em; border-bottom: 1px solid var(--border-medium); padding-bottom: 0.3em; }
 .prose h3 { font-size: 1.125em; }
+
+:root.dark .prose h1,
+:root.dark .prose h2 {
+  border-bottom-color: var(--border-light);
+}
 
 /* ========== 图片 ========== */
 .prose img {
