@@ -720,20 +720,19 @@ export default function App() {
     }
   }, [session.filePreview, previewPopOut, rightPanelCollapsed, rightPanelWidth, previewPanelWidth]);
 
-  // 切换会话 / 切换目录时重置右栏：折叠右栏、关闭文件预览并清空目录相关资源，
-  // 避免右栏残留上一轮会话/目录的文件预览或资源快照（防止串档）。同时清空预览
-  // 扩宽的防重入标记并复位"用户手动调整"标记（新工作区/新会话视为新上下文，
-  // 恢复首次文件预览的自动折叠 + 满宽）；清空后由 hook 内部的 activeSessionId
-  // 统一刷新（refreshRightPanel）重拉新目录数据。
+  // 切换会话 / 切换目录时重置右栏 UI：折叠右栏、关闭文件预览，避免右栏残留
+  // 上一轮会话/目录的文件预览；清空预览扩宽的防重入标记并复位"用户手动调整"
+  // 标记（新工作区/新会话视为新上下文，恢复首次文件预览的自动折叠 + 满宽）。
+  // 数据清理由 hook 内部的活跃会话切换 effect 承担（跨目录全量清空、同目录
+  // 仅清会话隔离数据），并统一触发 refreshRightPanel 重拉。
   useEffect(() => {
     if (!session.activeSessionId) return; // 尚未建立会话时不处理
     setRightPanelCollapsed(true);
     setPreviewPopOut(false);
     autoWidenKeyRef.current = null;
     userAdjustedPanelsRef.current = false;
-    session.resetWorkspaceResources();
     session.closeFilePreview();
-  }, [session.activeSessionId, session.resetWorkspaceResources, session.closeFilePreview]);
+  }, [session.activeSessionId, session.closeFilePreview]);
 
   /**
    * 处理选择会话（A 通道，零 suppress）
@@ -1022,7 +1021,8 @@ export default function App() {
           reasoningStreaming={session.reasoningStreaming}
           busy={session.busy} connected={session.connected}
           modal={session.modal} onPermissionResponse={handlePermissionResponse}
-          onQuestionResponse={handleQuestionResponse} restoringSessionId={session.restoringSessionId}
+          onQuestionResponse={handleQuestionResponse}
+          restoringSessionId={session.restoringSessionId ?? (session.awaitingNewSession ? '__pending_new__' : null)}
           onRewindToTurn={handleRewindToTurn} onRegenerate={handleRegenerate}
           fileStats={session.fileStats} onRequestFileStats={session.requestFileStats}
           onOpenSessionFile={handleOpenSessionFile}>
@@ -1326,10 +1326,11 @@ export default function App() {
         </div>
       )}
 
-      {/* 全屏遮罩层：连接未建立 / 首帧引导（首个会话内容未呈现）/ 会话恢复中时覆盖，
-          首个会话内容呈现完成后褪去（桌面端窗口启动即最大化，无额外时机）。
+      {/* 全屏遮罩层：仅覆盖连接未建立 / 首帧引导（首个会话内容未呈现）期间，
+          首个会话内容呈现完成后褪去。会话恢复不再走全屏遮罩——由 ChatArea 的
+          局部加载卡承担反馈，侧栏/右栏保持可见可交互，避免切换会话时整屏闪烁。
           避免"连接 → 欢迎 → 恢复 → 欢迎"的时序翻转在未就绪时露出主界面。 */}
-      {(!session.connected || session.bootstrapping || !revealReady || session.restoringSessionId) && <ConnectingOverlay lang={lang} />}
+      {(!session.connected || session.bootstrapping || !revealReady) && <ConnectingOverlay lang={lang} />}
       {/* 应用内图片预览（Lightbox）：点击 markdown 图片/图片链接时打开 */}
       <ImagePreview lang={lang} />
       {/* 文件预览弹窗：停靠列"弹窗查看"按钮触发放大形态；关闭返回停靠列 */}

@@ -557,7 +557,8 @@ export default function ChatArea({
 
   const hasContent = staticItems.length > 0 || assistantBuffer || streamingReasoning || pendingToolCalls.length > 0 || !!modal;
 
-  // 会话恢复中：显示居中加载卡片，覆盖正常转录区
+  // 会话恢复中 / 新建会话等待中：显示居中加载卡片，覆盖正常转录区
+  // （'__pending_new__' 为新建会话等待态的哨兵值，文案区分创建/恢复）
   // 此条件返回在所有 hooks 之后，不违反 React Rules of Hooks
   if (restoringSessionId) {
     return (
@@ -567,7 +568,9 @@ export default function ChatArea({
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
           </svg>
-          <span className="text-sm text-content-secondary">{t(lang, 'restoring_session')}</span>
+          <span className="text-sm text-content-secondary">
+            {t(lang, restoringSessionId === '__pending_new__' ? 'creating_session' : 'restoring_session')}
+          </span>
         </div>
       </div>
     );

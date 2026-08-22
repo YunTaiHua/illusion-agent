@@ -267,6 +267,8 @@ export interface WebSocketSessionState {
   ready: boolean;
   /** 首帧引导中：ready 后首个会话内容（web_restore_completed）尚未呈现 */
   bootstrapping: boolean;
+  /** 新建会话等待中（newSession 发出后、restore_completed 到达前；聊天区局部加载反馈） */
+  awaitingNewSession: boolean;
   /** 首次登录标识（后端 ready 事件携带，无 env_N 且无 working_directory 时为 true） */
   firstLogin: boolean;
   showThinking: boolean;
@@ -301,8 +303,6 @@ export interface WebSocketSessionState {
   removeWorkspace: (path: string) => void;
   /** 拉取资源快照（web_request_resources，可指定会话/工作区；缺省 = 活跃会话） */
   requestResources: (sessionId?: string, cwd?: string) => void;
-  /** 清空右栏目录相关数据（切换会话/目录时调用，随后由统一刷新重拉） */
-  resetWorkspaceResources: () => void;
   /** 拉取文件树单层条目（web_request_file_tree；path 为工作区相对目录，缺省根；
    *  已有缓存且非 force 时跳过） */
   requestFileTree: (path?: string, force?: boolean) => void;
@@ -455,6 +455,9 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   /** 首帧引导中：ready 后首个会话内容（web_restore_completed）尚未呈现。
       期间用全屏遮罩覆盖，避免"连接→欢迎→恢复→欢迎"的时序翻转闪烁。 */
   const [bootstrapping, setBootstrapping] = useState(true);
+  /** 新建会话等待中：newSession 发出后、后端 web_restore_completed 到达前，
+      聊天区显示局部加载卡（跨目录首建需后端懒构建工作区 bundle，秒级耗时） */
+  const [awaitingNewSession, setAwaitingNewSession] = useState(false);
   const [showThinking, setShowThinking] = useState(true);
   const [swarmTeammates, setSwarmTeammates] = useState<SwarmTeammateSnapshot[]>([]);
   const [swarmNotifications, setSwarmNotifications] = useState<SwarmNotificationSnapshot[]>([]);
@@ -495,6 +498,8 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   const rightPanelRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 会话级恢复超时定时器（activateSession 10s 兜底，restore_completed 时清理）
   const restoreTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  // 新建会话等待超时定时器（newSession 10s 兜底，restore_completed 时清理）
+  const awaitingNewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // === agent 向导状态（全局）===
   const [agentWizardTools, setAgentWizardTools] = useState<{ name: string; description: string }[] | null>(null);
@@ -795,9 +800,17 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     }
   }, [patchView, sendRaw]);
 
-  /** 新建会话：后端创建后通过 web_restore_completed 自动切换为活跃；cwd 指定目标工作区 */
+  /** 新建会话：后端创建后通过 web_restore_completed 自动切换为活跃；cwd 指定目标工作区。
+   *  发出请求即进入等待态（聊天区局部加载卡即时反馈），restore_completed 到达或
+   *  10s 超时兜底清除——跨目录首建时后端懒构建工作区 bundle 耗秒级，不能无反馈 */
   const newSession = useCallback((cwd?: string) => {
     pendingActivateRef.current = '__new__';
+    setAwaitingNewSession(true);
+    if (awaitingNewTimerRef.current) clearTimeout(awaitingNewTimerRef.current);
+    awaitingNewTimerRef.current = setTimeout(() => {
+      awaitingNewTimerRef.current = null;
+      setAwaitingNewSession(false);
+    }, 10000);
     sendRaw({ type: 'web_new_session', ...(cwd ? { cwd } : {}) });
   }, [sendRaw]);
 
@@ -942,16 +955,35 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   // 切换会话 / 切换目录（新建会话）时统一刷新右栏：资源随目标会话工作区
   // 联动；跨目录时 Git/文件树由 resourcesCwd 变化的缓存失效 + 区块自拉取
   // 兜底（GitSection/FileTreeSection 各自 effect），无感更新、不抖动
+  // （清空策略见下方活跃会话切换 effect：按目录区分全量/会话级清理）
   useEffect(() => {
     if (activeSessionId) refreshRightPanel();
   }, [activeSessionId, refreshRightPanel]);
 
   /**
+   * 清空会话隔离数据（agentTasks / sessionFiles / fileStats）
+   *
+   * 切换会话（无论是否跨目录）都需要清理的数据：它们按会话隔离，
+   * 残留会导致新会话显示上一会话的任务与变更文件。
+   *
+   * @returns 无返回值
+   */
+  const clearSessionScopedData = useCallback((): void => {
+    setAgentTasks([]);
+    setSessionFiles([]);
+    setSessionFilesLoading(false);
+    setFileStats(new Map());
+    fileStatsRef.current = new Map();
+    fileStatsInFlightRef.current.clear();
+  }, []);
+
+  /**
    * 清空右栏目录相关数据（置于未加载态）
    *
-   * 切换会话/目录时由 App 调用，随后 refreshRightPanel 重拉新目录数据。
-   * 避免跨目录后、新数据到达前右栏残留上一目录的资源快照（skills/mcp/
-   * plugins/rules/agentTasks、文件树与 Git 状态）。不拉新数据，只清空。
+   * 仅在切换工作区目录（跨 cwd）时由活跃会话切换逻辑调用，随后
+   * refreshRightPanel 重拉新目录数据。避免跨目录后、新数据到达前右栏
+   * 残留上一目录的资源快照（skills/mcp/plugins/rules、文件树与 Git 状态）。
+   * 同目录切会话不清这些共享缓存（数据相同，清了只会闪占位符）。
    *
    * @returns 无返回值
    */
@@ -960,18 +992,30 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     setMcpServers([]);
     setPlugins([]);
     setRules([]);
-    setAgentTasks([]);
-    setSessionFiles([]);
-    setSessionFilesLoading(false);
-    setFileStats(new Map());
-    fileStatsRef.current = new Map();
-    fileStatsInFlightRef.current.clear();
+    clearSessionScopedData();
     setFileTree({});
     setFileTreeLoadingPaths([]);
     setGitStatus(null);
     setGitLoading(false);
     fileTreeLoadingRef.current.clear();
-  }, []);
+  }, [clearSessionScopedData]);
+
+  // 上次活跃会话的工作区目录：切换时判断跨目录（决定全量清空还是仅清会话数据）
+  const prevActiveCwdRef = useRef<string | null>(null);
+
+  // 活跃会话切换的清空策略（与上方 refreshRightPanel 同一触发源，分置以
+  // 满足声明顺序）：跨目录全量清空（防串档）；同目录仅清会话隔离数据
+  // （agentTasks/sessionFiles/fileStats），保留文件树/Git/资源缓存——数据
+  // 相同，清了只会让区块闪占位符（切换流畅性）。
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const nextCwd = viewsRef.current[activeSessionId]?.cwd ?? null;
+    if (prevActiveCwdRef.current !== null) {
+      if (prevActiveCwdRef.current !== nextCwd) resetWorkspaceResources();
+      else clearSessionScopedData();
+    }
+    prevActiveCwdRef.current = nextCwd;
+  }, [activeSessionId, resetWorkspaceResources, clearSessionScopedData]);
 
   // 组件卸载时清理右栏刷新防抖定时器
   useEffect(() => {
@@ -1066,6 +1110,12 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       setConnected(false);
       setReady(false);
       setFirstLogin(false);
+      // 断线时清除新建会话等待态，避免加载卡永久挂起
+      if (awaitingNewTimerRef.current) {
+        clearTimeout(awaitingNewTimerRef.current);
+        awaitingNewTimerRef.current = null;
+      }
+      setAwaitingNewSession(false);
       // 清空全部视图的 restoring 态，避免断线后残留加载动画
       const next = { ...viewsRef.current };
       for (const view of Object.values(next)) {
@@ -1382,6 +1432,12 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
         if (evt.type === 'web_restore_completed') {
           // 首个会话内容呈现完成：首帧引导结束，解除遮罩
           setBootstrapping(false);
+          // 新建会话等待结束（无论完成的是否为目标会话，用户可能中途切走）
+          if (awaitingNewTimerRef.current) {
+            clearTimeout(awaitingNewTimerRef.current);
+            awaitingNewTimerRef.current = null;
+          }
+          setAwaitingNewSession(false);
           pendingToolCallsRef.current[sid] = [];
           optimisticUserRef.current[sid] = null;
           const items = stripReplayItems((evt.items ?? []).filter((i) => !(i.role === 'user' && i.is_command)));
@@ -1790,6 +1846,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       ready, firstLogin, showThinking,
       swarmTeammates, swarmNotifications, bgAgentLabel, connected,
       bootstrapping,
+      awaitingNewSession,
       modelSwitching, setModelSwitching,
       // 多会话管理
       // busy/phase/active 以本地会话视图实时状态为准（事件驱动，无推送延迟）：
@@ -1815,7 +1872,6 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       addWorkspace,
       removeWorkspace,
       requestResources,
-      resetWorkspaceResources,
       inlineOptions: view?.inlineOptions ?? null,
       setInlineOptions,
       // agent 向导（全局）
@@ -1841,9 +1897,9 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     requestAgentTasks, viewAgentSummary, requestSessionFiles, openSessionFile,
     ready, firstLogin, showThinking, swarmTeammates, swarmNotifications,
     bgAgentLabel, connected, sessionViews, sessionList, activeSessionId,
-    workspaces, resourcesCwd,
+    workspaces, resourcesCwd, awaitingNewSession,
     activateSession, newSession, setInlineOptions, patchView,
-    requestWorkspaces, addWorkspace, removeWorkspace, requestResources, resetWorkspaceResources,
+    requestWorkspaces, addWorkspace, removeWorkspace, requestResources,
     agentWizardTools, agentWizardModels, agentGenerated, agentGenerateLoading,
     agentGenerateError, agentWizardResult,
     sendAgentWizardInit, sendAgentGenerateRequest, sendAgentWizardSubmit, clearAgentWizardState,

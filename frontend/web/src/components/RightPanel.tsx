@@ -439,11 +439,16 @@ export function CollapsibleSection({
 
   return (
     <div className={topBorder ? 'border-t border-border-light' : undefined}>
-      <div className="group/head w-full px-5 py-2 flex items-center gap-2 glass-option-hover transition-colors rounded-md">
-        <button
-          onClick={handleToggle}
-          className="flex-1 min-w-0 flex items-center gap-2 py-0.5 cursor-pointer"
-        >
+      {/* 整个头部行（含右侧计数槽位）均可点击折叠/展开——悬浮高亮区=点击热区，
+          避免悬浮区域远大于可点文字造成误导；键盘 Enter/Space 同样触发 */}
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={handleToggle}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleToggle(); } }}
+        className="group/head w-full px-5 py-2 flex items-center gap-2 glass-option-hover transition-colors rounded-md cursor-pointer select-none"
+      >
+        <div className="flex-1 min-w-0 flex items-center gap-2 py-0.5">
           {/* 16px 图标槽位：常显类型图标；hover 时图标淡出、三角指示器淡入 */}
           <span className="relative w-4 h-4 shrink-0 flex items-center justify-center">
             {icon && (
@@ -459,7 +464,7 @@ export function CollapsibleSection({
             </svg>
           </span>
           <span className="text-xs font-semibold text-content-primary tracking-wide">{title}</span>
-        </button>
+        </div>
         {/* 右侧槽位：默认显示计数徽标；悬浮头部时计数淡出、刷新按钮淡入（同槽交叉替换，不位移） */}
         <span className="relative min-w-6 h-6 shrink-0 flex items-center justify-center">
           {onRefresh ? (
