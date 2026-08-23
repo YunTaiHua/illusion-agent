@@ -162,9 +162,11 @@ export function resolveRuntime(): RuntimeChoice {
   let pythonFromUser = false;
   // 先判定用户是否有可用的 python 环境（决定脚本执行环境是否用用户侧）
   const userPythons = [...whichAll('python'), ...whichAll('python3')];
+  let userPythonHit: string | null = null;
   for (const candidate of userPythons) {
     const v = getVersion(candidate);
     if (v && gte(v, MIN_PYTHON)) {
+      userPythonHit = candidate;
       pythonFromUser = true;
       break;
     }
@@ -209,8 +211,12 @@ export function resolveRuntime(): RuntimeChoice {
     }
   }
 
-  // 修正 pythonFromUser：内置路径以 root 开头
-  if (python && path.resolve(python).startsWith(root)) {
+  // 修正 pythonFromUser：仅当"用户检测命中的路径"实际位于内置目录内
+  // （如用户 PATH 指向了内置目录）才视为无独立用户环境。
+  // 注意不能检查后端选中的 python——内置优先策略下它恒为内置路径，
+  // 若据此覆盖会把正确的用户环境检测结果无条件抹掉（导致 bash 工具
+  // 的 PATH 被注入内置 python，用户脚本跑错解释器）。
+  if (pythonFromUser && userPythonHit && path.resolve(userPythonHit).startsWith(root)) {
     pythonFromUser = false;
   }
 

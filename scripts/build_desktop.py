@@ -117,6 +117,16 @@ def install_backend() -> None:
         f"{REPO_ROOT}[all]",
     ])
 
+    # 确保 Scripts/pip.exe 存在：python-build-standalone 运行时不带 pip 入口脚本，
+    # 而上面的 install 不会重装已存在的 pip、也就不会生成 exe。无自有 Python
+    # 环境的用户（PATH 被注入内置 python）裸 `pip` 命令会 command not found，
+    # 只能退而用 `python -m pip`，故此处强制重装 pip 生成入口脚本。
+    _run([
+        str(python_exe), "-m", "pip", "install",
+        "--no-input", "--disable-pip-version-check",
+        "--force-reinstall", "--no-deps", "pip",
+    ])
+
 
 def build_dist() -> None:
     """编译 TypeScript + electron-builder 打包"""
