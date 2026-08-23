@@ -5,9 +5,8 @@
  * 显示应用 Logo 和副标题，输入框与工具栏由上层注入到标题下方。
  *
  * - 背景：纯净（无装饰，以玻璃拟态界面自身为视觉主体）
- * - 标题：三色渐变文字（Playfair Display 衬线），鼠标扫过时迸发火花
- *   （参考 react-bits ClickSpark，Canvas 2D 零依赖）并与副标题同频闪光扫过一轮
- * - 副标题：等宽字体精致化，鼠标扫过标题时同步闪光扫过
+ * - 标题：暖色渐变文字（Playfair Display 衬线），鼠标扫过时迸发火花
+ * - 副标题：等宽字体精致化，与主标题地位等价（扫过触发相同动画）
  *
  * @module WelcomeScreen
  */
@@ -36,7 +35,7 @@ interface Spark {
 }
 
 /**
- * 读取当前主题的火花颜色（深色用亮白、浅色用主色青）
+ * 读取当前主题的火花颜色（深色用亮白、浅色用杏橙）
  *
  * @returns 十六进制颜色字符串
  */
@@ -46,14 +45,14 @@ function readSparkColor(): string {
   if (root.classList.contains('dark')) {
     return css.getPropertyValue('--text-primary').trim() || '#eaeaea';
   }
-  return css.getPropertyValue('--primary').trim() || '#2a9d99';
+  return '#f6a866';
 }
 
 /**
  * 欢迎屏幕组件
  *
  * 在会话开始时显示应用 Logo 和副标题，输入框由上层注入到标题下方。
- * 鼠标扫过主标题触发火花迸发（扩散到标题周边区域）+ 主/副标题同频闪光扫过一轮
+ * 鼠标扫过主标题或副标题：火花迸发 + 主/副标题同频闪光
  * （动画结束后自动回到静态；动画进行中扫过被忽略）。
  *
  * @param props - 组件属性
@@ -76,6 +75,9 @@ export default function WelcomeScreen({ children }: WelcomeScreenProps) {
   const rafIdRef = useRef(0);
   /** 火花颜色缓存（触发时从主题读取） */
   const sparkColorRef = useRef('#2a9d99');
+
+  /** 火花散布区域的外扩边距（px） */
+  const SPARK_AREA_PAD = 36;
 
   /**
    * 绘制一帧火花：粒子外扩 + 线长收缩，超时移除；全部消失后停止 rAF
@@ -114,8 +116,7 @@ export default function WelcomeScreen({ children }: WelcomeScreenProps) {
   };
 
   /**
-   * 从 (x, y, w, h) 区域内在随机位置迸发 1-3 簇径向火花：各簇中心在标题区域
-   * 内均匀随机分布（而非围绕鼠标进入点），效果更散、更自然
+   * 从 (x, y, w, h) 区域内在随机位置迸发一簇径向火花
    */
   const emitSparks = (areaX: number, areaY: number, areaW: number, areaH: number) => {
     const canvas = canvasRef.current;
@@ -127,21 +128,18 @@ export default function WelcomeScreen({ children }: WelcomeScreenProps) {
 
     sparkColorRef.current = readSparkColor();
     const now = performance.now();
-    const clusterCount = 1; // 固定单簇
-    for (let c = 0; c < clusterCount; c++) {
-      const cx = areaX + Math.random() * areaW;
-      const cy = areaY + Math.random() * areaH;
-      const radius = SPARK_RADIUS_MIN + Math.random() * (SPARK_RADIUS_MAX - SPARK_RADIUS_MIN);
-      const startAngle = Math.random() * Math.PI * 2;
-      for (let i = 0; i < SPARK_COUNT; i++) {
-        sparksRef.current.push({
-          x: cx,
-          y: cy,
-          angle: startAngle + (2 * Math.PI * i) / SPARK_COUNT,
-          startTime: now,
-          radius,
-        });
-      }
+    const cx = areaX + Math.random() * areaW;
+    const cy = areaY + Math.random() * areaH;
+    const radius = SPARK_RADIUS_MIN + Math.random() * (SPARK_RADIUS_MAX - SPARK_RADIUS_MIN);
+    const startAngle = Math.random() * Math.PI * 2;
+    for (let i = 0; i < SPARK_COUNT; i++) {
+      sparksRef.current.push({
+        x: cx,
+        y: cy,
+        angle: startAngle + (2 * Math.PI * i) / SPARK_COUNT,
+        startTime: now,
+        radius,
+      });
     }
     if (rafIdRef.current === 0) {
       rafIdRef.current = requestAnimationFrame(drawSparks);
@@ -151,29 +149,25 @@ export default function WelcomeScreen({ children }: WelcomeScreenProps) {
   // 卸载时停止火花动画循环
   useEffect(() => () => cancelAnimationFrame(rafIdRef.current), []);
 
-  /** 火花散布区域的外扩边距（px） */
-  const SPARK_AREA_PAD = 36;
-
   /**
-   * 鼠标扫过主标题：火花在标题+副标题合并区域（外扩一圈）内独立随机分布迸发，
-   * 各簇互无关联但位置可预期；同时主副标题同频闪光。
+   * 鼠标扫过主标题/副标题：火花迸发 + 主副标题同频闪光；
    * 动画期间扫过无效（guard），动画结束后才可再次触发
    */
-  const handleTitleMouseEnter = (e: MouseEvent<HTMLHeadingElement>) => {
+  const handleTitleMouseEnter = (e: MouseEvent<HTMLElement>) => {
     if (flashing) return;
     const rect = containerRef.current?.getBoundingClientRect();
     const titleRect = e.currentTarget.getBoundingClientRect();
     const subRect = subtitleRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const left = Math.min(titleRect.left, subRect?.left ?? titleRect.left) - SPARK_AREA_PAD;
-    const top = Math.min(titleRect.top, subRect?.top ?? titleRect.top) - SPARK_AREA_PAD;
-    const right = Math.max(titleRect.right, subRect?.right ?? titleRect.right) + SPARK_AREA_PAD;
-    const bottom = Math.max(titleRect.bottom, subRect?.bottom ?? titleRect.bottom) + SPARK_AREA_PAD;
     emitSparks(
-      left - rect.left,
-      top - rect.top,
-      right - left,
-      bottom - top
+      Math.min(titleRect.left, subRect?.left ?? titleRect.left) - rect.left - SPARK_AREA_PAD,
+      Math.min(titleRect.top, subRect?.top ?? titleRect.top) - rect.top - SPARK_AREA_PAD,
+      Math.max(titleRect.right, subRect?.right ?? titleRect.right) -
+        Math.min(titleRect.left, subRect?.left ?? titleRect.left) +
+        SPARK_AREA_PAD * 2,
+      Math.max(titleRect.bottom, subRect?.bottom ?? titleRect.bottom) -
+        Math.min(titleRect.top, subRect?.top ?? titleRect.top) +
+        SPARK_AREA_PAD * 2
     );
     setFlashing(true);
   };
@@ -182,7 +176,7 @@ export default function WelcomeScreen({ children }: WelcomeScreenProps) {
     <div ref={containerRef} className="h-full flex flex-col items-center overflow-y-auto select-text relative scrollbar-hidden">
       {/* 内容块：m-auto 垂直居中；内容超高时自动滚动且顶部可达（避免 justify-center 裁切） */}
       <div className="m-auto flex flex-col items-center w-full max-w-[var(--composer-card-max-width)] px-6 md:px-10 lg:px-16 pt-6 pb-14 relative z-10">
-        {/* Logo — 三色渐变文字（静态；鼠标扫过时迸发火花 + 与副标题同频闪光扫过一轮） */}
+        {/* Logo — 暖色渐变文字（静态；鼠标扫过时迸发火花 + 与副标题同频闪光扫过一轮） */}
         {/* leading-tight 而非 text-6xl 默认的 line-height:1：背景渐变（background-clip:text）
           只绘制在元素盒内，line-height:1 时 "g" 的 descender 溢出元素盒导致下半部分无背景
           （文字透明不可见），视觉上像被下方副标题截断 */}

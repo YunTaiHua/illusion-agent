@@ -129,9 +129,9 @@ const TaskCompleteSection = memo(function TaskCompleteSection({ streaming, lang,
     setOpen(!open);
   };
 
-  // 点击内容区域快速折叠（对齐思考过程的单击折叠）；跳过内层独立折叠区
-  // （思考过程块、工具行）与交互元素，点击中间 text 空白处即收起整个区
-  const { handleClick: handleContentClick, handleDoubleClick: handleContentDoubleClick } = useContentCollapse(() => {
+  // 右键内容区域快速折叠（对齐思考过程的右键折叠）；忽略内层独立折叠区
+  // （思考过程块、工具行）与交互元素，右键中间 text 空白处即收起整个区
+  const { handleContextMenu: handleContentContextMenu } = useContentCollapse(() => {
     interactedRef.current = true;
     setOpen(false);
   }, '[data-thinking-block], [data-tool-row]');
@@ -163,7 +163,7 @@ const TaskCompleteSection = memo(function TaskCompleteSection({ streaming, lang,
       {/* 展开/折叠微动画（简洁 fade：纯透明度 150ms） */}
       {hasContent && open && (
         <div className="animate-fade">
-          <div className="mt-1.5" onClick={handleContentClick} onDoubleClick={handleContentDoubleClick}>
+          <div className="mt-1.5" onContextMenu={handleContentContextMenu}>
             {children}
           </div>
         </div>

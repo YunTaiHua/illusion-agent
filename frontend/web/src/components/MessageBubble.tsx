@@ -540,71 +540,39 @@ function ProgressMessages({ messages }: { messages: Array<{message: string; type
 }
 
 /**
- * 点击内容区域快速折叠的公共逻辑（对齐思考过程的单击折叠）
- *
- * 不打断以下交互：
- * - 文本选中/复制（selection 非空时跳过）
- * - 链接、按钮、输入框等交互元素（closest 跳过）
- * - 额外跳过指定区域（skipSelector，如外层折叠区忽略内层思考过程/工具行）
- * - 双击/三击选词（延迟 300ms 折叠，onDoubleClick 取消）
+ * 右键内容区域快速折叠的公共逻辑（对齐思考过程的右键折叠）
  *
  * @param onCollapse - 折叠回调
  * @param skipSelector - 额外跳过的选择器（命中则交给内层处理，不折叠）
  */
 export function useContentCollapse(onCollapse: () => void, skipSelector?: string) {
-  // 待执行的折叠定时器：双击选词的第一击会触发 click（detail=1），
-  // 立即折叠会破坏双击/三击选词，故延迟折叠并允许 onDoubleClick 取消
-  const collapseTimerRef = useRef<number | undefined>(undefined);
-
-  // 组件卸载时清除待执行的折叠定时器
-  useEffect(() => {
-    return () => {
-      if (collapseTimerRef.current !== undefined) {
-        window.clearTimeout(collapseTimerRef.current);
-      }
-    };
-  }, []);
-
-  const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.detail > 1) return; // 双击第二击（此时已选中词）：不折叠
+  const handleContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
-    // 交互元素交给默认行为：链接跳转、代码块复制按钮等
+    // 交互元素保留原生右键菜单：复制链接地址、代码块复制按钮等
     if (target.closest('a, button, input, textarea')) return;
     // 内层独立折叠区（思考过程块、工具行）交给各自处理
     if (skipSelector && target.closest(skipSelector)) return;
-    // 正在选中文本（复制场景）不折叠
+    // 正在选中文本（复制场景）：保留原生右键菜单的"复制"项，不折叠
     const sel = window.getSelection();
     if (sel && !sel.isCollapsed) return;
-    // 延迟折叠（300ms）：双击的第一击 detail 也是 1，立即折叠会破坏
-    // 双击选词/三击选段；onDoubleClick 会在此窗口内取消定时器
-    collapseTimerRef.current = window.setTimeout(() => {
-      collapseTimerRef.current = undefined;
-      onCollapse();
-    }, 300);
+    // 阻止浏览器原生右键菜单，右键即快速折叠
+    e.preventDefault();
+    onCollapse();
   };
 
-  /** 双击（选词）取消待执行的折叠 */
-  const handleDoubleClick = () => {
-    if (collapseTimerRef.current !== undefined) {
-      window.clearTimeout(collapseTimerRef.current);
-      collapseTimerRef.current = undefined;
-    }
-  };
-
-  return { handleClick, handleDoubleClick };
+  return { handleContextMenu };
 }
 
 /**
  * 思考过程块组件（独立折叠单元）
  *
  * 显示助手的思考/推理过程，支持折叠/展开。每个思考过程块独立折叠，
- * 互不影响（对齐 opencode 的 part 级独立折叠）。
  *
  * 自动折叠：`autoCollapsed` 信号变化（如 text 推入）时自动折叠/展开，
  * 但用户手动点击过的块不再被自动信号覆盖，尊重用户选择。
  *
- * 点击内容区域本身也可折叠（无需翻回顶部标题处），但不会打断
- * 文本选中/复制、链接点击、代码块复制按钮等交互。
+ * 右键内容区域本身也可折叠（无需翻回顶部标题处），左键保留文本选中/复制
+ * 等自然交互，不打断链接点击、代码块复制按钮等。
  *
  * @param props - 组件属性
  * @param props.text - 思考过程文本
@@ -646,8 +614,8 @@ export const ThinkingBlock = memo(function ThinkingBlock({
     setOpen(!open);
   };
 
-  // 点击内容区域快速折叠（不打断选中/复制/链接/复制按钮/双击选词）
-  const { handleClick: handleContentClick, handleDoubleClick: handleContentDoubleClick } = useContentCollapse(() => {
+  // 右键内容区域快速折叠
+  const { handleContextMenu: handleContentContextMenu } = useContentCollapse(() => {
     interactedRef.current = true;
     setOpen(false);
   });
@@ -680,7 +648,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({
       {/* 展开/折叠微动画（简洁 fade：纯透明度 150ms） */}
       {open && (
         <div className="animate-fade">
-          <div onClick={handleContentClick} onDoubleClick={handleContentDoubleClick} className="relative">
+          <div onContextMenu={handleContentContextMenu} className="relative">
             <div className="text-sm text-content-secondary leading-relaxed select-text mt-1.5 opacity-80 py-1">
               <div className="prose prose-sm max-w-full">
                 <ReactMarkdown remarkPlugins={[remarkGfm, remarkSuperscript]} rehypePlugins={rehypePlugins} urlTransform={urlTransform} components={mdComponents}>

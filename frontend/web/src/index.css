@@ -968,17 +968,15 @@ pre code.hljs,
 
 /* ========== 欢迎屏标题样式 ========== */
 
-/* 渐变文字 — GradientText（三色渐变，静态；
-   浅色主题：沿用深色主题的粉彩三色（青/紫/珊瑚），50% 闪光带用柔粉替代白；
-   in oklch 感知色彩空间插值：相邻色沿色相环路径过渡，
-   避免 sRGB 空间下紫↔橙互补混色的浑浊灰带；
-   深色主题沿用 --primary/--secondary/--accent + 白闪光带（sRGB 插值，原样保留） */
+/* 渐变文字 — GradientText（静态渐变） */
 .gradient-text {
-  /* 青/紫 双色对称渐变（oklch 插值，过渡沿色相环干净路径） */
   background: linear-gradient(120deg in oklch,
-    #2ba79e 0%,
-    #8e83c4 50%,
-    #2ba79e 100%);
+    #dc4a78 0%,
+    #f29db5 25%,
+    #f6a866 40%,
+    #f7cd9e 50%,
+    #f29db5 75%,
+    #dc4a78 100%);
   background-size: 200% auto;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
