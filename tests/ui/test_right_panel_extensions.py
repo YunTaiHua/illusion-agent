@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -73,14 +74,16 @@ class TestResolveWithinRoot:
 
     def test_absolute_path_rejected(self, tmp_path: Path):
         """绝对路径不落在 root 下时返回 None"""
-        assert _resolve_within_root(str(tmp_path), "C:/Windows/system32") is None or _resolve_within_root(
-            str(tmp_path), "C:/Windows/system32"
-        ) is None
+        outside = tmp_path.parent / "outside-root"
+        assert _resolve_within_root(str(tmp_path), str(outside)) is None
 
     def test_backslash_normalized(self, tmp_path: Path):
-        """反斜杠分隔的相对路径可正常解析"""
+        """反斜杠分隔的相对路径在 Windows 上按分隔符归一化（POSIX 中 \\ 是合法文件名字符）"""
         target = _resolve_within_root(str(tmp_path), "src\\app")
-        assert target == (tmp_path / "src" / "app").resolve()
+        if os.name == "nt":
+            assert target == (tmp_path / "src" / "app").resolve()
+        else:
+            assert target == (tmp_path / "src\\app").resolve()
 
 
 class TestListDirEntries:
