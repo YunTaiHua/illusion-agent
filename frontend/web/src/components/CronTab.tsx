@@ -14,10 +14,12 @@
  * @module CronTab
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { t, type UiLanguage } from '../i18n';
 import { cronApi, type CronJob, type CronSchedulerStatus, type CronSessionSummary, type CronChannelSession } from '../api';
 import { GlassDropdown } from './GlassDropdown';
+import ToggleSwitch from './ToggleSwitch';
 import type { WebWorkspaceItem } from '../types/protocol';
 
 /** 输入框通用样式（聚焦散光，与 SetupForm 保持一致） */
@@ -616,14 +618,13 @@ function CronJobCard({ lang, job, workspaces, expanded, onToggleExpand, running,
 
           {/* 操作行：启用开关 + 运行 / 编辑 / 删除 */}
           <div className="flex items-center gap-3 pt-1 border-t border-border-light">
-            <button
-              onClick={() => onToggleEnabled(!enabled)}
+            <ToggleSwitch
+              checked={enabled}
+              onChange={(v) => onToggleEnabled(v)}
               disabled={running}
-              className={`relative w-9 h-5 rounded-full transition-colors cursor-pointer ${enabled ? 'bg-primary' : 'bg-surface-hover'} disabled:opacity-40 disabled:cursor-not-allowed`}
+              label={t(lang, 'cronFieldEnabled')}
               title={t(lang, 'cronFieldEnabled')}
-            >
-              <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all" style={{ left: enabled ? '18px' : '2px' }} />
-            </button>
+            />
 
             <button
               onClick={onRun}
@@ -661,19 +662,14 @@ function CronJobCard({ lang, job, workspaces, expanded, onToggleExpand, running,
   );
 }
 
-/** 布尔字段行（开关，样式与 SetupForm 一致） */
+/** 布尔字段行（开关，统一使用共享 ToggleSwitch） */
 function BoolFieldRow({ lang, labelKey, checked, onChange }: {
   lang: UiLanguage; labelKey: string; checked: boolean; onChange: (v: boolean) => void;
 }) {
   return (
     <div className="flex items-center justify-between">
       <span className="text-sm text-content-secondary">{t(lang, labelKey)}</span>
-      <button
-        onClick={() => onChange(!checked)}
-        className={`relative w-9 h-5 rounded-full transition-colors cursor-pointer ${checked ? 'bg-primary' : 'bg-surface-hover'}`}
-      >
-        <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all" style={{ left: checked ? '18px' : '2px' }} />
-      </button>
+      <ToggleSwitch checked={checked} onChange={onChange} label={t(lang, labelKey)} />
     </div>
   );
 }
@@ -698,16 +694,54 @@ interface DeliverToPickerProps {
  */
 function DeliverToPicker({ lang, channels, value, onChange }: DeliverToPickerProps) {
   const [open, setOpen] = useState(false);
+  const [panelPos, setPanelPos] = useState<{ top: number; left: number; width: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   const channelNames = Object.keys(channels);
   const totalCount = channelNames.reduce((n, c) => n + (channels[c]?.length ?? 0), 0);
 
-  // 点击外部关闭
+  // 面板位置：基于容器 rect 计算（Portal 到 body 后 fixed 定位，避免被父级
+  // overflow-y-auto 容器裁剪；与 GlassDropdown 同方案）
+  const updatePanelPosition = useCallback(() => {
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    setPanelPos({ top: rect.bottom + 4, left: rect.left, width: rect.width });
+  }, []);
+
+  // 打开时立即定位 + 窗口 resize 时更新
+  useLayoutEffect(() => {
+    if (!open) return;
+    updatePanelPosition();
+    const handleResize = () => updatePanelPosition();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [open, updatePanelPosition]);
+
+  // 滚动时更新位置；触发器移出视口则关闭
+  useEffect(() => {
+    if (!open) return;
+    const handleScroll = () => {
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      if (rect.bottom < 0 || rect.top > window.innerHeight) {
+        setOpen(false);
+        return;
+      }
+      updatePanelPosition();
+    };
+    window.addEventListener('scroll', handleScroll, true);
+    return () => window.removeEventListener('scroll', handleScroll, true);
+  }, [open, updatePanelPosition]);
+
+  // 点击外部关闭：容器和 Portal 面板都视为内部——面板渲染在 body 下，
+  // 不检查 panelRef 的话 mousedown 会先卸载面板、吞掉选项的 click 事件
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (containerRef.current?.contains(e.target as Node)) return;
+      const target = e.target as Node;
+      if (containerRef.current?.contains(target)) return;
+      if (panelRef.current?.contains(target)) return;
       setOpen(false);
     };
     document.addEventListener('mousedown', handler);
@@ -728,8 +762,8 @@ function DeliverToPicker({ lang, channels, value, onChange }: DeliverToPickerPro
 
   return (
     <div ref={containerRef} className="relative">
-      {/* 已选 chips + 展开按钮 */}
-      <div className={`flex flex-wrap items-center gap-1.5 px-2 py-1.5 rounded-md bg-surface-card-alt border border-border-light min-h-[38px] ${open ? 'border-primary shadow-glow' : ''}`}>
+      {/* 已选 chips + 展开按钮（聚焦/展开态与 GlassDropdown 触发器一致：主色边框 + 散光） */}
+      <div className={`flex flex-wrap items-center gap-1.5 px-2 py-1.5 rounded-md bg-surface-card-alt border border-border-light min-h-[38px] transition-all duration-200 ${open ? 'border-primary shadow-glow' : 'focus-within:border-primary focus-within:shadow-glow'}`}>
         {value.length === 0 && (
           <span className="text-sm text-content-disabled px-1">-</span>
         )}
@@ -754,20 +788,27 @@ function DeliverToPicker({ lang, channels, value, onChange }: DeliverToPickerPro
         </button>
       </div>
 
-      {/* 下拉面板：渠道分组 + 会话选项 */}
-      {open && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute top-full left-0 mt-1 w-full bg-surface-card-alt border border-border-medium rounded-xl z-20 p-1 max-h-56 overflow-y-auto animate-fade dropdown-scroll shadow-card dropdown-panel">
+      {/* 下拉面板：Portal 到 body（fixed 定位，父级 overflow-y-auto 无法裁剪） */}
+      {open && panelPos && createPortal(
+        <div
+          ref={panelRef}
+          className="fixed z-50 bg-surface-card-alt border border-border-medium rounded-lg max-h-56 overflow-y-auto p-1 animate-fade dropdown-scroll shadow-card dropdown-panel"
+          style={{ top: `${panelPos.top}px`, left: `${panelPos.left}px`, width: `${panelPos.width}px` }}
+        >
             {totalCount === 0 ? (
               <div className="px-3 py-2 text-xs text-content-disabled">{t(lang, 'cronChannelSessionsNone')}</div>
             ) : (
-              channelNames.map((name) => {
-                const list = channels[name] ?? [];
-                if (list.length === 0) return null;
-                return (
+              (() => {
+                // 渲染计数器：空组不占分组序号，保证"首组顶部无分割线"按可见顺序生效
+                let rendered = 0;
+                return channelNames.map((name) => {
+                  const list = channels[name] ?? [];
+                  if (list.length === 0) return null;
+                  const groupIdx = rendered++;
+                  return (
                   <div key={name}>
-                    <div className="px-3 py-1 text-[10px] text-content-disabled font-semibold uppercase tracking-widest border-b border-border-light mb-1">
+                    {/* 渠道分组标题：首组顶部无分割线，后续组与上一组隔开 */}
+                    <div className={`px-3 py-1 text-[10px] text-content-disabled font-semibold uppercase tracking-widest border-b border-border-light mb-1 ${groupIdx > 0 ? 'mt-1 border-t' : ''}`}>
                       {t(lang, name === 'feishu' ? 'setupChannelFeishu' : name === 'weixin' ? 'setupChannelWeixin' : 'setupChannelQQ')}
                     </div>
                     {list.map((s) => {
@@ -777,11 +818,14 @@ function DeliverToPicker({ lang, channels, value, onChange }: DeliverToPickerPro
                         <button
                           key={target}
                           onClick={() => toggleTarget(target)}
-                          className={`w-full text-left px-3 py-1.5 border border-transparent hover:border-border-light text-xs transition-colors cursor-pointer flex items-center gap-2 ${checked ? 'text-primary font-medium glass-option-hover' : 'text-content-secondary glass-option-hover'}`}
+                          // 显式 rounded-lg：选项包在分组 div 内，不是面板直接子元素，
+                          // .dropdown-panel > button 的圆角继承规则匹配不到，必须自带圆角
+                          className={`w-full text-left px-3 py-2 rounded-lg border border-transparent hover:border-border-light text-sm transition-colors cursor-pointer flex items-center gap-2 ${checked ? 'text-primary font-medium glass-option-hover' : 'text-content-secondary glass-option-hover'}`}
                         >
-                          <span className={`w-3 h-3 rounded border shrink-0 flex items-center justify-center ${checked ? 'bg-primary border-primary' : 'border-border-light'}`}>
+                          {/* 多选矩形框（checkbox）：选中填充主色 + 白色对勾 */}
+                          <span className={`w-3.5 h-3.5 rounded-sm border shrink-0 flex items-center justify-center ${checked ? 'bg-primary border-primary' : 'border-border-medium'}`}>
                             {checked && (
-                              <svg className="w-2 h-2 text-white" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2.5 6.5l2.5 2.5 4.5-5" /></svg>
+                              <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2.5 6.5l2.5 2.5 4.5-5" /></svg>
                             )}
                           </span>
                           <span className="flex-1 truncate">
@@ -795,11 +839,12 @@ function DeliverToPicker({ lang, channels, value, onChange }: DeliverToPickerPro
                       );
                     })}
                   </div>
-                );
-              })
+                  );
+                });
+              })()
             )}
-          </div>
-        </>
+        </div>,
+        document.body,
       )}
     </div>
   );

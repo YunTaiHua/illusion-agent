@@ -35,7 +35,7 @@ interface Spark {
 }
 
 /**
- * 读取当前主题的火花颜色（深色用亮白、浅色用杏橙）
+ * 读取当前主题的火花颜色（深色用亮白、浅色用深玫红）
  *
  * @returns 十六进制颜色字符串
  */
@@ -45,7 +45,7 @@ function readSparkColor(): string {
   if (root.classList.contains('dark')) {
     return css.getPropertyValue('--text-primary').trim() || '#eaeaea';
   }
-  return '#f6a866';
+  return '#dc4a78';
 }
 
 /**

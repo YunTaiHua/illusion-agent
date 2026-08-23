@@ -52,27 +52,12 @@ export default function ConnectingOverlay({ lang, fading }: ConnectingOverlayPro
       aria-label={lang === 'zh-CN' ? '正在连接...' : 'Connecting...'}
       role="status"
     >
-      {/* 莫比乌斯环 — 整体呼吸 pulse：scale 1↔1.08，opacity 0.9↔1，2.5s（无光晕） */}
+      {/* 莫比乌斯环 — 整体呼吸 pulse：scale 1↔1.08，opacity 0.9↔1，2.5s（纯色 #dc4a78，无渐变无光晕） */}
       <svg width="112" height="112" viewBox="0 0 80 80" className="animate-pulse-soft">
-        {/* 定义流动渐变：浅色主题青紫两色循环 */}
-        <defs>
-          <linearGradient id="mobi-grad" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#2ba79e">
-              <animate attributeName="stop-color" values="#2ba79e;#8e83c4;#2ba79e" dur="4s" repeatCount="indefinite" />
-            </stop>
-            <stop offset="50%" stopColor="#8e83c4">
-              <animate attributeName="stop-color" values="#8e83c4;#2ba79e;#8e83c4" dur="4s" repeatCount="indefinite" />
-            </stop>
-            <stop offset="100%" stopColor="#2ba79e">
-              <animate attributeName="stop-color" values="#2ba79e;#8e83c4;#2ba79e" dur="4s" repeatCount="indefinite" />
-            </stop>
-          </linearGradient>
-        </defs>
-
-        {/* 莫比乌斯环主线：流动光带 */}
+        {/* 莫比乌斯环主线：纯色光带流动 */}
         <path
           d={MOBIUS_PATH}
-          stroke="url(#mobi-grad)"
+          stroke="#dc4a78"
           strokeWidth="3.5"
           fill="none"
           strokeLinecap="round"

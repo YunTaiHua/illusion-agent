@@ -25,6 +25,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { t, type UiLanguage } from '../i18n';
 import { useTheme } from '../hooks/useTheme';
 import { GlassDropdown, type DropdownOption } from './GlassDropdown';
+import ToggleSwitch from './ToggleSwitch';
 import { CronTab } from './CronTab';
 import type { WebWorkspaceItem } from '../types/protocol';
 import {
@@ -1084,44 +1085,12 @@ function SettingsTab(p: SettingsTabProps) {
         {/* 启用开关 */}
         <div className="flex items-center justify-between">
           <span className="text-sm text-content-primary">{t(lang, 'setupFieldMemoryEnabled')}</span>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={p.memEnabled}
-            onClick={() => p.onMemEnabledChange(!p.memEnabled)}
-            className={`relative w-10 h-5.5 rounded-full transition-colors cursor-pointer ${
-              p.memEnabled ? 'bg-primary' : 'bg-border-light'
-            }`}
-            style={{ height: 22 }}
-          >
-            <span
-              className={`absolute top-0.5 w-4.5 h-4.5 rounded-full bg-white shadow transition-all ${
-                p.memEnabled ? 'left-[22px]' : 'left-0.5'
-              }`}
-              style={{ width: 18, height: 18, top: 2 }}
-            />
-          </button>
+          <ToggleSwitch checked={p.memEnabled} onChange={p.onMemEnabledChange} label={t(lang, 'setupFieldMemoryEnabled')} />
         </div>
         {/* 后台自动提取开关 */}
         <div className="flex items-center justify-between">
           <span className="text-sm text-content-primary">{t(lang, 'setupFieldMemoryAutoExtract')}</span>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={p.memAutoExtract}
-            onClick={() => p.onMemAutoExtractChange(!p.memAutoExtract)}
-            className={`relative w-10 h-5.5 rounded-full transition-colors cursor-pointer ${
-              p.memAutoExtract ? 'bg-primary' : 'bg-border-light'
-            }`}
-            style={{ height: 22 }}
-          >
-            <span
-              className={`absolute top-0.5 w-4.5 h-4.5 rounded-full bg-white shadow transition-all ${
-                p.memAutoExtract ? 'left-[22px]' : 'left-0.5'
-              }`}
-              style={{ width: 18, height: 18, top: 2 }}
-            />
-          </button>
+          <ToggleSwitch checked={p.memAutoExtract} onChange={p.onMemAutoExtractChange} label={t(lang, 'setupFieldMemoryAutoExtract')} />
         </div>
         {/* 记忆目录输入 */}
         <div>
@@ -1162,23 +1131,7 @@ function SettingsTab(p: SettingsTabProps) {
         {/* 启用开关 */}
         <div className="flex items-center justify-between">
           <span className="text-sm text-content-primary">{t(lang, 'setupFieldTitleEnabled')}</span>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={p.titleEnabled}
-            onClick={() => p.onTitleEnabledChange(!p.titleEnabled)}
-            className={`relative w-10 h-5.5 rounded-full transition-colors cursor-pointer ${
-              p.titleEnabled ? 'bg-primary' : 'bg-border-light'
-            }`}
-            style={{ height: 22 }}
-          >
-            <span
-              className={`absolute top-0.5 w-4.5 h-4.5 rounded-full bg-white shadow transition-all ${
-                p.titleEnabled ? 'left-[22px]' : 'left-0.5'
-              }`}
-              style={{ width: 18, height: 18, top: 2 }}
-            />
-          </button>
+          <ToggleSwitch checked={p.titleEnabled} onChange={p.onTitleEnabledChange} label={t(lang, 'setupFieldTitleEnabled')} />
         </div>
         <div className="text-[11px] text-content-disabled">{t(lang, 'setupFieldTitleEnabledHint')}</div>
         {/* 标题生成模型 */}
@@ -1924,12 +1877,7 @@ function BoolWithHint({ lang, labelKey, hintKey, checked, onChange }: { lang: Ui
     <div>
       <div className="flex items-center justify-between">
         <span className="text-sm text-content-secondary">{t(lang, labelKey)}</span>
-        <button
-          onClick={() => onChange(!checked)}
-          className={`relative w-9 h-5 rounded-full transition-colors cursor-pointer ${checked ? 'bg-primary' : 'bg-surface-hover'}`}
-        >
-          <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all" style={{ left: checked ? '18px' : '2px' }} />
-        </button>
+        <ToggleSwitch checked={checked} onChange={onChange} label={t(lang, labelKey)} />
       </div>
       {hintKey && <div className="text-[11px] text-content-disabled mt-1">{t(lang, hintKey)}</div>}
     </div>
@@ -2044,14 +1992,13 @@ function ChannelSection({ lang, channelName, title, enabled, onToggle, runtimeSt
           )}
         </div>
         {/* 右侧 toggle：运行时启停（未 enabled 或初始化中时禁用） */}
-        <button
-          onClick={handleToggle}
+        <ToggleSwitch
+          checked={isRunning}
+          onChange={() => handleToggle()}
           disabled={toggleDisabled}
-          className={`relative w-9 h-5 rounded-full transition-colors ${isRunning ? 'bg-primary' : 'bg-surface-hover'} ${toggleDisabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}
+          label={isRunning ? t(lang, 'setupChannelStop') : t(lang, 'setupChannelStart')}
           title={isRunning ? t(lang, 'setupChannelStop') : t(lang, 'setupChannelStart')}
-        >
-          <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all" style={{ left: isRunning ? '18px' : '2px' }} />
-        </button>
+        />
       </div>
       {expanded && (
         <div className="px-4 py-3 space-y-3">
@@ -2119,12 +2066,7 @@ function BoolField({ lang, labelKey, checked, onChange }: { lang: UiLanguage; la
   return (
     <div className="flex items-center justify-between">
       <span className="text-sm text-content-secondary">{t(lang, labelKey)}</span>
-      <button
-        onClick={() => onChange(!checked)}
-        className={`relative w-9 h-5 rounded-full transition-colors cursor-pointer ${checked ? 'bg-primary' : 'bg-surface-hover'}`}
-      >
-        <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all" style={{ left: checked ? '18px' : '2px' }} />
-      </button>
+      <ToggleSwitch checked={checked} onChange={onChange} label={t(lang, labelKey)} />
     </div>
   );
 }

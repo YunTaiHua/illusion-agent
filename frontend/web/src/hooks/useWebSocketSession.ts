@@ -780,6 +780,10 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       activeSessionIdRef.current = id;
       setActiveSessionId(id);
       if (cwd) patchView(id, { cwd });
+      // 视图可能尚未存在（如页面刷新后首次点击该会话），先 ensureView
+      // 再置 restoring，避免 patchView 对缺失 sid 静默丢弃导致恢复加载态
+      // 不生效、欢迎屏短暂闪烁（对齐 web_restore_started 处理器的做法）
+      ensureView(id);
       patchView(id, { restoring: true });
       sendRaw({ type: 'web_restore_session', session_id: id, ...(cwd ? { cwd } : {}) });
       // 恢复响应兜底：restore_completed 丢失/后端异常时 10s 后清除加载态，
@@ -804,7 +808,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       // 右栏资源联动由 activeSessionId 变化的统一刷新 effect 承担
       // （覆盖资源 / Git / 文件树根 / 智能体任务），此处不再单独发请求
     }
-  }, [patchView, sendRaw]);
+  }, [patchView, ensureView, sendRaw]);
 
   /** 新建会话：后端创建后通过 web_restore_completed 自动切换为活跃；cwd 指定目标工作区。
    *  发出请求即进入等待态（聊天区局部加载卡即时反馈），restore_completed 到达或

@@ -175,14 +175,7 @@ app.whenReady().then(async () => {
           @keyframes mobiFlow{from{stroke-dashoffset:0}to{stroke-dashoffset:-128}}
         </style></head><body>
           <svg id="mobi" width="112" height="112" viewBox="0 0 80 80">
-            <defs>
-              <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="0%">
-                <stop offset="0%" stop-color="#2ba79e"><animate attributeName="stop-color" values="#2ba79e;#8e83c4;#2ba79e" dur="4s" repeatCount="indefinite"/></stop>
-                <stop offset="50%" stop-color="#8e83c4"><animate attributeName="stop-color" values="#8e83c4;#2ba79e;#8e83c4" dur="4s" repeatCount="indefinite"/></stop>
-                <stop offset="100%" stop-color="#2ba79e"><animate attributeName="stop-color" values="#2ba79e;#8e83c4;#2ba79e" dur="4s" repeatCount="indefinite"/></stop>
-              </linearGradient>
-            </defs>
-            <path id="ring" stroke="url(#g)" d="${MOBIUS_PATH}"/>
+            <path id="ring" stroke="#dc4a78" d="${MOBIUS_PATH}"/>
           </svg>
         </body></html>`,
       ),

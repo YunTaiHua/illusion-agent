@@ -10,7 +10,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* 内容区文本可选但不显示 I-beam 光标（学习 opencode：仅交互元素用 pointer） */
+/* 内容区文本可选但不显示 I-beam 光标 */
 .select-text {
   cursor: default;
 }
@@ -780,8 +780,6 @@ pre code.hljs,
   margin: 0.75em 0;
   padding: 0.625em 0.875em 0.625em 1em;
 }
-
-/* ========== 质感工具类（灵感：react-bits） ========== */
 
 /* ========== 玻璃拟态语义类 (macOS 风柔和玻璃) ========== */
 
