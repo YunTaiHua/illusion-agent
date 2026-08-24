@@ -685,7 +685,7 @@ export function AgentWizard(props: AgentWizardProps): React.JSX.Element {
 
 	/** 渲染 SelectModal 步骤 */
 	const renderSelectStep = (title: string, options: SelectOption[]): React.JSX.Element => (
-		<SelectModal title={title} options={options} selectedIndex={selectedIndex} />
+		<SelectModal title={title} options={options} selectedIndex={selectedIndex} language={language} />
 	);
 
 	/** 渲染可翻页的长文本（限制 MAX_VIEW_LINES 行，上下键翻页）

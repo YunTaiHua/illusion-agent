@@ -13,6 +13,8 @@
 import React from 'react';
 import {Box, Text} from 'ink';
 
+import type {UiLanguage} from '../i18n.js';
+import {t} from '../i18n.js';
 import {useTerminalSize} from '../hooks/useTerminalSize.js';
 import {useTheme} from '../theme/ThemeContext.js';
 import {stringWidth, wrapForPrefix} from '../utils/markdown.js';
@@ -43,16 +45,19 @@ const MAX_VISIBLE = 6;
  * @param props.title - 对话框标题
  * @param props.options - 选项列表
  * @param props.selectedIndex - 当前选中的索引
+ * @param props.language - 当前 UI 语言
  * @returns 返回选择模态对话框的 JSX 元素
  */
 export function SelectModal({
 	title,
 	options,
 	selectedIndex,
+	language,
 }: {
 	title: string;
 	options: SelectOption[];
 	selectedIndex: number;
+	language: UiLanguage;
 }): React.JSX.Element {
 	const theme = useTheme();
 	const {columns: terminalWidth} = useTerminalSize();
@@ -82,7 +87,7 @@ export function SelectModal({
 				const prefixWidth = stringWidth(prefix);
 				const continuationPrefix = ' '.repeat(prefixWidth);
 				// content = label + activeSuffix + separator + description
-				const activeSuffix = isCurrent ? ' (current)' : '';
+				const activeSuffix = isCurrent ? ` (${t(language, 'currentMark')})` : '';
 				const sep = opt.description ? ` ${theme.icons.middleDot} ` : '';
 				const content = `${opt.label}${activeSuffix}${sep}${opt.description ?? ''}`;
 				const wrapped = wrapForPrefix(content, terminalWidth, prefix);
@@ -110,11 +115,11 @@ export function SelectModal({
 			})}
 			<Box>
 				<Text dimColor>
-					<Text color={theme.colors.muted}>↑↓</Text> navigate
+					<Text color={theme.colors.muted}>↑↓</Text> {t(language, 'permNavHint')}
 					<Text> {theme.icons.middleDot} </Text>
-					<Text color={theme.colors.muted}>↵</Text> select
+					<Text color={theme.colors.muted}>↵</Text> {t(language, 'permSelectHint')}
 					<Text> {theme.icons.middleDot} </Text>
-					<Text color={theme.colors.muted}>esc</Text> cancel
+					<Text color={theme.colors.muted}>esc</Text> {t(language, 'permCancelHint')}
 				</Text>
 			</Box>
 		</Box>

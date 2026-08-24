@@ -74,7 +74,11 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
       return (
         <div className="flex items-center justify-center h-screen bg-surface-main">
           <div className="text-center max-w-md px-6">
-            <div className="text-4xl mb-4">⚠️</div>
+            <div className="text-4xl mb-4 flex justify-center text-amber-500">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M12 2L1 21h22L12 2zm1 15h-2v-2h2v2zm0-4h-2V9h2v4z" />
+              </svg>
+            </div>
             <h2 className="text-lg font-semibold text-content-primary mb-2">{t.title}</h2>
             <p className="text-sm text-content-secondary mb-4">
               {this.state.error?.message || t.detail}

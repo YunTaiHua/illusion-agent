@@ -44,6 +44,22 @@ const ZH: Dict = {
 	allow: '允许',
 	sessionAllow: '本次会话允许',
 	deny: '拒绝',
+	sandbox: '沙箱',
+	// 权限弹窗底部键位提示
+	permNavHint: '导航',
+	permSelectHint: '选择',
+	permCancelHint: '取消',
+	// 权限确认选项描述
+	permAllowDesc: '批准此次工具执行',
+	permSessionDesc: '仅本次会话内自动允许',
+	permDenyDesc: '拒绝此次工具执行',
+	// 当前活跃选项标记
+	currentMark: '当前',
+	// MCP 认证模态框
+	mcpAuthTitle: 'MCP 认证',
+	mcpAuthPrompt: '提供认证信息',
+	// 问答模态框工具行
+	toolLabel: '工具：',
 	spinnerVerbs: '思考,分析,推理,生成,处理,计算,检索,整合,优化,验证,解析,构建',
 	spinnerToolAction: '正在着手',
 	// Goal 相位标签
@@ -172,6 +188,22 @@ const EN: Dict = {
 	allow: 'Allow',
 	sessionAllow: 'Allow for session',
 	deny: 'Deny',
+	sandbox: 'Sandbox',
+	// 权限弹窗底部键位提示
+	permNavHint: 'navigate',
+	permSelectHint: 'select',
+	permCancelHint: 'cancel',
+	// 权限确认选项描述
+	permAllowDesc: 'Approve this tool execution',
+	permSessionDesc: 'Allow this tool for the current session only',
+	permDenyDesc: 'Reject this tool execution',
+	// 当前活跃选项标记
+	currentMark: 'current',
+	// MCP 认证模态框
+	mcpAuthTitle: 'MCP Authentication',
+	mcpAuthPrompt: 'Provide auth details',
+	// 问答模态框工具行
+	toolLabel: 'Tool: ',
 	spinnerVerbs: 'Thinking,Processing,Analyzing,Reasoning,Generating,Computing,Refining,Synthesizing,Optimizing,Validating,Parsing,Building',
 	spinnerToolAction: 'Wielding tool',
 	// Goal phase labels

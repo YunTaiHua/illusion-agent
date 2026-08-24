@@ -83,7 +83,7 @@ type HintFragment = {key: string; label: string};
  * @param props.language - 当前 UI 语言
  * @returns 返回问答模态框的 JSX 元素
  */
-function QuestionModal({
+export function QuestionModal({
 	modal,
 	modalInput,
 	setModalInput,
@@ -572,7 +572,6 @@ function QuestionModal({
 	};
 
 	const toolName = modal.tool_name ? String(modal.tool_name) : null;
-	const reason = modal.reason ? String(modal.reason) : null;
 
 	// ============ 复核/提交页 ============
 	if (isSubmitView) {
@@ -714,14 +713,8 @@ function QuestionModal({
 			{toolName ? (
 				<Box>
 					<Text dimColor>{`  ${theme.icons.resultPrefix} `}</Text>
-					<Text dimColor>Tool: </Text>
+					<Text dimColor>{t(language, 'toolLabel')}</Text>
 					<Text color={theme.colors.info}>{toolName}</Text>
-				</Box>
-			) : null}
-			{reason ? (
-				<Box>
-					<Text dimColor>{`  ${theme.icons.resultPrefix} `}</Text>
-					<Text dimColor>{reason}</Text>
 				</Box>
 			) : null}
 			{hasOptions ? (
@@ -832,50 +825,6 @@ function QuestionModal({
 }
 
 /**
- * 权限确认模态框组件
- *
- * 显示工具执行权限请求，提示用户确认是否允许执行。
- *
- * @param props - 组件属性
- * @param props.modal - 模态对话框配置
- * @returns 返回权限确认模态框的 JSX 元素
- */
-function PermissionModal({
-	modal,
-}: {
-	modal: Record<string, unknown>;
-}): React.JSX.Element {
-	const theme = useTheme();
-	const toolName = String(modal.tool_name ?? 'tool');
-	const reason = modal.reason ? String(modal.reason) : null;
-
-	return (
-		<Box flexDirection="column" marginTop={1}>
-			<Box>
-				<Text color={theme.colors.warning}>{theme.icons.pointer} </Text>
-				<Text bold>Allow </Text>
-				<Text color={theme.colors.info} bold>{toolName}</Text>
-				<Text bold>?</Text>
-			</Box>
-			{reason ? (
-				<Box>
-					<Text dimColor>{`  ${theme.icons.resultPrefix} `}</Text>
-					<Text dimColor>{reason}</Text>
-				</Box>
-			) : null}
-			<Box>
-				<Text dimColor>{`  ${theme.icons.resultPrefix} `}</Text>
-				<Text dimColor>
-					<Text color={theme.colors.muted}>↑↓</Text> navigate
-					<Text> {theme.icons.middleDot} </Text>
-					<Text color={theme.colors.muted}>↵</Text> select
-				</Text>
-			</Box>
-		</Box>
-	);
-}
-
-/**
  * MCP 认证模态框组件
  *
  * 显示 MCP 服务器认证请求，提示用户输入认证信息。
@@ -902,13 +851,13 @@ function McpAuthModal({
 	language: UiLanguage;
 }): React.JSX.Element {
 	const theme = useTheme();
-	const prompt = String(modal.prompt ?? 'Provide auth details');
+	const prompt = String(modal.prompt ?? t(language, 'mcpAuthPrompt'));
 
 	return (
 		<Box flexDirection="column" marginTop={1}>
 			<Box>
 				<Text color={theme.colors.warning}>{theme.icons.pointer} </Text>
-				<Text bold>MCP Authentication</Text>
+				<Text bold>{t(language, 'mcpAuthTitle')}</Text>
 			</Box>
 			<Box>
 				<Text dimColor>{`  ${theme.icons.resultPrefix} `}</Text>
@@ -951,10 +900,6 @@ export function ModalHost({
 }): React.JSX.Element | null {
 	if (!modal) {
 		return null;
-	}
-
-	if (modal.kind === 'permission') {
-		return <PermissionModal modal={modal} />;
 	}
 
 	if (modal.kind === 'question') {

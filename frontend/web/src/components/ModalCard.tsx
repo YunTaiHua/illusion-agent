@@ -43,6 +43,22 @@ interface QuestionItem {
   noCustomInput?: boolean;
 }
 
+// ---- 权限原因本地化（后端英文硬编码，前端仅翻译会显示在权限弹窗上的 3 条 reason） ----
+
+/** 英文 reason → i18n key（与 i18n.ts 的 perm_* 键对应；其余 reason 不进弹窗，保持原文） */
+const PERMISSION_REASON_KEYS: Record<string, string> = {
+  'High-risk operations require confirmation in auto mode': 'perm_auto_high_risk',
+  'High-risk operations require confirmation in default mode': 'perm_default_high_risk',
+  'Mutating tools require user confirmation in default mode': 'perm_default_mutating',
+};
+
+/** 权限原因本地化：中文界面下翻译展示，英文界面与未匹配的原文透传 */
+function localizePermissionReason(reason: string, lang: UiLanguage): string {
+  const key = PERMISSION_REASON_KEYS[reason];
+  if (!key) return reason;
+  return t(lang, key);
+}
+
 // ---- 权限请求卡片 ----
 
 /**
@@ -69,7 +85,7 @@ export function PermissionCard({ modal, lang, onRespond }: PermissionCardProps) 
   const toolName = String(modal.tool_name ?? 'tool');
   // 显示用友好名；onRespond 回调仍传原始 toolName 给后端识别
   const displayToolName = toolDisplayName(toolName);
-  const reason = modal.reason ? String(modal.reason) : null;
+  const reason = modal.reason ? localizePermissionReason(String(modal.reason), lang) : null;
   const requestId = String(modal.request_id ?? '');
   // 高危操作（如 rm / git reset --hard）只提供两选项（允许一次 / 拒绝），不可会话级豁免
   const highRisk = modal.high_risk === true;
@@ -104,14 +120,14 @@ export function PermissionCard({ modal, lang, onRespond }: PermissionCardProps) 
 
   return (
     <div className="my-3 rounded-2xl glass-surface overflow-hidden">
-      {/* 标题区：警告图标 + 权限确认内容（对齐问答卡片标题） */}
+      {/* 标题区：警告图标 + 权限确认内容 */}
       <div className="px-4 py-3">
         <div className="flex items-center gap-2 mb-1">
           <svg className="w-4 h-4 text-amber-500 shrink-0" viewBox="0 0 16 16" fill="currentColor">
             <path d="M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z" />
           </svg>
           <span className="text-sm font-medium text-content-primary">
-            {lang === 'zh-CN' ? '允许使用工具 ' : 'Allow '}
+            {t(lang, 'allow_tool')}{' '}
             <span className="font-mono font-medium text-primary">{displayToolName}</span>
             <span>?</span>
           </span>
@@ -232,6 +248,18 @@ export function QuestionCard({ modal, lang, onRespond }: QuestionCardProps) {
    * 最近一次点击是否发生在卡片内，失焦提交时据此放行。
    */
   const clickedInsideRef = useRef(false);
+  /** 计划内容弹窗查看状态（与右栏文件预览的弹窗打开一致） */
+  const [planPopOut, setPlanPopOut] = useState(false);
+
+  // 计划弹窗 Esc 关闭（对齐 FileViewerModal 交互）
+  useEffect(() => {
+    if (!planPopOut) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPlanPopOut(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [planPopOut]);
 
   // 切换问题时恢复"其他"输入框的聚焦/显示状态：
   // 若该题已有"其他"输入内容（allOtherText 持久化），则显示输入框与选中态，
@@ -368,13 +396,19 @@ export function QuestionCard({ modal, lang, onRespond }: QuestionCardProps) {
       if (isMultiQuestion) {
         recordAnswer(currentHeader, `${idx + 1}. ${label}`);
       } else {
-        // 单问题单选：更新选中状态并收起"其他"输入框，由提交按钮或失焦提交
+        // 单问题单选：更新选中状态并收起"其他"输入框。
+        // 沙箱类（noCustomInput）场景选中即自动提交，无底部提交按钮；
+        // 普通问题保留"选中 + 提交按钮/失焦提交"路径
         setSingleSelectedIdx(idx);
         setIsOtherFocused(false);
         setOtherText('');
+        if (currentQuestion?.noCustomInput) {
+          submittedRef.current = true;
+          onRespond(requestId, `${idx + 1}. ${label}`);
+        }
       }
     },
-    [isMultiSelect, otherIdx, isMultiQuestion, currentHeader, commitMultiSelect, recordAnswer],
+    [isMultiSelect, otherIdx, isMultiQuestion, currentHeader, commitMultiSelect, recordAnswer, currentQuestion?.noCustomInput, requestId, onRespond],
   );
 
   // 多选"其他"输入回车时提交：
@@ -440,8 +474,11 @@ export function QuestionCard({ modal, lang, onRespond }: QuestionCardProps) {
   const hintText = isMultiSelect
     ? (lang === 'zh-CN' ? '选择所有适用项' : 'Select all that apply')
     : (lang === 'zh-CN' ? '选择一项' : 'Select one');
+  /** 计划内容（类型安全提取；弹窗内渲染时无外层 typeof 守卫） */
+  const planText = typeof modal.plan === 'string' ? modal.plan : '';
 
   return (
+    <>
     <div
       ref={cardRef}
       tabIndex={!isMultiQuestion ? -1 : undefined}
@@ -453,6 +490,10 @@ export function QuestionCard({ modal, lang, onRespond }: QuestionCardProps) {
       onBlur={(e) => {
         // 单问题失焦提交：焦点离开问题卡片时提交当前答案（单选或多选）
         if (isMultiQuestion) return;
+        // 计划弹窗打开期间：焦点进出弹窗（卡片外兄弟节点）不应触发提交
+        if (planPopOut) return;
+        // 沙箱类（noCustomInput）场景已改为选中即提交，不再依赖失焦提交
+        if (currentQuestion?.noCustomInput) return;
         // relatedTarget 为新聚焦元素；若它仍在卡片内，则不算失焦
         const next = e.relatedTarget as Node | null;
         if (next && cardRef.current?.contains(next)) return;
@@ -476,7 +517,6 @@ export function QuestionCard({ modal, lang, onRespond }: QuestionCardProps) {
         <div className="px-4 pt-3">
           <div className="border border-info/40 rounded-lg px-3 py-2.5 bg-info/5 max-h-80 overflow-y-auto">
             <div className="text-info font-semibold text-sm mb-2 flex items-center gap-1.5">
-              <span>📝</span>
               <span>{t(lang, 'planReview')}</span>
             </div>
             <div className="text-sm prose prose-sm max-w-none text-content-primary select-text">
@@ -499,7 +539,7 @@ export function QuestionCard({ modal, lang, onRespond }: QuestionCardProps) {
                 <button
                   key={idx}
                   onClick={() => setCurrentIndex(idx)}
-                  className={`px-2 py-0.5 rounded text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                  className={`px-2 py-0.5 rounded text-xs font-medium transition-colors cursor-pointer inline-flex items-center gap-1 whitespace-nowrap ${
                     isActive
                       ? 'bg-primary text-white'
                       : isAnswered
@@ -507,7 +547,11 @@ export function QuestionCard({ modal, lang, onRespond }: QuestionCardProps) {
                         : 'glass-option-hover text-content-secondary'
                   }`}
                 >
-                  {isAnswered && !isActive && <span className="mr-1">✓</span>}
+                  {isAnswered && !isActive && (
+                    <svg width="8" height="8" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+                      <path d="M4 8.5l2.5 2.5L12 5" />
+                    </svg>
+                  )}
                   {headerLabel}
                 </button>
               );
@@ -550,7 +594,7 @@ export function QuestionCard({ modal, lang, onRespond }: QuestionCardProps) {
                     <span className={`mt-0.5 w-4 h-4 rounded border flex items-center justify-center shrink-0 text-xs transition-colors ${
                       isSelected ? 'bg-primary border-primary text-white' : 'border-border-light'
                     }`}>
-                      {isSelected ? '✓' : ''}
+                      {isSelected ? <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 8.5l2.5 2.5L12 5" /></svg> : ''}
                     </span>
                   ) : (
                     <span className={`mt-0.5 w-4 h-4 rounded-full border shrink-0 flex items-center justify-center ${
@@ -584,7 +628,7 @@ export function QuestionCard({ modal, lang, onRespond }: QuestionCardProps) {
                   <span className={`mt-0.5 w-4 h-4 rounded border flex items-center justify-center shrink-0 text-xs transition-colors ${
                     selectedIndices.has(otherIdx) ? 'bg-primary border-primary text-white' : 'border-border-light'
                   }`}>
-                    {selectedIndices.has(otherIdx) ? '✓' : ''}
+                    {selectedIndices.has(otherIdx) ? <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 8.5l2.5 2.5L12 5" /></svg> : ''}
                   </span>
                 ) : (
                   <span className={`mt-0.5 w-4 h-4 rounded-full border shrink-0 flex items-center justify-center transition-colors ${
@@ -708,8 +752,21 @@ export function QuestionCard({ modal, lang, onRespond }: QuestionCardProps) {
       </div>
 
       <div className="px-4 py-3 border-t border-white/30 flex items-center justify-between">
-        {/* 左侧：重置按钮（多问题时） */}
-        <div>
+        {/* 左侧：计划弹窗打开（有 plan 时）+ 重置按钮（多问题时）。
+            onMouseDown preventDefault 避免按钮抢焦点——点击不改变焦点，
+            卡片失焦提交逻辑不受弹窗开关影响 */}
+        <div className="flex items-center gap-1.5">
+          {typeof modal.plan === 'string' && modal.plan && (
+            <button
+              onClick={() => setPlanPopOut(true)}
+              onMouseDown={(e) => e.preventDefault()}
+              title={t(lang, 'popout_preview')}
+              aria-label={t(lang, 'popout_preview')}
+              className="px-3 py-1.5 text-xs font-medium text-white bg-primary hover:bg-primary-hover rounded-md transition-colors cursor-pointer shrink-0"
+            >
+              {t(lang, 'popout_preview')}
+            </button>
+          )}
           {isMultiQuestion && Object.keys(multiAnswers).length > 0 && (
             <button
               onClick={() => {
@@ -735,14 +792,17 @@ export function QuestionCard({ modal, lang, onRespond }: QuestionCardProps) {
               {lang === 'zh-CN' ? '下一题' : 'Next'}
             </button>
           )}
-          {/* 跳过按钮：跳过当前问题（多问题标记跳过并前进，单问题直接提交空答案） */}
-          <button
-            type="button"
-            onClick={handleSkip}
-            className="px-3 py-1.5 text-xs font-medium text-content-secondary glass-option-hover rounded-md transition-colors cursor-pointer"
-          >
-            {t(lang, 'question_skip')}
-          </button>
+          {/* 跳过按钮：跳过当前问题（多问题标记跳过并前进，单问题直接提交空答案）。
+              沙箱类（noCustomInput）场景已改为选中即提交，跳过按钮冗余 */}
+          {!currentQuestion?.noCustomInput && (
+            <button
+              type="button"
+              onClick={handleSkip}
+              className="px-3 py-1.5 text-xs font-medium text-content-secondary glass-option-hover rounded-md transition-colors cursor-pointer"
+            >
+              {t(lang, 'question_skip')}
+            </button>
+          )}
           {isMultiQuestion && (Object.keys(multiAnswers).length + skippedHeaders.size) === questions.length && (
             <button
               onClick={() => {
@@ -770,8 +830,9 @@ export function QuestionCard({ modal, lang, onRespond }: QuestionCardProps) {
               {lang === 'zh-CN' ? '提交' : 'Submit'}
             </button>
           )}
-          {/* 单问题单选提交按钮：选中后点击提交（保留失焦自动提交兜底）；无选项纯输入场景走上方输入框 */}
-          {!isMultiQuestion && !isMultiSelect && hasOptions && (
+          {/* 单问题单选提交按钮：选中后点击提交（保留失焦自动提交兜底）；无选项纯输入场景走上方输入框。
+              沙箱类（noCustomInput）场景已改为选中即提交，无需提交按钮 */}
+          {!isMultiQuestion && !isMultiSelect && hasOptions && !currentQuestion?.noCustomInput && (
             <button
               type="button"
               onClick={() => submitSingleSelect()}
@@ -795,5 +856,46 @@ export function QuestionCard({ modal, lang, onRespond }: QuestionCardProps) {
         </div>
       </div>
     </div>
+
+    {/* 计划内容弹窗：卡片左下角"弹窗打开"触发放大形态（对齐 FileViewerModal 交互） */}
+    {planPopOut && (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-6"
+        onClick={() => setPlanPopOut(false)}
+        role="dialog"
+        aria-modal="true"
+      >
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="relative bg-surface-card border border-border-light rounded-2xl shadow-card w-full max-w-3xl h-[75vh] flex flex-col overflow-hidden modal-origin-center animate-scale-in"
+        >
+          <div className="px-5 py-3 border-b border-border-light flex items-center gap-3 shrink-0">
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold text-content-primary truncate">
+                {t(lang, 'planReview')}
+              </div>
+            </div>
+            <button
+              onClick={() => setPlanPopOut(false)}
+              title={t(lang, 'image_preview_close')}
+              aria-label={t(lang, 'image_preview_close')}
+              className="w-7 h-7 flex items-center justify-center rounded-lg text-content-secondary glass-option-hover hover:text-content-primary transition-colors cursor-pointer shrink-0"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 select-text">
+            <div className="text-sm prose prose-sm max-w-none text-content-primary">
+              <ReactMarkdown remarkPlugins={[remarkGfm, remarkSuperscript]} rehypePlugins={[rehypeHighlight, rehypeRaw]}>
+                {planText}
+              </ReactMarkdown>
+            </div>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }

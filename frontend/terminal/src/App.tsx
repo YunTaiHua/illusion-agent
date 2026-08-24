@@ -19,7 +19,7 @@ import {AgentWizard} from './components/AgentWizard.js';
 import {CommandPicker} from './components/CommandPicker.js';
 import {ConversationView} from './components/ConversationView.js';
 import {CustomInputModal} from './components/CustomInputModal.js';
-import {ModalHost} from './components/ModalHost.js';
+import {ModalHost, QuestionModal} from './components/ModalHost.js';
 import {PromptInput} from './components/PromptInput.js';
 import {SelectModal, type SelectOption} from './components/SelectModal.js';
 import {Spinner} from './components/Spinner.js';
@@ -86,16 +86,6 @@ type SelectModalState = {
 } | null;
 
 /**
- * 权限确认提示选项列表
- * 当工具需要执行权限时显示的三个选项：允许一次、本次会话允许、拒绝
- */
-const PERMISSION_PROMPT_OPTIONS: SelectOption[] = [
-	{value: 'allow', label: 'Allow', description: 'Approve this tool execution'},
-	{value: 'session', label: 'Allow for session', description: 'Allow this tool for the current session only'},
-	{value: 'deny', label: 'Deny', description: 'Reject this tool execution'},
-];
-
-/**
  * 应用程序根组件
  *
  * 作为整个应用的入口点，包裹 ThemeProvider 以提供主题上下文。
@@ -139,8 +129,6 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 	const [customInputModal, setCustomInputModal] = useState<
 		{prompt: string; command: string; prefixValue?: string; numeric?: boolean} | null
 	>(null);
-	const [permissionIndex, setPermissionIndex] = useState(2);
-	const [pendingPermissionAck, setPendingPermissionAck] = useState(false);
 	const [cursorReset, setCursorReset] = useState(0);
 	/** 停止请求已发送、等待后端确认（终止过程可能有 1-2s 延迟，期间提示符显示旋转动画） */
 	const [stopping, setStopping] = useState(false);
@@ -160,21 +148,8 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 	const contextWindow = Number(session.status.context_window ?? 0);
 	const contextTokens = Number(session.status.context_tokens ?? 0);
 	const contextPct = contextWindow > 0 ? Math.min(100, Math.round(contextTokens * 1000 / contextWindow) / 10) : 0;
-	const permissionRequestId =
-		isPermissionModal && typeof session.modal?.request_id === 'string' ? String(session.modal.request_id) : '';
 	// 高危操作（如 rm / git reset --hard）只提供两选项（允许一次 / 拒绝），不可会话级豁免
 	const permissionHighRisk = isPermissionModal && session.modal?.high_risk === true;
-	const localizedPermissionOptions = PERMISSION_PROMPT_OPTIONS
-		.filter((opt) => !(permissionHighRisk && opt.value === 'session'))
-		.map((opt) => {
-			if (opt.value === 'allow') {
-				return {...opt, label: t(language, 'allow')};
-			}
-			if (opt.value === 'session') {
-				return {...opt, label: t(language, 'sessionAllow')};
-			}
-			return {...opt, label: t(language, 'deny')};
-		});
 
 	/**
 	 * 当前正在执行的工具名称
@@ -312,15 +287,6 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 		});
 		session.setSelectRequest(null);
 	}, [session.selectRequest]);
-
-	useEffect(() => {
-		if (!isPermissionModal) {
-			setPendingPermissionAck(false);
-			return;
-		}
-		setPermissionIndex(1);
-		setPendingPermissionAck(false);
-	}, [permissionRequestId, isPermissionModal]);
 
 	// 后端确认终止（busy→false）后清除 stopping 状态，提示符恢复输入态
 	const prevBusyForStopRef = useRef(session.busy);
@@ -566,7 +532,7 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 		}
 		// --- Ctrl+G → goal 操作模式（两段式第一段；有 goal 且无任何模态时进入） ---
 		if (key.ctrl && chunk.toLowerCase() === 'g') {
-			if (hasGoal && !session.modal && !selectModal && !customInputModal && !goalEditModal && !pendingPermissionAck) {
+			if (hasGoal && !session.modal && !selectModal && !customInputModal && !goalEditModal) {
 				setGoalKeyMode(true);
 			}
 			return;
@@ -667,34 +633,8 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 			}
 		}
 
-		// --- 权限确认模态对话框（必须在忙碌状态检查之前 — 模态框在忙碌时也会出现） ---
+		// --- 权限确认模态对话框（复用问题卡片 QuestionModal 渲染与键盘交互，见渲染区） ---
 		if (isPermissionModal) {
-			if (pendingPermissionAck) {
-				return;
-			}
-			if (key.upArrow || key.downArrow) {
-				setPermissionIndex((i) => {
-					if (key.upArrow) return i <= 0 ? 2 : i - 1;
-					return i >= 2 ? 0 : i + 1;
-				});
-				return;
-			}
-			if (key.return || key.escape) {
-				if (!permissionRequestId) {
-					return;
-				}
-				const selected = key.escape ? 'deny' : localizedPermissionOptions[permissionIndex]?.value;
-				const allowed = selected === 'allow' || selected === 'session';
-				session.sendRequest({
-					type: 'permission_response',
-					request_id: permissionRequestId,
-					allowed,
-					session_allow: selected === 'session',
-					tool_name: String(session.modal?.tool_name ?? ''),
-				});
-				setPendingPermissionAck(true);
-				return;
-			}
 			return;
 		}
 
@@ -776,7 +716,47 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 	};
 
 	const onSubmit = (value: string): void => {
+		// 权限确认（复用问题卡片提交）：解析选项答案 → permission_response
+		if (session.modal?.kind === 'permission') {
+			const answer = value.trim();
+			// 优先解析前导序号（"1. 允许" → index 0），再按标签匹配兜底
+			let allowed = false;
+			let sessionAllow = false;
+			const indexMatch = answer.match(/^(\d+)\.\s/);
+			if (indexMatch) {
+				const idx = parseInt(indexMatch[1]!, 10) - 1;
+				const highRisk = session.modal?.high_risk === true;
+				if (idx === 0) {
+					allowed = true;
+				} else if (!highRisk && idx === 1) {
+					allowed = true;
+					sessionAllow = true;
+				}
+				// idx = 2（普通）/ 1（高危）→ 拒绝，allowed 保持 false
+			} else {
+				// 标签匹配兜底（仅当序号解析失败时）
+				const sessionLabels = [t(language, 'sessionAllow'), 'Allow for session'];
+				const allowLabels = [t(language, 'allow'), 'Allow'];
+				if (sessionLabels.some((l) => answer.includes(l))) {
+					allowed = true;
+					sessionAllow = true;
+				} else if (allowLabels.some((l) => answer.includes(l))) {
+					allowed = true;
+				}
+			}
+			session.sendRequest({
+				type: 'permission_response',
+				request_id: session.modal.request_id,
+				allowed,
+				session_allow: sessionAllow,
+				tool_name: String(session.modal?.tool_name ?? ''),
+			});
+			session.setModal(null);
+			setModalInput('');
+			return;
+		}
 		if (session.modal?.kind === 'question') {
+			if (typeof session.modal.request_id !== 'string') return;
 			session.sendRequest({
 				type: 'question_response',
 				request_id: session.modal.request_id,
@@ -850,12 +830,28 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 			</Box>
 
 			<Box flexDirection="column" paddingX={1}>
-			{/* 权限确认模态框 */}
+			{/* 权限确认模态框（复用问题卡片样式：沙箱 header + 选项列表；高危无"当前会话允许"） */}
 			{isPermissionModal ? (
-				<SelectModal
-					title={`Allow ${String(session.modal?.tool_name ?? 'tool')}?`}
-					options={localizedPermissionOptions}
-					selectedIndex={permissionIndex}
+				<QuestionModal
+					modal={{
+						kind: 'question',
+						request_id: session.modal?.request_id,
+						questions: [{
+							question: `${t(language, 'allow')} ${String(session.modal?.tool_name ?? 'tool')}?`,
+							header: t(language, 'sandbox'),
+							options: [
+								{label: t(language, 'allow'), description: t(language, 'permAllowDesc')},
+								...(permissionHighRisk ? [] : [{label: t(language, 'sessionAllow'), description: t(language, 'permSessionDesc')}]),
+								{label: t(language, 'deny'), description: t(language, 'permDenyDesc')},
+							],
+							multiSelect: false,
+							noCustomInput: true,
+						}],
+					}}
+					modalInput={modalInput}
+					setModalInput={setModalInput}
+					onSubmit={onSubmit}
+					language={language}
 				/>
 			) : null}
 
@@ -876,6 +872,7 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 				title={selectModal.title}
 				options={selectModal.options}
 				selectedIndex={selectIndex}
+				language={language}
 			/>
 		) : null}
 
@@ -959,7 +956,7 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 					setShowAgentWizard(false);
 				}}
 			/>
-		) : session.modal || selectModal || customInputModal || pendingPermissionAck ? null : goalEditModal && currentGoal ? (
+		) : session.modal || selectModal || customInputModal ? null : goalEditModal && currentGoal ? (
 		// goal 编辑框（Ctrl+G → e）：占据 busy 区替换 Shimmer/Goal 状态行，
 		// busy（goal 自动续跑）中也可编辑
 		<GoalEditBox
@@ -1021,7 +1018,7 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 						{t(language, 'questionHintSubmit')}
 					</Text>
 				</Box>
-			) : session.ready && !session.modal && !session.busy && !selectModal && !pendingPermissionAck && !showAgentWizard ? (
+			) : session.ready && !session.modal && !session.busy && !selectModal && !showAgentWizard ? (
 				<Box>
 					<Text dimColor>
 						<Text color={theme.colors.muted}>ctrl+a</Text> {t(language, 'lineStart')}
