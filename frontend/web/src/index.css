@@ -221,6 +221,8 @@ body {
   --glass-option-hover-bg: rgba(255, 255, 255, 0.06);
   --glass-option-active-bg: rgba(255, 255, 255, 0.09);
   --glass-option-active-border: rgba(255, 255, 255, 0.12);
+  /* 已选中项悬浮时的底色：比选中底色更亮一档，保证悬浮反馈可见 */
+  --glass-option-active-hover-bg: rgba(255, 255, 255, 0.13);
   --glass-highlight-color: rgba(255, 255, 255, 0.06);
   --glass-shadow-soft: rgba(0, 0, 0, 0.25);
   --pill-bg: rgba(255, 255, 255, 0.06);
@@ -838,6 +840,30 @@ pre code.hljs,
   background: var(--glass-option-active-bg, rgba(255, 255, 255, 0.6));
   border: 1px solid var(--glass-option-active-border, rgba(31, 38, 135, 0.14));
   box-shadow: inset 0 1px 0 var(--glass-highlight-color, rgba(255, 255, 255, 0.5));
+}
+
+/* 已选中项悬浮态：保持选中底色并轻微提亮。
+   若无此规则，.glass-option-hover:hover（特异性更高）会把选中底色覆盖为更暗的
+   hover 底色，导致已选中选项悬浮时"变暗/无反馈" */
+.glass-option-hover.glass-option-active:hover {
+  background: var(--glass-option-active-hover-bg, rgba(255, 255, 255, 0.68));
+}
+
+/* 键盘导航光标（多选/沙箱单选等"光标与选中态分离"的场景）：细主色描边，
+   用 outline 而非 border/box-shadow，避免与玻璃语义类的边框阴影互相覆盖。
+   首行为不支持 color-mix 的旧浏览器回退 */
+.kbd-cursor {
+  outline: 1px solid rgba(42, 157, 153, 0.55);
+  outline: 1px solid color-mix(in srgb, var(--primary, #2a9d99) 55%, transparent);
+  outline-offset: -1px;
+}
+
+/* 键盘 Tab 聚焦可见性回退：卡片内按钮禁用了默认 focus outline，
+   用主色细描边替代，保证 Tab 导航位置可见（鼠标点击不触发 :focus-visible） */
+.glass-surface button:focus-visible,
+[data-card-footer] button:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--primary, #2a9d99) 60%, transparent);
+  outline-offset: 1px;
 }
 
 /* ========== 会话项状态样式（react-bits BorderBeam 风格） ========== */

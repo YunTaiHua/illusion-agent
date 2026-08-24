@@ -643,9 +643,10 @@ export default function ChatArea({
         {modal?.kind === 'permission' && (
           <PermissionCard modal={modal} lang={lang} onRespond={onPermissionResponse} />
         )}
-        {/* key 绑定 request_id：新模态框（新问题）到来时整体重置 QuestionCard 内部状态 */}
+        {/* key 绑定 request_id：新模态框（新问题）到来时整体重置 QuestionCard 内部状态；
+            多问题切题时由 QuestionCard 回调 onTabChange 复用本组件的回到底部滚动 */}
         {modal?.kind === 'question' && (
-          <QuestionCard key={modal?.request_id ? String(modal.request_id) : 'q'} modal={modal} lang={lang} onRespond={onQuestionResponse} />
+          <QuestionCard key={modal?.request_id ? String(modal.request_id) : 'q'} modal={modal} lang={lang} onRespond={onQuestionResponse} onTabChange={scrollToBottom} />
         )}
       </div>
       )}
