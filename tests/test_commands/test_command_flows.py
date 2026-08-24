@@ -83,7 +83,6 @@ async def test_command_flow_for_memory_modes_and_tasks(tmp_path: Path, monkeypat
         "/memory add Notes :: command flow note",
         "/memory list",
         "/compact 2",
-        "/output-style set minimal",
         "/language set en",
     ]:
         command, args = registry.lookup(raw)
@@ -92,7 +91,6 @@ async def test_command_flow_for_memory_modes_and_tasks(tmp_path: Path, monkeypat
 
     doctor_command, doctor_args = registry.lookup("/doctor")
     doctor_result = await doctor_command.handler(doctor_args, context)
-    assert "- output_style: minimal" in doctor_result.message
     assert "- ui_language: en" in doctor_result.message
 
 

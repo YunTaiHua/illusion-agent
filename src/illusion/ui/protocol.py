@@ -491,7 +491,6 @@ def _state_payload(state: AppState) -> dict[str, Any]:
         "effort": state.effort,
         "mcp_connected": state.mcp_connected,
         "mcp_failed": state.mcp_failed,
-        "output_style": state.output_style,
         "show_thinking": state.show_thinking,
         "phase": state.phase,
         "session_id": state.session_id,

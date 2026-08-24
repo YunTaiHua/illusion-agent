@@ -49,15 +49,6 @@ def test_build_system_prompt_git_no_branch():
     assert "branch:" not in prompt
 
 
-def test_build_system_prompt_custom_prompt():
-    env = _make_env()
-    prompt = build_system_prompt(custom_prompt="You are a helpful bot.", env=env)
-    assert prompt.startswith("You are a helpful bot.")
-    assert "Linux 5.15.0" in prompt
-    # Base prompt should not appear
-    assert "Illusion Agent" not in prompt
-
-
 def test_build_system_prompt_default_includes_base():
     env = _make_env()
     prompt = build_system_prompt(env=env)

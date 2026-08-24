@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from illusion.api.errors import IllusionAgentApiError
 from illusion.commands.types import CommandContext, CommandResult
 from illusion.config.i18n import t
@@ -365,7 +367,9 @@ async def rewind_handler(args: str, context: CommandContext) -> CommandResult:
             from illusion.services.file_history import rewind_to
             # 复用预先计算的 target_id（= 原始 next_cp - turns）
             # 不能用 store.next_checkpoint_id，因为对话 rewind 后它已变小
-            reverted_files = rewind_to(fh, target_id)
+            # to_thread：同步文件 IO 移出事件循环，避免大备份/慢磁盘
+            # （如 Windows 杀毒扫描）时阻塞整个 host 的所有会话收发
+            reverted_files = await asyncio.to_thread(rewind_to, fh, target_id)
             reverted_count = len(reverted_files)
 
     lines = []

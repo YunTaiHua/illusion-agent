@@ -75,6 +75,7 @@ When you encounter an obstacle, do not use destructive actions as a shortcut to 
 # Tone and style
  - Only use emojis if the user explicitly requests it. Avoid using emojis in all communication unless asked.
  - Your responses should be short and concise.
+ - Respond in the same language the user writes in (Chinese input → Chinese reply, English input → English reply, and so on for any language). Code, commands, identifiers, and file paths stay unchanged.
  - When referencing specific functions or pieces of code include the pattern file_path:line_number to allow the user to easily navigate to the source code location.
  - When referencing GitHub issues or pull requests, use the owner/repo#123 format (e.g., illusion/illusion-agent#100) so they render as clickable links.
  - Do not use a colon before tool calls. Your tool calls may not be shown directly in the output, so text like "Let me read the file:" followed by a read tool call should just be "Let me read the file." with a period.
@@ -129,7 +130,6 @@ def _format_environment_section(env: EnvironmentInfo) -> str:
 
 
 def build_system_prompt(
-    custom_prompt: str | None = None,
     env: EnvironmentInfo | None = None,
     cwd: str | None = None,
 ) -> str:
@@ -138,7 +138,6 @@ def build_system_prompt(
     组装基础提示词和环境信息生成完整的系统提示词。
     
     Args:
-        custom_prompt: 如果提供，则完全替换基础系统提示词
         env: 预构建的环境信息。如果为 None，则自动检测
         cwd: 工作目录覆盖（仅在 env 为 None 时使用）
     
@@ -148,7 +147,6 @@ def build_system_prompt(
     if env is None:
         env = get_environment_info(cwd=cwd)
 
-    base = custom_prompt if custom_prompt is not None else _BASE_SYSTEM_PROMPT
     env_section = _format_environment_section(env)
 
-    return f"{base}\n\n{env_section}"
+    return f"{_BASE_SYSTEM_PROMPT}\n\n{env_section}"

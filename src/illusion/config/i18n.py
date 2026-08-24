@@ -595,7 +595,6 @@ COMMAND_DESCRIPTIONS_ZH: dict[str, str] = {
     "continue": "在中断后继续上一轮工具循环",
     "model": "显示或更新默认模型",
     "language": "显示或更新界面语言",
-    "output-style": "显示或更新输出风格",
     "doctor": "显示环境诊断信息",
     "privacy-settings": "显示本地隐私与存储设置",
     "delete": "清理选定的会话",
@@ -659,8 +658,6 @@ _COMMAND_EXACT: dict[str, str] = {
     # 语言
     "Available UI languages: zh-CN, en": "可用界面语言：zh-CN, en",
     "Usage: /language [show|list|set zh-CN|set en]": "用法：/language [show|list|set zh-CN|set en]",
-    # 输出风格
-    "Usage: /output-style [show|list|set NAME]": "用法：/output-style [show|list|set NAME]",
     # 诊断与隐私
     "Doctor summary:": "诊断摘要：",
     "Privacy settings:": "隐私设置：",
@@ -851,7 +848,6 @@ _COMMAND_SUBSTITUTIONS: list[tuple[str, str | Callable[[re.Match[str]], str]]] =
     (r"^- tools: (\d+)$", r"- 工具数：\1"),
     (r"^- memory_files: (\d+)$", r"- 记忆文件：\1"),
     (r"^- background_tasks: (\d+)$", r"- 后台任务：\1"),
-    (r"^- output_style: (.+)$", r"- 输出风格：\1"),
     (r"^- cwd: (.+)$", r"- 工作目录：\1"),
     (r"^- sessions: (\d+)$", r"- 会话数：\1"),
     (r"^- utilities: (.+)$", r"- 工具集：\1"),

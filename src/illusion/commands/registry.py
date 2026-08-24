@@ -12,7 +12,7 @@
 命令实现在各子模块中：
     - session.py: /new, /context, /compact, /resume, /rewind, /delete
     - agent.py: /agent
-    - settings.py: /config, /language, /output-style, /privacy-settings, /doctor, /thinking, /effort, /max-tokens, /turns, /permissions
+    - settings.py: /config, /language, /privacy-settings, /doctor, /thinking, /effort, /max-tokens, /turns, /permissions
     - auth.py: /login, /logout
     - misc.py: /exit, /version, /copy, /export, /share, /help, /hooks, /reload-plugins, /skills, /continue
     - mcp.py: /mcp
@@ -230,7 +230,6 @@ def create_default_command_registry() -> CommandRegistry:
         effort_handler,
         language_handler,
         max_tokens_handler,
-        output_style_handler,
         permissions_handler,
         privacy_settings_handler,
         thinking_handler,
@@ -273,7 +272,6 @@ def create_default_command_registry() -> CommandRegistry:
     registry.register(SlashCommand("continue", "Continue the previous tool loop if it was interrupted", continue_handler, usage="/continue [COUNT]"))
     registry.register(SlashCommand("model", "Show or update the default model", model_handler, usage="/model [show|set MODEL]"))
     registry.register(SlashCommand("language", "Show or update UI language", language_handler, usage="/language [show|list|set zh-CN|set en]"))
-    registry.register(SlashCommand("output-style", "Show or update output style", output_style_handler))
     registry.register(SlashCommand("doctor", "Show environment diagnostics", doctor_handler))
     registry.register(SlashCommand("privacy-settings", "Show local privacy and storage settings", privacy_settings_handler))
     registry.register(SlashCommand("delete", "Delete saved sessions", delete_handler, usage="/delete [session_id|#N|all]"))

@@ -50,7 +50,7 @@ Supports multiple AI providers:
 Provides 30 base tools, covering:
 
 - **File Operations**: `file_read`, `file_write`, `file_edit`
-- **Command Execution**: `bash`, `powershell`, `repl`
+- **Command Execution**: `bash`, `powershell`
 - **Search**: `glob`, `grep`, `web_fetch`, `web_search`
 - **Task Management**: `task_output`, `task_stop`
 - **Agent Collaboration**: `agent`, `send_message`, `team_create`, `team_delete`

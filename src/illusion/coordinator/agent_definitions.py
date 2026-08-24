@@ -438,9 +438,6 @@ How to use the statusLine command:
        "added_dirs": ["string"]
      },
      "version": "string",
-     "output_style": {
-       "name": "string"
-     },
      "context_window": {
        "total_input_tokens": 0,
        "total_output_tokens": 0,

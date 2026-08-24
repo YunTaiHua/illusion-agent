@@ -35,7 +35,6 @@ class AppState:
         effort: 推理 Effort 级别 (low/medium/high)
         mcp_connected: 已连接的MCP服务器数量
         mcp_failed: 失败的MCP服务器数量
-        output_style: 输出样式名称
         show_thinking: 是否显示思考过程
         phase: 会话阶段 (idle/thinking/tool_executing)
         team_context: 当前会话的团队上下文（若已创建团队）
@@ -55,7 +54,6 @@ class AppState:
     effort: str = "medium"  # 推理 Effort 级别
     mcp_connected: int = 0  # 已连接的MCP服务器数量
     mcp_failed: int = 0  # 失败的MCP服务器数量
-    output_style: str = "default"  # 输出样式名称
     show_thinking: bool = True  # 是否显示思考过程
     phase: str = "idle"  # 会话阶段: idle / thinking / tool_executing
     session_id: str = ""  # 当前会话 ID

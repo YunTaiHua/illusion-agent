@@ -81,8 +81,7 @@ Uses `env_N` grouped format. Each `env_N` is an independent environment config (
     "model_1": "gpt-5.4"
   },
   "model": "env_1.model_1",
-  "context_window": 200000,
-  "system_prompt": null
+  "context_window": 200000
 }
 ```
 
@@ -98,7 +97,6 @@ Uses `env_N` grouped format. Each `env_N` is an independent environment config (
   },
   "model": "env_1.model_1",
   "context_window": 200000,
-  "system_prompt": null,
   "max_tokens": 16384,
   "max_turns": 200,
   "permission": {
@@ -147,7 +145,6 @@ Uses `env_N` grouped format. Each `env_N` is an independent environment config (
   "mcp_servers": {},
   "working_directory": null,
   "ui_language": "en-US",
-  "output_style": "default",
   "effort": "medium"
 }
 ```
@@ -159,7 +156,6 @@ Uses `env_N` grouped format. Each `env_N` is an independent environment config (
 | `env_N` | object | - | Environment config group (EnvConfig) |
 | `model` | string | "env_1.model_1" | Active model reference: `env_N.model_N` |
 | `context_window` | int | 200000 | Context window size in tokens |
-| `system_prompt` | string\|null | null | Custom system prompt (global; overridable per env_N) |
 | `max_tokens` | int | 16384 | Maximum output tokens |
 | `max_turns` | int | 200 | Maximum conversation turns |
 | `ui_language` | string | "" | UI language (empty triggers first-login prompt; fallback zh-CN) |
@@ -214,7 +210,6 @@ Fixed working directory. If set, illusion-agent will automatically switch to thi
 | `base_url` | string\|null | No | Custom API endpoint, null uses default |
 | `api_key` | string | No | API key (standard `x-api-key` auth) |
 | `auth_token` | string | No | Bearer Token auth (for providers like LongCat using `Authorization: Bearer`) |
-| `system_prompt` | string\|null | No | Per-environment system prompt (overrides global) |
 | `model_N` | string | No | Model name: `model_1`, `model_2`, ... |
 
 ### Multi-Model Configuration

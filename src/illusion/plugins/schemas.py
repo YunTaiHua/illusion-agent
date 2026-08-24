@@ -27,6 +27,5 @@ class PluginManifest(BaseModel):
     agents: str | list[Any] | None = None
     skills: str | list[Any] | None = None
     hooks: str | dict[str, Any] | list[Any] | None = None
-    output_styles: str | list[Any] | None = None
     settings: dict[str, Any] | None = None
     user_config: dict[str, Any] | None = None

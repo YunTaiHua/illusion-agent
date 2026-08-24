@@ -54,13 +54,11 @@ Only top-level flat fields can be set. Nested objects (permission, sandbox, memo
 ## Available flat settings
 - model: Active model reference in "env_N.model_N" format (e.g., "env_1.model_1")
 - ui_language: UI language (e.g., "zh-CN")
-- output_style: Output style ("default" or custom)
 - show_thinking: true/false — Show thinking process
 - effort: Effort level ("low", "medium", "high")
 - max_tokens: Maximum tokens per response (integer)
 - max_turns: Maximum conversation turns (integer)
 - context_window: Context window size (integer)
-- system_prompt: Custom system prompt or null
 - working_directory: Fixed working directory path or null
 
 ## Examples

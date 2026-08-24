@@ -81,8 +81,7 @@
     "model_1": "gpt-5.4"
   },
   "model": "env_1.model_1",
-  "context_window": 200000,
-  "system_prompt": null
+  "context_window": 200000
 }
 ```
 
@@ -98,7 +97,6 @@
   },
   "model": "env_1.model_1",
   "context_window": 200000,
-  "system_prompt": null,
   "max_tokens": 16384,
   "max_turns": 200,
   "permission": {
@@ -148,7 +146,6 @@
   "mcp_servers": {},
   "working_directory": null,
   "ui_language": "zh-CN",
-  "output_style": "default",
   "effort": "medium"
 }
 ```
@@ -160,7 +157,6 @@
 | `env_N` | object | - | 环境配置组（EnvConfig） |
 | `model` | string | "env_1.model_1" | 当前活跃模型引用：`env_N.model_N` |
 | `context_window` | int | 200000 | 上下文窗口大小（tokens） |
-| `system_prompt` | string\|null | null | 自定义系统提示词（全局，可被 env_N 覆盖） |
 | `max_tokens` | int | 16384 | 最大输出 token 数 |
 | `max_turns` | int | 200 | 最大对话轮数 |
 | `ui_language` | string | "" | 界面语言（空时首次登录引导选择，兜底中文） |
@@ -215,7 +211,6 @@
 | `base_url` | string\|null | 否 | 自定义 API 端点，null 使用默认端点 |
 | `api_key` | string | 否 | API 密钥（标准 x-api-key 认证） |
 | `auth_token` | string | 否 | Bearer Token 认证（用于 LongCat 等使用 `Authorization: Bearer` 的提供商） |
-| `system_prompt` | string\|null | 否 | 该环境的系统提示词（覆盖全局） |
 | `model_N` | string | 否 | 模型名称：`model_1`、`model_2`、... |
 
 ### 多模型配置

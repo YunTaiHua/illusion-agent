@@ -709,8 +709,6 @@ export interface StatusPayload {
   mcp_connected?: number;
   /** 失败 MCP 服务器数 */
   mcp_failed?: number;
-  /** 输出风格 */
-  output_style?: string;
   /** 是否显示思考过程 */
   show_thinking?: boolean;
   /** 当前阶段 */

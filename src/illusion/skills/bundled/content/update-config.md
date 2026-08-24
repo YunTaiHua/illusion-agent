@@ -80,13 +80,11 @@ Located at `~/.illusion/settings.json`. Loaded by `load_settings()`.
     "api_format": "anthropic",
     "base_url": null,
     "api_key": "",
-    "system_prompt": null,
     "model_1": "claude-sonnet-4-6",
     "model_2": "claude-opus-4-6"
   },
   "model": "env_1.model_1",
   "context_window": 200000,
-  "system_prompt": null,
   "max_tokens": 16384,
   "max_turns": 200,
   "permission": {
@@ -137,7 +135,6 @@ Located at `~/.illusion/settings.json`. Loaded by `load_settings()`.
   "mcp_servers": {},
   "working_directory": null,
   "ui_language": "en-US",
-  "output_style": "default",
   "show_thinking": true,
   "effort": "medium"
 }
@@ -150,11 +147,9 @@ Located at `~/.illusion/settings.json`. Loaded by `load_settings()`.
 | `env_N` | object | - | Environment config group (EnvConfig) |
 | `model` | string | "env_1.model_1" | Active model reference: `env_N.model_N` |
 | `context_window` | int | 200000 | Context window size in tokens |
-| `system_prompt` | string\|null | null | Custom global system prompt (overridable per env_N) |
 | `max_tokens` | int | 16384 | Maximum output tokens |
 | `max_turns` | int | 200 | Maximum conversation turns |
 | `ui_language` | string | "en-US" | UI language ("en-US" / "zh-CN") |
-| `output_style` | string | "default" | Output style name |
 | `show_thinking` | bool | true | Show thinking process |
 | `effort` | string | "medium" | Reasoning effort: low/medium/high/xhigh/max |
 | `working_directory` | string\|null | null | Fixed working directory (auto-switch on startup, auto-create if missing) |
@@ -189,7 +184,6 @@ Each `env_N` is an independent API provider config. Models are referenced as `en
 | `base_url` | string\|null | No | Custom API endpoint, null uses default |
 | `api_key` | string | No | API key (standard `x-api-key` auth) |
 | `auth_token` | string | No | Bearer Token auth (for providers like LongCat using `Authorization: Bearer`) |
-| `system_prompt` | string\|null | No | Per-environment system prompt (overrides global) |
 | `model_N` | string | No | Model name: `model_1`, `model_2`, ... |
 
 ```json

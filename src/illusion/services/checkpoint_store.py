@@ -226,9 +226,13 @@ class CheckpointStore:
             async with aiofiles.open(self._file, "w", encoding="utf-8") as f:
                 for line in kept_lines:
                     await f.write(line + "\n")
-            # 重置 next_checkpoint_id 并从保留行重建
+            # 重置 next_checkpoint_id 并从保留行重建。
+            # to_thread：全量 JSON 解析 + Pydantic 校验是 CPU 密集操作，
+            # 长会话下直接在事件循环执行会阻塞所有会话收发；线程内仅读
+            # kept_lines 快照并写 _next_checkpoint_id，后者由外层 _io_lock
+            # 串行化保护，无线程安全问题（asyncio.Lock 本身不跨线程使用）
             self._next_checkpoint_id = 0
-            return self._build_result_from_lines(kept_lines)
+            return await asyncio.to_thread(self._build_result_from_lines, kept_lines)
 
     async def restore(self) -> RestoreResult:
         """单遍扫描 context.jsonl 重建内存状态。

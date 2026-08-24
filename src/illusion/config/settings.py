@@ -285,7 +285,6 @@ class EnvConfig(BaseModel):
     base_url: str | None = None
     api_key: str = ""
     auth_token: str = ""  # Bearer Token 认证（用于 LongCat 等使用 Authorization: Bearer 的提供商）
-    system_prompt: str | None = None
 
     model_config = {"extra": "allow"}  # 允许 model_N 动态字段
 
@@ -313,7 +312,6 @@ class Settings(BaseModel):
 
     # 全局配置
     context_window: int = 200_000
-    system_prompt: str | None = None
 
     # 保留的非模型字段
     max_tokens: int = 16384
@@ -327,7 +325,6 @@ class Settings(BaseModel):
     enabled_plugins: dict[str, bool] = Field(default_factory=dict)
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)
     ui_language: str = ""  # 空字符串表示未设置，由 _ensure_language 引导选择
-    output_style: str = "default"
     show_thinking: bool = True
     effort: str = "medium"
     working_directory: str | None = None  # 固定工作目录
@@ -736,12 +733,10 @@ def save_settings(settings: Settings, config_path: Path | None = None) -> None:
     # 序列化并重排字段，env_N 置顶
     data = settings.model_dump()
 
-    # 清理 env_N 中的 model 字段和 system_prompt: null, auth_token/api_key 空字符串
+    # 清理 env_N 中的 model 字段和 auth_token/api_key 空字符串
     for key in data:
         if key.startswith("env_") and isinstance(data[key], dict):
             data[key].pop("model", None)
-            if data[key].get("system_prompt") is None:
-                data[key].pop("system_prompt", None)
             if not data[key].get("auth_token"):
                 data[key].pop("auth_token", None)
             if not data[key].get("api_key"):

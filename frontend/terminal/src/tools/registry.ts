@@ -106,7 +106,6 @@ function ensureInitialized(): void {
 	// 显式注册需要显示名称的通用工具
 	register(createGenericTool('ask_user_question', 'AskUserQuestion'));
 	register(createGenericTool('sleep', 'Sleep'));
-	register(createGenericTool('repl', 'REPL'));
 	register(createGenericTool('send_message', 'SendMessage'));
 	register(createGenericTool('team_create', 'TeamCreate'));
 	register(createGenericTool('team_delete', 'TeamDelete'));

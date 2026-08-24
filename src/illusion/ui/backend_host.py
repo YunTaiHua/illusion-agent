@@ -54,7 +54,6 @@ from illusion.engine.stream_events import (
     ToolProgressEvent,
 )
 from illusion.goal.prompts import is_goal_system_message
-from illusion.output_styles import load_output_styles
 from illusion.services.agent_creator import (
     generate_agent_from_description,
     list_available_models,
@@ -1472,8 +1471,6 @@ class ReactBackendHost:
             return f"/permissions {value}"
         if command == "language":
             return f"/language {value}"
-        if command == "output-style":
-            return f"/output-style {value}"
         if command == "effort":
             return f"/effort {value}"
         if command == "max-tokens":
@@ -1633,25 +1630,6 @@ class ReactBackendHost:
                 BackendEvent(
                     type="select_request",
                     modal={"kind": "select", "title": "权限模式" if zh else "Permission Mode", "command": "permissions"},
-                    select_options=options,
-                )
-            )
-            return
-
-        if command == "output-style":
-            options = [
-                {
-                    "value": style.name,
-                    "label": style.name,
-                    "description": style.source,
-                    "active": style.name == settings.output_style,
-                }
-                for style in load_output_styles()
-            ]
-            await self._emit(
-                BackendEvent(
-                    type="select_request",
-                    modal={"kind": "select", "title": "输出风格" if zh else "Output Style", "command": "output-style"},
                     select_options=options,
                 )
             )

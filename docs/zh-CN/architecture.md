@@ -52,7 +52,7 @@ illusion-agent/
 提供 30 个基础工具，涵盖：
 
 - **文件操作**: `file_read`, `file_write`, `file_edit`
-- **命令执行**: `bash`, `powershell`, `repl`
+- **命令执行**: `bash`, `powershell`
 - **搜索**: `glob`, `grep`, `web_fetch`, `web_search`
 - **任务管理**: `task_output`, `task_stop`
 - **Agent 协作**: `agent`, `send_message`, `team_create`, `team_delete`

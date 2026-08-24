@@ -41,7 +41,6 @@ from illusion.tools.mcp_auth_tool import McpAuthTool
 from illusion.tools.mcp_tool import McpToolAdapter
 from illusion.tools.powershell_tool import PowerShellTool
 from illusion.tools.read_mcp_resource_tool import ReadMcpResourceTool
-from illusion.tools.repl_tool import ReplTool
 from illusion.tools.send_message_tool import SendMessageTool
 from illusion.tools.skill_tool import SkillTool
 from illusion.tools.sleep_tool import SleepTool
@@ -74,7 +73,6 @@ def create_default_tool_registry(
     tools: list[BaseTool[Any]] = [
         BashTool(),
         PowerShellTool(),
-        ReplTool(),
         AskUserQuestionTool(),
         FileReadTool(),
         FileWriteTool(),

@@ -59,7 +59,6 @@ from illusion.engine.stream_events import (
     ToolProgressEvent,
 )
 from illusion.goal.prompts import is_goal_system_message
-from illusion.output_styles import load_output_styles
 from illusion.services.agent_creator import (
     generate_agent_from_description,
     list_available_models,
@@ -967,9 +966,9 @@ class WebBackendHost:
     async def _finish_session_line(self, session: SessionRuntime) -> None:
         """收尾一轮会话行处理（状态快照 + 列表刷新 + line_complete）。
 
-        先发 line_complete 立即释放前端 busy——思考指标闪烁的根源是
-        assistant_complete 清空流式 buffer 后、line_complete 到达前，
-        busy && !buffer 条件短暂成立显示 ThinkingIndicator。
+        先复位 session.busy 再发 line_complete——前端收到 line_complete 后
+        可能立即发起下一次请求（如重新生成的自动重发、连续撤销），若
+        busy 尚未复位会被 submit_line 的忙碌检查拒绝（"Session is busy"）。
         line_complete 提前后 busy 在回合结束瞬间释放，其余收尾事件
         （列表刷新/状态快照）随后发送，顺序无副作用。
         """
@@ -985,11 +984,11 @@ class WebBackendHost:
                     self._refresh_session_display(sr)
                 await self._push_sessions()
             session.engine._title_on_generated = _on_title_generated
-        await self._emit(BackendEvent(type="line_complete"), session_id=session.session_id)
-        await self._update_phase(session, "idle")
-        # 清 busy 再推送列表：避免列表推送携带过期的 busy=true
+        # 清 busy 再推送：避免列表推送携带过期的 busy=true，
         # （前端以本地事件为准实时更新运行态，此处推送仅作兜底同步）
         session.busy = False
+        await self._emit(BackendEvent(type="line_complete"), session_id=session.session_id)
+        await self._update_phase(session, "idle")
         self._refresh_session_display(session)
         await self._push_sessions()
         await self._emit(self._status_snapshot())
@@ -1528,8 +1527,6 @@ class WebBackendHost:
             return f"/permissions {value}"
         if command == "language":
             return f"/language {value}"
-        if command == "output-style":
-            return f"/output-style {value}"
         if command == "effort":
             return f"/effort {value}"
         if command == "max-tokens":
@@ -2477,30 +2474,6 @@ class WebBackendHost:
                         "kind": "select",
                         "title": "权限模式" if zh else "Permission Mode",
                         "command": "permissions",
-                    },
-                    select_options=options,
-                ),
-                session_id=session.session_id,
-            )
-            return
-
-        if command == "output-style":
-            options = [
-                {
-                    "value": style.name,
-                    "label": style.name,
-                    "description": style.source,
-                    "active": style.name == settings.output_style,
-                }
-                for style in load_output_styles()
-            ]
-            await self._emit(
-                BackendEvent(
-                    type="select_request",
-                    modal={
-                        "kind": "select",
-                        "title": "输出风格" if zh else "Output Style",
-                        "command": "output-style",
                     },
                     select_options=options,
                 ),

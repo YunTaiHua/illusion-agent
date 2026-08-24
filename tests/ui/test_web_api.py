@@ -401,7 +401,6 @@ class TestWebSetSetting:
         fake_settings.permission.mode.value = "default"
         fake_settings.ui_language = "zh-CN"
         fake_settings.context_window = 200000
-        fake_settings.output_style = "default"
         fake_settings.model = "env_1.model_1"
         monkeypatch.setattr(
             "illusion.ui.web.ws_web_api._load_settings", lambda: fake_settings
@@ -556,7 +555,6 @@ class TestEngineSettingBroadcast:
         fake_settings.permission.mode.value = "default"
         fake_settings.ui_language = "zh-CN"
         fake_settings.context_window = 200000
-        fake_settings.output_style = "default"
         fake_settings.model = "env_1.model_1"
         fake_settings.active_model_name = "NewModel"
         monkeypatch.setattr(
@@ -686,7 +684,6 @@ class TestWebQuery:
         fake_settings.permission.mode.value = "default"
         fake_settings.ui_language = "zh-CN"
         fake_settings.context_window = 200000
-        fake_settings.output_style = "default"
         fake_settings.model = "env_1.model_1"
         monkeypatch.setattr(
             "illusion.ui.web.ws_web_api._load_settings", lambda: fake_settings

@@ -2,7 +2,7 @@
 设置与配置斜杠命令
 ==================
 
-/config, /language, /output-style, /privacy-settings, /doctor,
+/config, /language, /privacy-settings, /doctor,
 /thinking, /effort, /max-tokens, /turns, /permissions
 """
 
@@ -15,7 +15,6 @@ from illusion.config.paths import (
     get_project_config_dir,
 )
 from illusion.config.settings import Settings, load_settings, save_settings
-from illusion.output_styles import load_output_styles
 from illusion.permissions import PermissionChecker, PermissionMode
 from illusion.prompts import build_runtime_system_prompt
 
@@ -68,34 +67,6 @@ async def language_handler(args: str, context: CommandContext) -> CommandResult:
     return CommandResult(message="Usage: /language [show|list|set zh-CN|set en]")
 
 
-async def output_style_handler(args: str, context: CommandContext) -> CommandResult:
-    """显示或更新输出风格"""
-    settings = load_settings()
-    tokens = args.split(maxsplit=1)
-    styles = load_output_styles()
-    available = {style.name: style for style in styles}
-    current = (
-        context.app_state.get().output_style
-        if context.app_state is not None
-        else settings.output_style
-    )
-    if not tokens or tokens[0] == "show":
-        return CommandResult(message=f"Output style: {current}")
-    if tokens[0] == "list":
-        return CommandResult(
-            message="\n".join(f"{style.name} [{style.source}]" for style in styles)
-        )
-    if tokens[0] == "set" and len(tokens) == 2:
-        if tokens[1] not in available:
-            return CommandResult(message=f"Unknown output style: {tokens[1]}")
-        settings.output_style = tokens[1]
-        save_settings(settings)
-        if context.app_state is not None:
-            context.app_state.set(output_style=tokens[1])
-        return CommandResult(message=f"Output style set to {tokens[1]}")
-    return CommandResult(message="Usage: /output-style [show|list|set NAME]")
-
-
 async def privacy_settings_handler(_: str, context: CommandContext) -> CommandResult:
     """显示隐私和存储设置"""
     from illusion.services.session_storage import get_project_session_dir_no_create
@@ -124,7 +95,6 @@ async def doctor_handler(_: str, context: CommandContext) -> CommandResult:
         f"- cwd: {context.cwd}",
         f"- model: {settings.model}",
         f"- permission_mode: {state.permission_mode if state is not None else settings.permission.mode}",
-        f"- output_style: {state.output_style if state is not None else settings.output_style}",
         f"- ui_language: {state.ui_language if state is not None else settings.ui_language}",
         f"- effort: {state.effort if state is not None else settings.effort}",
         f"- memory_dir: {memory_dir}",

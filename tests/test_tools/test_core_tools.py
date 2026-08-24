@@ -400,7 +400,6 @@ def test_default_registry_matches_claude_tool_shape():
     names = {tool.name for tool in registry.list_tools()}
 
     assert "powershell" in names
-    assert "repl" in names
     assert "team_create" in names
     assert "team_delete" in names
 

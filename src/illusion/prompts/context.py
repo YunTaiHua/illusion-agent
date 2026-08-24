@@ -119,10 +119,7 @@ def build_runtime_system_prompt(
     Returns:
         str: 完整的运行时系统提示词
     """
-    # env_N 级别的 system_prompt 覆盖全局 system_prompt
-    env = settings._active_env
-    effective_prompt = env.system_prompt if env.system_prompt else settings.system_prompt
-    sections = [build_system_prompt(custom_prompt=effective_prompt, cwd=str(cwd))]
+    sections = [build_system_prompt(cwd=str(cwd))]
 
     # 计划模式
     from illusion.permissions.modes import PermissionMode

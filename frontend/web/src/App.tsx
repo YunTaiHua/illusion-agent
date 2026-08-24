@@ -42,7 +42,7 @@ const WS_URL = `ws://${window.location.host}/ws`;
 const TOAST_DURATION = 5000;
 
 /** B 通道允许的指令集合（前端识别并走 web_query） */
-const B_COMMANDS = ['rewind', 'compact', 'context', 'export', 'init', 'turns', 'output-style', 'language', 'max-tokens', 'rename'];
+const B_COMMANDS = ['rewind', 'compact', 'context', 'export', 'init', 'turns', 'language', 'max-tokens', 'rename'];
 
 /** 右栏（区块栏）最小宽度 */
 const MIN_RIGHT_PANEL = 260;
@@ -288,7 +288,7 @@ export default function App() {
    *
    * 通道隔离原则：
    * - B 通道（web_query）：输入框识别的精细化指令（rewind/compact/context/export/init/
-   *   turns/output-style/language/max-tokens），走 web_query 结构化处理。
+   *   turns/language/max-tokens），走 web_query 结构化处理。
    * - 文本通道（submit_line）：普通文本，或未被识别的斜杠指令（A 类如 /resume /model
    *   以及已删除指令），全部当普通文本发给 LLM。
    *
@@ -627,8 +627,11 @@ export default function App() {
    *
    * 找到最后一条 user 消息文本，先 /rewind 1 both 回退一轮，
    * rewind 完成后（busy→false）自动重发 user 消息。
+   * pendingRegenerateRef 未消费时忽略重复触发，避免 rewind 期间
+   * 多次排队导致回退多轮或重发竞态。
    */
   const handleRegenerate = useCallback(() => {
+    if (pendingRegenerateRef.current) return;
     const lastUserMsg = [...session.staticItems].reverse().find((i) => i.role === 'user' && !i.is_command);
     if (!lastUserMsg) return;
     pendingRegenerateRef.current = lastUserMsg.text;

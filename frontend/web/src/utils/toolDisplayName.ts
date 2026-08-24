@@ -80,7 +80,6 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   // 通用工具
   ask_user_question: 'AskUserQuestion',
   sleep: 'Sleep',
-  repl: 'REPL',
   send_message: 'SendMessage',
   team_create: 'TeamCreate',
   team_delete: 'TeamDelete',

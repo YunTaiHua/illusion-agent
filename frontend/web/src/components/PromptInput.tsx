@@ -29,7 +29,7 @@ import { highlightMentions } from '../utils/mention';
 // '/goal' 同理：在 App.tsx 中走 submit_line（A 通道命令注册表），后端执行 /goal 命令并驱动 goal 轮次
 export const WEB_COMMANDS = [
   '/rewind', '/compact', '/context', '/export', '/init',
-  '/agent', '/turns', '/output-style', '/language', '/max-tokens', '/rename',
+  '/agent', '/turns', '/language', '/max-tokens', '/rename',
   '/goal',
 ];
 

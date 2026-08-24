@@ -268,11 +268,6 @@ async def test_ui_mode_commands_persist_and_update_state(tmp_path: Path, monkeyp
     registry = create_default_command_registry()
     context = _make_context(tmp_path)
 
-    output_command, output_args = registry.lookup("/output-style set minimal")
-    output_result = await output_command.handler(output_args, context)
-    assert "minimal" in output_result.message
-    assert context.app_state.get().output_style == "minimal"
-
     language_command, language_args = registry.lookup("/language set en")
     language_result = await language_command.handler(language_args, context)
     assert "en" in language_result.message
