@@ -41,16 +41,16 @@ async def test_help_command(handler):
 @pytest.mark.asyncio
 async def test_clear_command(handler):
     """/clear 清空会话。"""
-    # 先存点历史
+    # 先落盘会话索引（新架构：索引文件存在即视为已有会话）
     s = handler.session_store.get_or_create("u:ou_a", "ou_a", "dm")
-    handler.session_store.save(s, [{"role": "user", "content": "old"}])
+    handler.session_store.save(s)
     msg = _msg("/clear")
     result = await handler.try_handle(msg)
     assert result is True
     handler.channel.send_text.assert_called_once()
-    # 会话历史已清空
+    # 会话索引已删除（下次 get_or_create 新建全新 session_id）
     s2 = handler.session_store.get_or_create("u:ou_a", "ou_a", "dm")
-    assert s2.messages == []
+    assert s2.session_id != s.session_id
 
 
 @pytest.mark.asyncio

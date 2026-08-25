@@ -2,68 +2,48 @@
 ==================
 
 实现 QQSession 和 QQSessionStore，模式与 FeishuSessionStore 一致。
-会话以 JSON 文件持久化到磁盘。
+会话索引以 JSON 文件持久化到磁盘；对话历史统一由实际会话目录的
+context.jsonl 承载（与本地终端 session 同构），可通过 /resume
+/detach 互通。公共行为见 ChannelSessionIndex / BaseChannelSessionStore
+（channels.session_history）。
 
 类说明：
-    - QQSession: 单个会话的数据容器
-    - QQSessionStore: 会话存储管理器
+    - QQSession: QQ 会话索引
+    - QQSessionStore: QQ 会话存储管理器
 """
 from __future__ import annotations
 
 import json
 import logging
 import time
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
+from dataclasses import dataclass
 
 from illusion.channels.base import InboundMessage, SessionInfo
-from illusion.utils.atomic_write import atomic_write_text
+from illusion.channels.session_history import (
+    BaseChannelSessionStore,
+    ChannelSessionIndex,
+)
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
-class QQSession:
-    """QQ 渠道会话
-
-    Attributes:
-        key: 会话键（chat_id 或 chat_id_user_id）
-        user_id: 用户标识
-        chat_type: 会话类型（dm / group）
-        messages: 对话历史
-        session_id: agent 会话 ID（用于恢复）
-        model: 当前使用的模型
-    """
-
-    key: str
-    user_id: str
-    chat_type: str
-    messages: list[dict[str, Any]] = field(default_factory=list)
-    session_id: str = ""
-    model: str = ""
+class QQSession(ChannelSessionIndex):
+    """QQ 会话索引（字段定义见基类）"""
 
 
-class QQSessionStore:
-    """QQ 渠道会话存储
+class QQSessionStore(BaseChannelSessionStore):
+    """QQ 渠道会话存储管理器
 
-    会话以 JSON 文件存储在 data_dir 下，key 作为文件名。
+    会话索引以 JSON 文件存储在 data_dir 下，key 作为文件名。
 
     Attributes:
         data_dir: 存储目录
         group_sessions_per_user: 群组会话是否按用户隔离
     """
 
-    def __init__(self, data_dir: Path, group_sessions_per_user: bool = True) -> None:
-        """初始化存储
-
-        Args:
-            data_dir: 会话文件存储目录
-            group_sessions_per_user: 群组会话是否按用户隔离
-        """
-        self.data_dir = data_dir
-        self.group_sessions_per_user = group_sessions_per_user
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+    session_cls = QQSession
+    channel_name = "qq"
 
     def build_session_key(self, msg: InboundMessage) -> str:
         """构建会话键
@@ -81,95 +61,6 @@ class QQSessionStore:
         if msg.chat_type == "group" and self.group_sessions_per_user:
             return f"{msg.chat_id}_{msg.user_id}"
         return msg.chat_id
-
-    def get_or_create(self, key: str, user_id: str, chat_type: str) -> QQSession:
-        """获取或创建会话
-
-        Args:
-            key: 会话键
-            user_id: 用户 ID
-            chat_type: 会话类型
-
-        Returns:
-            QQSession: 会话实例
-
-        Note:
-            会话索引在 _run_agent 进入 agent turn 前即提前落盘，
-            保证进程崩溃后下次启动能接续同一 session_id。
-        """
-        path = self._session_path(key)
-        if path.exists():
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                return QQSession(
-                    key=key,
-                    user_id=data.get("user_id", user_id),
-                    chat_type=data.get("chat_type", chat_type),
-                    messages=data.get("messages", []),
-                    session_id=data.get("session_id", ""),
-                    model=data.get("model", ""),
-                )
-            except (json.JSONDecodeError, ValueError) as exc:
-                logger.warning("QQ 会话文件损坏，重新创建: %s", exc)
-
-        return QQSession(key=key, user_id=user_id, chat_type=chat_type)
-
-    def save(self, session: QQSession, messages: list[dict[str, Any]]) -> None:
-        """保存会话到磁盘
-
-        Args:
-            session: 会话实例
-            messages: 要持久化的消息列表
-        """
-        session.messages = messages
-        path = self._session_path(session.key)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        data = {
-            "user_id": session.user_id,
-            "chat_type": session.chat_type,
-            "messages": session.messages,
-            "session_id": session.session_id,
-            "model": session.model,
-        }
-        atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2))
-
-    def clear(self, key: str) -> None:
-        """清空指定键的会话（删除文件）
-
-        Args:
-            key: 存储键
-        """
-        path = self._session_path(key)
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass  # 已删除
-
-    def ensure_indexed(self, session: QQSession) -> None:
-        """确保会话索引已落盘（仅当文件不存在时创建）
-
-        与 save 不同：本方法绝不覆盖已有 messages，只在文件尚不存在时
-        写入 session_id 等索引字段，供进程崩溃后接续使用。
-
-        Args:
-            session: 会话状态
-        """
-        path = self._session_path(session.key)
-        if path.exists():
-            return  # 已有记录，绝不覆盖（避免清空历史）
-        data = {
-            "session_id": session.session_id,
-            "messages": [],
-            "user_id": session.user_id,
-            "chat_type": session.chat_type,
-            "model": session.model,
-        }
-        atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2))
-
-    def _session_path(self, key: str) -> Path:
-        """会话文件路径"""
-        safe_key = key.replace("/", "_").replace("\\", "_")
-        return self.data_dir / f"{safe_key}.json"
 
     def list_active(self, limit: int = 5) -> list[SessionInfo]:
         """列出最近活跃的 QQ 会话（按文件 mtime 排序）

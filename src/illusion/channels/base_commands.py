@@ -9,10 +9,10 @@
 """
 from __future__ import annotations
 
-from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from illusion.channels.base import InboundMessage
+from illusion.channels.session_history import ChannelSessionStoreProtocol
 from illusion.config.i18n import t
 
 if TYPE_CHECKING:
@@ -30,12 +30,13 @@ class BaseCommandHandler:
         session_store: 会话存储
     """
 
-    def __init__(self, channel: Channel, session_store: Any) -> None:
+    def __init__(self, channel: Channel, session_store: ChannelSessionStoreProtocol) -> None:
         """初始化
 
         Args:
             channel: 渠道实例
-            session_store: 会话存储
+            session_store: 会话存储（各渠道 store 满足同一静态接口，
+                接口语义漂移在类型检查期暴露而非运行时）
         """
         self.channel = channel
         self.session_store = session_store
@@ -126,9 +127,10 @@ class BaseCommandHandler:
         Args:
             msg: 入站消息
         """
+        from illusion.channels.session_history import resolve_channel_working_directory
         from illusion.services.session_storage import list_session_snapshots
 
-        cwd = str(Path.cwd())
+        cwd = resolve_channel_working_directory(self.channel.name)
         snapshots = list_session_snapshots(cwd)
         if not snapshots:
             await self._reply(msg, t("feishu_cmd_no_sessions"))
@@ -149,13 +151,14 @@ class BaseCommandHandler:
             key: 会话键
             args: 命令参数（序号或 session_id）
         """
+        from illusion.channels.session_history import resolve_channel_working_directory
         from illusion.services.checkpoint_store import CheckpointStore
         from illusion.services.session_storage import (
             list_session_snapshots,
             session_dir_for,
         )
 
-        cwd = str(Path.cwd())
+        cwd = resolve_channel_working_directory(self.channel.name)
         snapshots = list_session_snapshots(cwd)
         if not snapshots:
             await self._reply(msg, t("feishu_cmd_no_sessions"))
@@ -182,12 +185,17 @@ class BaseCommandHandler:
         session_dir = session_dir_for(cwd, sid)
         store = CheckpointStore(session_dir, sid)
         result = await store.restore()
-        messages = [m.model_dump(mode="json") for m in result.messages]
-        self.session_store.inject(key, messages)
-        await self._reply(msg, t("feishu_cmd_resumed", n=len(messages)))
+        # 注入到渠道会话的 context.jsonl（单一权威存储）
+        session = self.session_store.get_or_create(key, msg.user_id, msg.chat_type)
+        await self.session_store.replace_messages(session, result.messages)
+        await self._reply(msg, t("feishu_cmd_resumed", n=len(result.messages)))
 
     async def _cmd_detach(self, msg: InboundMessage, key: str) -> None:
         """处理 /detach 命令：保存为本地 session
+
+        渠道对话历史已由 CheckpointStore 实时写入实际会话目录的
+        context.jsonl，此处仅需补齐 meta.json / index.json 使其出现在
+        本地会话列表中。
 
         Args:
             msg: 入站消息
@@ -195,8 +203,7 @@ class BaseCommandHandler:
         """
         import time
 
-        from illusion.engine.messages import ConversationMessage
-        from illusion.services.checkpoint_store import CheckpointStore
+        from illusion.channels.session_history import resolve_channel_working_directory
         from illusion.services.session_storage import (
             session_dir_for,
             write_index_to,
@@ -204,22 +211,20 @@ class BaseCommandHandler:
         )
 
         session = self.session_store.get_or_create(key, msg.user_id, msg.chat_type)
-        cwd = str(Path.cwd())
-        conv_messages = []
-        for m in session.messages:
-            try:
-                conv_messages.append(ConversationMessage.model_validate(m))
-            except (ValueError, TypeError):
-                continue
-        from illusion.config import load_settings
-        settings = load_settings()
-        model = session.model or settings.active_model_name
+        if not session.session_id:
+            # 全新索引（QQ 首轮 agent turn 前无 sid）：无历史可 detach
+            await self._reply(msg, t("feishu_cmd_no_sessions"))
+            return
+        # 与 /sessions、/resume 的列举口径保持同源（渠道 working_directory
+        # → 默认工作区），否则配置了独立目录的渠道 detach 出的会话永远
+        # 无法被 /resume 看到
+        cwd = session.cwd or resolve_channel_working_directory(self.channel.name)
         sid = session.session_id
+        history = await self.session_store.load_messages(session)
+        messages = history.messages
         session_dir = session_dir_for(cwd, sid)
-        store = CheckpointStore(session_dir, sid)
-        await store.append_checkpoint()
-        for m in conv_messages:
-            await store.append_message(m)
+        from illusion.config import load_settings
+        model = session.model or load_settings().active_model_name
         write_meta_to(session_dir, sid, {
             "session_id": sid,
             "cwd": cwd,
@@ -227,8 +232,8 @@ class BaseCommandHandler:
             "created_at": time.time(),
             "updated_at": time.time(),
             "summary": "",
-            "message_count": len(conv_messages),
-            "turn_count": sum(1 for m in conv_messages if m.role == "assistant"),
+            "message_count": len(messages),
+            "turn_count": sum(1 for m in messages if m.role == "assistant"),
         })
         write_index_to(session_dir, sid)
         await self._reply(msg, t("feishu_cmd_detached", id=sid))

@@ -1,4 +1,5 @@
 """QQ 渠道单元测试"""
+import asyncio
 from unittest.mock import MagicMock
 
 import pytest
@@ -208,19 +209,33 @@ class TestQQSessionStore:
         assert store.build_session_key(msg) == "g1"
 
     def test_get_or_create_new(self, tmp_path):
+        """新建索引即刻分配 uuid4 session_id（三渠道一致，消除空 sid 特例）"""
         store = QQSessionStore(tmp_path)
         session = store.get_or_create("key1", "u1", "dm")
         assert session.key == "key1"
-        assert session.messages == []
+        assert len(session.session_id) == 12  # uuid4 hex[:12]
 
     def test_save_and_load(self, tmp_path):
+        """索引保存读回（历史由 context.jsonl 承载，不再内嵌 messages）。"""
+        import json as _json
+        from illusion.engine.messages import ConversationMessage
+        from illusion.services.checkpoint_store import CheckpointStore
+
         store = QQSessionStore(tmp_path)
         session = store.get_or_create("key1", "u1", "dm")
-        msgs = [{"role": "user", "content": "hello"}]
-        store.save(session, msgs)
+        session.session_id = "sid123"
+        session.cwd = str(tmp_path / "ws")
+        store.save(session)
 
         loaded = store.get_or_create("key1", "u1", "dm")
-        assert loaded.messages == msgs
+        assert loaded.session_id == "sid123"
+        assert loaded.cwd == session.cwd
+
+        # 历史写入 context.jsonl 后可经 load_messages 读回
+        msgs = [ConversationMessage.from_user_text("hello")]
+        asyncio.run(store.replace_messages(loaded, msgs))
+        result = asyncio.run(store.load_messages(loaded))
+        assert [m.text for m in result.messages] == ["hello"]
 
 
 class TestQQChannelNormalize:

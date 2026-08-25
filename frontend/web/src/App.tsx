@@ -64,6 +64,23 @@ export default function App() {
   // 深色模式会在遮罩褪去前从未生效，导致主界面以浅色呈现。
   useTheme();
 
+  // 全局禁止鼠标点击按钮时的默认聚焦（capture 阶段）。
+  // 浏览器原生行为：鼠标点击过的 <button> 会保留 DOM 焦点，此后按 Enter
+  // 会经原生 click 再次触发该按钮——表现为"变更卡片点开后按 Enter 反而
+  // 折叠""弹窗按钮被回车误触"等一系列回车误绑定。preventDefault 后鼠标
+  // 点击不再转移焦点，Enter 始终作用于真实焦点处（如输入框）；键盘 Tab
+  // 导航聚焦不受影响，click 事件照常派发。
+  // 组件内已有的局部 onMouseDown preventDefault（MessageActions /
+  // ModalCard / GlassDropdown）与本规则重复，保留作纵深防御。
+  useEffect(() => {
+    const onMouseDown = (e: MouseEvent) => {
+      const target = e.target instanceof Element ? e.target : null;
+      if (target?.closest('button')) e.preventDefault();
+    };
+    document.addEventListener('mousedown', onMouseDown, true);
+    return () => document.removeEventListener('mousedown', onMouseDown, true);
+  }, []);
+
   // 遮罩褪去时机：首个会话内容（web_restore_completed）呈现完成即褪去。
   // 桌面端窗口启动即最大化（见 desktop createWindow maximized:true），
   // 无需在此触发 maximize 或等待全屏时机。
@@ -843,6 +860,14 @@ export default function App() {
     return () => document.removeEventListener('keydown', onKey);
   }, [deleteConfirm, handleCancelDeleteOne]);
 
+  // 弹窗打开时把焦点移到"取消"按钮：无 autoFocus 时焦点可能停留在
+  // 输入框，弹窗后的 Enter 会发出消息而非操作弹窗；落在取消上时
+  // Enter/Escape 均为安全动作
+  const deleteCancelRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (deleteConfirm) deleteCancelRef.current?.focus();
+  }, [deleteConfirm]);
+
   /** 触发删除弹窗退出动画（真正卸载由 handleDeleteModalAnimationEnd 完成） */
   const requestDeleteModalClose = useCallback(() => {
     setDeleteModalClosing(true);
@@ -1231,10 +1256,11 @@ export default function App() {
               <p className="text-sm text-content-secondary leading-relaxed">{t(lang, 'confirm_delete_session')}</p>
             </div>
             <div className="px-6 py-4 border-t border-border-light flex justify-end gap-2">
-              <button onClick={handleCancelDeleteOne} className="px-4 py-2 text-sm text-content-secondary glass-option-hover rounded-lg transition-colors cursor-pointer border border-white/40">
+              <button ref={deleteCancelRef} onClick={handleCancelDeleteOne} className="px-4 py-2 text-sm text-content-secondary glass-option-hover rounded-lg transition-colors cursor-pointer border border-white/40">
                 {t(lang, 'cancel')}
               </button>
-              <button onClick={handleConfirmDeleteOne} autoFocus
+              {/* 确认按钮不自动聚焦：焦点由上方 effect 移至"取消"，Enter 触发的是安全动作 */}
+              <button onClick={handleConfirmDeleteOne}
                 className="px-4 py-2 text-sm text-white bg-danger hover:bg-danger-hover rounded-lg transition-colors cursor-pointer">
                 {t(lang, 'confirm_delete')}
               </button>

@@ -380,7 +380,8 @@ export interface UpdateEnvPayload {
   base_url?: string;
   api_key?: string;
   auth_token?: string;
-  add_models?: { key: string; value: string }[];
+  /** key 缺省时后端按现有最大编号 +1 自动分配 */
+  add_models?: { key?: string; value: string }[];
   remove_models?: string[];
 }
 

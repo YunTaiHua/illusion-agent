@@ -39,11 +39,11 @@ async def test_help_command(handler):
 async def test_clear_command(handler):
     """/clear 清空会话。"""
     s = handler.session_store.get_or_create("u:ou_a", "ou_a", "dm")
-    handler.session_store.save(s, [{"role": "user", "content": "old"}])
+    handler.session_store.save(s)
     result = await handler.try_handle(_msg("/clear"))
     assert result is True
     s2 = handler.session_store.get_or_create("u:ou_a", "ou_a", "dm")
-    assert s2.messages == []
+    assert s2.session_id != s.session_id
 
 
 @pytest.mark.asyncio

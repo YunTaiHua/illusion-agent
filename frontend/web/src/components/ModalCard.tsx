@@ -974,11 +974,12 @@ export function QuestionCard({ modal, lang, onRespond, onTabChange }: QuestionCa
                         }
                         e.stopPropagation();
                       }}
-                      // 失焦自动提交（全卡片唯一保留的失焦提交路径，仅限"其他"输入框）：
-                      // 多问题：不限制 relatedTarget 是否在卡片内——切问题 tab 也应提交"其他"内容，
-                      // 否则用户输入的文字会丢失
-                      // 单问题：焦点仍在卡片内（如点击普通选项或确认按钮）则不提交，
-                      // 由回车/确认按钮统一提交，避免点选其他选项时被误提交
+                      // 失焦自动提交（全卡片唯一保留的失焦提交路径，仅限"其他"输入框）。
+                      // 注意：App 全局禁止了按钮 mousedown 聚焦后，点击 tab/选项等
+                      // 按钮不再触发本输入框 blur——草稿由切题恢复与 submitMultiNow
+                      // 回填保护，不会丢失；blur 提交实际仅在焦点移向非按钮元素时发生：
+                      // 多问题：不限制 relatedTarget 是否在卡片内（键盘 Tab 切题仍提交）
+                      // 单问题：焦点仍在卡片内则不提交，由回车/确认按钮统一提交
                       onBlur={(e) => {
                         if (!isMultiQuestion) {
                           const next = e.relatedTarget as Node | null;
@@ -1000,7 +1001,7 @@ export function QuestionCard({ modal, lang, onRespond, onTabChange }: QuestionCa
                       onClick={(e) => e.stopPropagation()}
                       placeholder={
                         !isMultiSelect && !isMultiQuestion
-                          ? (lang === 'zh-CN' ? '输入后按 Enter 提交（点击卡片外也会提交）' : 'Press Enter to submit (or click away)')
+                          ? (lang === 'zh-CN' ? '输入后按 Enter 提交' : 'Press Enter to submit')
                           : isMultiSelect
                             ? (lang === 'zh-CN' ? '按 Enter 收起（Ctrl+Enter 提交）' : 'Enter to collapse (Ctrl+Enter to submit)')
                             : (lang === 'zh-CN' ? '按 Enter 收起（←/→ 切换题目）' : 'Enter to collapse (←/→ switch questions)')

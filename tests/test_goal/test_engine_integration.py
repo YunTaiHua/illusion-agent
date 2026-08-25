@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -382,6 +383,45 @@ async def test_goal_command_persisted_and_turn_count(tmp_path: Path) -> None:
         assert turn_count == 1
 
     await run()
+
+
+@pytest.mark.asyncio
+async def test_drive_goal_rounds_no_extra_checkpoint_for_command_first_session(
+    tmp_path: Path,
+) -> None:
+    """命令优先会话的 goal 轮次驱动不追加额外 checkpoint。
+
+    回归：首条消息即 /goal 时，file_history 初始快照若在
+    drive_goal_rounds 中再 append 一次 checkpoint，checkpoint 数会大于
+    用户可见轮数，rewind 的 turns 计数整体偏移（回退第一条消息需两次）。
+    快照应复用 record_goal_command 已建立的最近 checkpoint。
+    """
+    from illusion.services.checkpoint_store import CheckpointStore
+    from illusion.services.session_storage import session_dir_for
+
+    manager = GoalManager(GoalSettings(default_max_goal_rounds=1))
+    manager.current_source = "human"
+    manager.create("do the thing")
+    engine = _FakeEngine(manager, cwd=str(tmp_path))
+    store = CheckpointStore(session_dir_for(str(tmp_path), "goal-no-extra"), "goal-no-extra")
+    engine._checkpoint_store = store
+
+    # 命令优先路径：record_goal_command 建立 /goal 轮的唯一 checkpoint(id=0)
+    await engine.record_goal_command("/goal do the thing")
+
+    [ev async for ev in engine.drive_goal_rounds()]
+
+    # checkpoint 数必须等于用户可见轮数（=1）：快照复用 id0，无新增行
+    ids = []
+    for line in store.session_dir.joinpath("context.jsonl").read_text(
+        encoding="utf-8"
+    ).splitlines():
+        if line.strip():
+            record = json.loads(line)
+            if record.get("role") == "_checkpoint":
+                ids.append(record["id"])
+    assert ids == [0], f"应只有 /goal 命令的 checkpoint(id=0)，实际 {ids}"
+    assert store.next_checkpoint_id == 1
 
 
 @pytest.mark.asyncio

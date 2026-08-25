@@ -350,7 +350,11 @@ function MessageBubble({ item, toolInputMap, lang = 'zh-CN', onRewind, onRegener
     return (
       <div className="flex justify-end py-1.5 group">
         <div className="flex flex-col items-end max-w-[min(82%,64ch)]">
-          <div className="bg-surface-card-alt border border-border-light rounded-lg px-3 py-2 text-sm text-content-primary whitespace-pre-wrap break-words select-text">
+          {/* overflow-wrap:anywhere（而非 break-words）：断点计入 min-content，
+              长文件名等无空格长串在容器边界强制折行、不撑破最大宽度；
+              break-word 的断点不参与 min-content 计算，flex 下容器会被
+              最长串撑到超宽后才换行 */}
+          <div className="bg-surface-card-alt border border-border-light rounded-lg px-3 py-2 text-sm text-content-primary whitespace-pre-wrap [overflow-wrap:anywhere] select-text">
             {highlightMentions(item.text)}
           </div>
           {showActions && <MessageActions text={item.text} lang={lang} onRewind={onRewind} disabled={actionsDisabled} />}

@@ -10,11 +10,33 @@ import asyncio
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from illusion.auth.manager import AuthManager
 from illusion.config.i18n import t as _t
 from illusion.config.settings import Settings, load_settings, save_settings
+
+
+def _next_model_key(env_data: dict[str, Any]) -> str:
+    """为 env 自动分配下一个模型键（model_N，取现有最大编号 +1）
+
+    与 CLI /model add 的分配规则一致。删除中间模型后编号不连续时
+    （如剩 model_1/model_3）按最大编号续排，避免复用已有 key 覆盖模型。
+
+    Args:
+        env_data: env 配置字典（可能含 model_N 字段）
+
+    Returns:
+        str: 新模型键名（如 model_4）
+    """
+    existing_nums = []
+    for k in env_data:
+        if isinstance(k, str) and k.startswith("model_"):
+            try:
+                existing_nums.append(int(k.split("_", 1)[1]))
+            except (ValueError, IndexError):
+                continue
+    return f"model_{max(existing_nums, default=0) + 1}"
 
 
 class CreateEnvRequest(BaseModel):
@@ -31,7 +53,12 @@ class CreateEnvRequest(BaseModel):
 class ModelEntry(BaseModel):
     """模型条目。"""
 
-    key: str = Field(..., pattern=r"^model_\d+$", description="模型键名（如 model_1）")
+    key: str | None = Field(
+        default=None,
+        pattern=r"^model_\d+$",
+        description="模型键名（如 model_3）。缺省时由后端按现有最大编号 +1 自动分配，"
+        "避免前端用过期快照计算 key 导致连续添加时相互覆盖",
+    )
     value: str = Field(..., min_length=1, description="模型名称")
 
 
@@ -294,7 +321,8 @@ def register_env_routes(app: FastAPI, host_config: Any | None = None) -> None:
             if isinstance(env_data, dict):
                 if req.add_models:
                     for m in req.add_models:
-                        env_data[m.key] = m.value
+                        key = m.key or _next_model_key(env_data)
+                        env_data[key] = m.value
                 if req.remove_models:
                     for key in req.remove_models:
                         env_data.pop(key, None)
@@ -427,15 +455,37 @@ def register_env_routes(app: FastAPI, host_config: Any | None = None) -> None:
 
         仅更新请求中提供的字段，其余保持不变。保存后返回最新沙箱配置。
         """
+        from illusion.config.settings import (
+            SandboxFilesystemSettings,
+            SandboxNetworkSettings,
+            SandboxRipgrepSettings,
+        )
         from illusion.sandbox import SandboxManager
 
         settings = load_settings()
         current = settings.sandbox
+        # 嵌套结构先经对应模型验证再更新：model_copy(update=...) 不做验证，
+        # 请求体里的裸 dict 若直接塞入会替换掉 SandboxXxxSettings 实例
+        # （后续属性访问 AttributeError、序列化告警、落盘结构退化）。
+        validators: dict[str, Any] = {
+            "network": SandboxNetworkSettings,
+            "filesystem": SandboxFilesystemSettings,
+            "ripgrep": SandboxRipgrepSettings,
+        }
         updates: dict[str, Any] = {}
         for field in UpdateSandboxRequest.model_fields:
             value = getattr(req, field)
-            if value is not None:
+            if value is None:
+                continue
+            validator = validators.get(field)
+            if validator is None:
                 updates[field] = value
+                continue
+            try:
+                updates[field] = validator.model_validate(value)
+            except ValidationError as exc:
+                # 非法嵌套字段（如域名 pattern 不匹配）返回 400 而非 500
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         new_sandbox = current.model_copy(update=updates)
         new_settings = settings.model_copy(update={"sandbox": new_sandbox})
         save_settings(new_settings)

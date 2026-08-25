@@ -455,18 +455,16 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
   const handleAddModel = useCallback(async (envKey: string, modelValue: string) => {
     setOpError(null);
     try {
-      const env = envs.find((e) => e.env_key === envKey);
-      if (!env) return;
-      // 模型 key 为 model_1、model_2 ...，按当前数量递增
-      const modelCount = Object.keys(env.models).length;
-      const nextKey = `model_${modelCount + 1}`;
-      await envApi.update(envKey, { add_models: [{ key: nextKey, value: modelValue }] });
+      // key 不由前端计算：本地 envs 快照可能过期（连续快速添加、
+      // 删除中间模型导致编号不连续），重复 key 会相互覆盖只留最后一个。
+      // 缺省 key 时后端按现有最大编号 +1 自动分配。
+      await envApi.update(envKey, { add_models: [{ value: modelValue }] });
       const e = await envApi.list();
       setEnvs(e.envs);
     } catch (err) {
       setOpError(err instanceof Error ? err.message : String(err));
     }
-  }, [envs]);
+  }, []);
 
   /** 从已有环境移除模型（即时 API） */
   const handleRemoveModel = useCallback(async (envKey: string, modelKey: string) => {

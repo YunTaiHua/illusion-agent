@@ -59,6 +59,16 @@ class RestoreResult:
     checkpoint_count: int
     goal_state: dict[str, Any] | None = None
 
+    @classmethod
+    def empty(cls) -> RestoreResult:
+        """全零空结果（文件缺失 / 回退到头 / 加载降级等无历史场景）"""
+        return cls(
+            messages=[], usage_input=0, usage_output=0,
+            usage_cache_read=0, usage_cache_creation=0,
+            last_usage=None, last_usage_message_count=0,
+            checkpoint_count=0,
+        )
+
 
 class CheckpointStore:
     """context.jsonl 的 append-only 持久化存储。
@@ -98,6 +108,46 @@ class CheckpointStore:
     def next_checkpoint_id(self) -> int:
         """返回下一个 checkpoint id。"""
         return self._next_checkpoint_id
+
+    def align_checkpoint_id(self, disk_count: int) -> None:
+        """按磁盘已有 checkpoint 数对齐 next_checkpoint_id。
+
+        restore_messages 场景（Web/渠道每轮重建 runtime）：调用方已在
+        外部完成 restore() 并传入消息，但本 store 是新建的、next 从 0
+        起——若不对齐，后续 append 会写出重复 id 的 checkpoint 行，
+        resume/rewind 按 id 定位时整体偏移（部分指令失效的根源）。
+
+        Args:
+            disk_count: 磁盘 context.jsonl 中已有的 checkpoint 行数
+        """
+        self._next_checkpoint_id = max(self._next_checkpoint_id, disk_count)
+
+    def count_disk_checkpoints(self) -> int:
+        """同步统计磁盘 context.jsonl 中已有的 checkpoint 行数。
+
+        供 restore_messages 恢复路径的对齐兜底（文件缺失/损坏行跳过）。
+
+        Returns:
+            int: 已有的 checkpoint 行数（无文件时为 0）
+        """
+        if not self._file.exists():
+            return 0
+        count = 0
+        try:
+            with open(self._file, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(record, dict) and record.get("role") == "_checkpoint":
+                        count += 1
+        except OSError:
+            return 0
+        return count
 
     @property
     def session_id(self) -> str:
@@ -198,12 +248,7 @@ class CheckpointStore:
         """
         async with self._io_lock:
             if not self._file.exists():
-                return RestoreResult(
-                    messages=[], usage_input=0, usage_output=0,
-                    usage_cache_read=0, usage_cache_creation=0,
-                    last_usage=None, last_usage_message_count=0,
-                    checkpoint_count=0,
-                )
+                return RestoreResult.empty()
             # 读所有行
             kept_lines: list[str] = []
             async with aiofiles.open(self._file, encoding="utf-8") as f:
@@ -244,12 +289,7 @@ class CheckpointStore:
         """
         async with self._io_lock:
             if not self._file.exists():
-                return RestoreResult(
-                    messages=[], usage_input=0, usage_output=0,
-                    usage_cache_read=0, usage_cache_creation=0,
-                    last_usage=None, last_usage_message_count=0,
-                    checkpoint_count=0,
-                )
+                return RestoreResult.empty()
             lines: list[str] = []
             async with aiofiles.open(self._file, encoding="utf-8") as f:
                 async for line in f:
@@ -258,7 +298,11 @@ class CheckpointStore:
                         lines.append(line)
             # 重置 next_checkpoint_id
             self._next_checkpoint_id = 0
-            return self._build_result_from_lines(lines)
+            # to_thread：全量 JSON 解析 + Pydantic 校验是 CPU 密集操作，
+            # 渠道端每条消息都会 restore 长会话，直接在事件循环执行会阻塞
+            # 所有并发会话收发；线程内仅读 lines 快照并写 _next_checkpoint_id，
+            # 后者由外层 _io_lock 串行化保护（与 rewind_to 同范式）
+            return await asyncio.to_thread(self._build_result_from_lines, lines)
 
     async def truncate_all(self) -> None:
         """清空 context.jsonl（用于 /new）。"""
@@ -301,6 +345,7 @@ class CheckpointStore:
         # 旧实现先 unlink 再 open("w")，且无跨进程锁——若与另一进程的
         # append 竞争失败，文件已被删除 → 0 字节数据丢失（会话恢复为空）。
         async with self._io_lock:
+            self._session_dir.mkdir(parents=True, exist_ok=True)
             with self._cross_process_lock():
                 tmp_file = self._file.with_suffix(self._file.suffix + ".tmp")
                 async with aiofiles.open(tmp_file, "w", encoding="utf-8") as f:

@@ -411,6 +411,7 @@ async def build_runtime(
     sandbox_permission_prompt: PermissionPrompt | None = None,
     restore_messages: list[dict[str, Any]] | None = None,
     restore_session_id: str | None = None,
+    restore_checkpoint_count: int | None = None,
     effort: str | None = None,
     channel_hint: str | None = None,
     channel_tools: list[Any] | None = None,
@@ -442,6 +443,8 @@ async def build_runtime(
         permission_prompt: 权限确认回调函数
         ask_user_prompt: 用户问答回调函数
         restore_messages: 恢复的会话消息列表
+        restore_checkpoint_count: 磁盘已有 checkpoint 行数（restore_messages 场景
+            对齐新建 CheckpointStore 的 next_checkpoint_id，避免写出重复 id 行）
         effort: 推理强度级别（low/medium/high/xhigh/max）
         verbose: 启用 INFO 级别日志（CLI --verbose）
         debug: 启用 DEBUG 级别日志（CLI --debug）
@@ -726,6 +729,17 @@ async def build_runtime(
     from illusion.services.session_storage import session_dir_for
     session_dir = session_dir_for(cwd, session_id)
     checkpoint_store = CheckpointStore(session_dir, session_id)
+    # restore_messages 恢复路径的对齐：调用方已在外部 restore 过磁盘状态，
+    # 新建 store 若不对齐，每轮 append 会从 id=0 重复写 checkpoint 行，
+    # resume/rewind 按 id 定位时整体偏移（部分指令失效的根源）。
+    # 显式传入 restore_checkpoint_count 优先；否则按磁盘实况自动对齐
+    # （覆盖 -r/-c/--print resume 等所有未传计数的恢复入口）。
+    if restore_checkpoint_count is not None:
+        checkpoint_store.align_checkpoint_id(restore_checkpoint_count)
+    elif restore_messages:
+        checkpoint_store.align_checkpoint_id(
+            await asyncio.to_thread(checkpoint_store.count_disk_checkpoints)
+        )
     engine.attach_session(checkpoint_store)
     # 加载文件历史（若磁盘存在）。
     # restore_messages 场景：调用方已在外部完成 CheckpointStore.restore()

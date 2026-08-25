@@ -583,13 +583,45 @@ class ChannelRunner:
         key = self.session_store.build_session_key(msg)
         session = self.session_store.get_or_create(key, msg.user_id, msg.chat_type)
 
+        # 渠道 agent 运行目录锚定：优先渠道配置的 working_directory
+        # （每条消息动态读取，配置变更即时生效，无需重启守护进程），
+        # 缺省回退默认工作区（settings.working_directory / 进程目录）。
+        # 此前隐式继承守护进程启动目录，多目录空间下行为不可控。
+        # 会话索引已记录 cwd 时以索引为准——历史 context.jsonl 绑定
+        # 创建时的目录，配置变更不迁移既有会话。
+        from illusion.channels.session_history import resolve_channel_working_directory
+
+        channel_cwd = session.cwd or resolve_channel_working_directory(self.channel.name)
+        if session.cwd != channel_cwd:
+            session.cwd = channel_cwd
+
         # 提前落盘会话索引（仅当文件尚不存在时）：确保 session_id 落盘，
         # 这样进程崩溃后下次启动 get_or_create 能命中该会话记录接续，
-        # 而非新建会话。注意：绝不覆盖已有 messages（否则会清空历史）。
+        # 而非新建会话。注意：绝不覆盖已有索引（否则会丢失 session_id）。
         try:
             self.session_store.ensure_indexed(session)
         except (OSError, AttributeError, TypeError) as exc:
             logger.warning("会话索引提前落盘失败: %s", exc)
+
+        # 加载对话历史（context.jsonl 单一权威）。restore_messages 需要
+        # dict 形式供 engine 反序列化；checkpoint_count 传给 build_runtime
+        # 对齐新建 store，避免每轮从 id=0 重复写 checkpoint 行。
+        # 不做旧格式迁移：旧版映射内嵌的 messages 字段读取时被忽略。
+        history_checkpoint_count: int | None
+        try:
+            history_result = await self.session_store.load_messages(session)
+            history_checkpoint_count: int | None = history_result.checkpoint_count
+        except Exception:
+            # 计数传 None 而非 0：瞬时 IO 失败时让 build_runtime 的磁盘
+            # 兜底对齐仍可生效，避免从 id=0 重复写 checkpoint 行
+            history_result = None
+            history_checkpoint_count = None
+            logger.warning("渠道会话历史加载失败，按空历史继续", exc_info=True)
+        history_dicts = (
+            [m.model_dump(mode="json") for m in history_result.messages]
+            if history_result is not None
+            else []
+        )
 
         # 检测渠道是否支持消息编辑（仅飞书支持卡片 patch）
         from illusion.channels.feishu.adapter import FeishuChannel
@@ -719,21 +751,7 @@ class ChannelRunner:
             qq_markdown_support=qq_md,
             active_sessions=active_sessions,
         )
-        # 渠道 agent 运行目录锚定：优先渠道配置的 working_directory
-        # （每条消息动态读取，配置变更即时生效，无需重启守护进程），
-        # 缺省回退默认工作区（settings.working_directory / 进程目录）。
-        # 此前隐式继承守护进程启动目录，多目录空间下行为不可控。
-        channel_cwd = getattr(
-            getattr(all_cfg, self.channel.name, None), "working_directory", None
-        )
-        if not channel_cwd:
-            try:
-                from illusion.services.workspace_registry import get_default_workspace
-
-                channel_cwd = get_default_workspace()
-            except (OSError, ValueError):
-                channel_cwd = str(Path.cwd())
-
+        # 渠道 agent 运行目录已在函数开头锚定（channel_cwd）
         try:
             bundle = await build_runtime(
                 model=resolved_model,
@@ -741,8 +759,9 @@ class ChannelRunner:
                 # 守护进程启动时对 settings.json 做一次性快照，永不刷新；
                 # 若传 self.settings.resolve_api_key() 会用旧 env 的 key，
                 # 被 merge_cli_overrides 强行覆盖到新 env 的 EnvConfig 上 → "新端点+旧密钥" → 401
-                restore_messages=session.messages if session.messages else None,
+                restore_messages=history_dicts or None,
                 restore_session_id=session.session_id,
+                restore_checkpoint_count=history_checkpoint_count,
                 permission_prompt=self._make_permission_prompt(msg.chat_id),
                 ask_user_prompt=self._make_ask_user_prompt(msg.chat_id),
                 plan_approval_prompt=self._make_plan_approval_prompt(msg.chat_id),
@@ -789,20 +808,13 @@ class ChannelRunner:
                 # 微信/QQ 群聊：一次性发送（QQ 群聊需要 reply_to 定位消息）
                 await self.channel.send_text(msg.chat_id, full_text,
                                              reply_to=msg.message_id)
-            # 持久化渠道会话历史
-            engine = getattr(bundle, "engine", None)
-            msgs = getattr(engine, "messages", None)
-            if msgs is not None and hasattr(msgs, "__iter__"):
-                try:
-                    # 回写 build_runtime 生成/恢复的 session_id，避免下次仍为空
-                    # 导致每次都生成新会话 ID（同一对话产生多个会话记录）
-                    if bundle.session_id and session.session_id != bundle.session_id:
-                        session.session_id = bundle.session_id
-                    self.session_store.save(session, _serialize_messages(list(msgs)))
-                except Exception:
-                    logger.warning("渠道会话持久化失败", exc_info=True)
-            else:
-                logger.warning("无法从 bundle.engine 获取会话历史，跳过持久化")
+            # 同步 build_runtime 生成/恢复的 session_id 到索引，避免下次
+            # 仍为空导致每次都生成新会话 ID（同一对话产生多个会话记录）。
+            # 对话历史本身无需在此回写——handle_line 期间已由 CheckpointStore
+            # 实时写入 context.jsonl（单一权威），此处仅持久化索引字段。
+            if bundle.session_id and session.session_id != bundle.session_id:
+                session.session_id = bundle.session_id
+            self.session_store.save(session)
         except asyncio.CancelledError:
             # /stop 中断：清理流式控制器后重新抛出，让上层 _handle_message 发提示
             logger.info("agent 任务被取消: chat_id=%s", msg.chat_id)
@@ -1034,21 +1046,3 @@ def _create_session_store(
         data_dir=data_dir,
         group_sessions_per_user=group_sessions_per_user,
     )
-
-
-def _serialize_messages(messages: list[Any]) -> list[dict[str, Any]]:
-    """把 ConversationMessage 列表序列化为 dict[str, Any] 列表
-
-    Args:
-        messages: ConversationMessage 列表
-
-    Returns:
-        list[dict]: 序列化后的消息
-    """
-    result: list[dict[str, Any]] = []
-    for m in messages:
-        if hasattr(m, "model_dump"):
-            result.append(m.model_dump(mode="json"))
-        elif isinstance(m, dict):
-            result.append(m)
-    return result

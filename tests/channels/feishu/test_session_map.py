@@ -1,10 +1,14 @@
 """飞书会话存储测试。"""
 from __future__ import annotations
 
+import json
 from pathlib import Path
+
+import pytest
 
 from illusion.channels.base import InboundMessage
 from illusion.channels.feishu.session_map import FeishuSession, FeishuSessionStore
+from illusion.engine.messages import ConversationMessage
 
 
 def _msg(chat_id: str, user_id: str, chat_type: str = "dm") -> InboundMessage:
@@ -36,54 +40,85 @@ def test_build_session_key_group_shared(tmp_path: Path):
 
 
 def test_get_or_create_new_session(tmp_path: Path):
-    """新 key 创建空会话。"""
+    """新 key 创建空会话索引。"""
     store = FeishuSessionStore(data_dir=tmp_path)
     session = store.get_or_create("u:ou_a", "ou_a", "dm")
     assert isinstance(session, FeishuSession)
-    assert session.messages == []
+    assert session.cwd == ""
     assert session.session_id  # 非空 ID
 
 
 def test_get_or_create_returns_existing(tmp_path: Path):
-    """重复 get 返回同一会话。"""
+    """重复 get 返回同一会话索引。"""
     store = FeishuSessionStore(data_dir=tmp_path)
     s1 = store.get_or_create("u:ou_a", "ou_a", "dm")
-    store.save(s1, [{"role": "user", "content": "hello"}])
+    store.save(s1)
     s2 = store.get_or_create("u:ou_a", "ou_a", "dm")
     assert s2.session_id == s1.session_id
-    assert s2.messages == [{"role": "user", "content": "hello"}]
+
+
+def test_index_json_has_no_messages_field(tmp_path: Path):
+    """映射索引文件不再内嵌 messages（历史由 context.jsonl 权威承载）。"""
+    store = FeishuSessionStore(data_dir=tmp_path)
+    session = store.get_or_create("u:ou_a", "ou_a", "dm")
+    store.save(session)
+    raw = json.loads((tmp_path / "u_ou_a.json").read_text(encoding="utf-8"))
+    assert "messages" not in raw
+    assert raw["session_id"] == session.session_id
+
+
+@pytest.mark.asyncio
+async def test_load_messages_empty_and_roundtrip(tmp_path: Path):
+    """load_messages 空会话返回空列表；写入 context.jsonl 后能读回。"""
+    from illusion.services.checkpoint_store import CheckpointStore
+    from illusion.services.session_storage import session_dir_for
+
+    store = FeishuSessionStore(data_dir=tmp_path)
+    session = store.get_or_create("u:ou_a", "ou_a", "dm")
+    cwd = str(tmp_path / "ws")
+    session.cwd = cwd
+    store.save(session)
+
+    # 无历史
+    assert (await store.load_messages(session)).messages == []
+
+    # 写入两轮消息后读回
+    sdir = session_dir_for(cwd, session.session_id)
+    cp = CheckpointStore(sdir, session.session_id)
+    await cp.append_checkpoint()
+    await cp.append_message(ConversationMessage.from_user_text("hello"))
+    await cp.append_message(ConversationMessage(role="assistant", content=[]))
+
+    msgs = (await store.load_messages(session)).messages
+    assert [m.text for m in msgs if m.role == "user"] == ["hello"]
+
+
+@pytest.mark.asyncio
+async def test_replace_messages_rewrites_history(tmp_path: Path):
+    """replace_messages 用外部消息重建会话历史（/resume 注入）。"""
+    store = FeishuSessionStore(data_dir=tmp_path)
+    session = store.get_or_create("u:ou_a", "ou_a", "dm")
+    session.cwd = str(tmp_path / "ws")
+    store.save(session)
+
+    external = [
+        ConversationMessage.from_user_text("restored q"),
+        ConversationMessage(role="assistant", content=[]),
+    ]
+    await store.replace_messages(session, external)
+
+    msgs = (await store.load_messages(session)).messages
+    assert [m.text for m in msgs if m.role == "user"] == ["restored q"]
 
 
 def test_clear_removes_session(tmp_path: Path):
-    """clear 后重建为空会话。"""
+    """clear 后重建为全新会话（新 session_id）。"""
     store = FeishuSessionStore(data_dir=tmp_path)
     s1 = store.get_or_create("u:ou_a", "ou_a", "dm")
-    store.save(s1, [{"role": "user", "content": "x"}])
+    store.save(s1)
     store.clear("u:ou_a")
     s2 = store.get_or_create("u:ou_a", "ou_a", "dm")
-    assert s2.messages == []
     assert s2.session_id != s1.session_id
-
-
-def test_inject_replaces_messages(tmp_path: Path):
-    """inject 用外部消息替换当前会话历史。"""
-    store = FeishuSessionStore(data_dir=tmp_path)
-    store.get_or_create("u:ou_a", "ou_a", "dm")
-    external = [{"role": "user", "content": "old work"}]
-    store.inject("u:ou_a", external)
-    s = store.get_or_create("u:ou_a", "ou_a", "dm")
-    assert s.messages == external
-
-
-def test_save_then_load_persists_to_disk(tmp_path: Path):
-    """save 写入磁盘，重新构造 store 能读回。"""
-    store1 = FeishuSessionStore(data_dir=tmp_path)
-    s1 = store1.get_or_create("u:ou_a", "ou_a", "dm")
-    store1.save(s1, [{"role": "user", "content": "persisted"}])
-
-    store2 = FeishuSessionStore(data_dir=tmp_path)
-    s2 = store2.get_or_create("u:ou_a", "ou_a", "dm")
-    assert s2.messages == [{"role": "user", "content": "persisted"}]
 
 
 def test_set_and_get_model(tmp_path: Path):

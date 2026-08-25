@@ -839,11 +839,16 @@ class QueryEngine:
         # 快照边界：补齐 file_history 初始化与初始快照，保证 goal 轮次内的
         # 文件修改可被 /rewind 跟踪，且 file_history.json 与会话目录同步生成。
         # 已有快照（普通消息会话）时不重复创建。
+        # 快照复用最近一次 checkpoint（record_goal_command 已为 /goal 轮
+        # append 过），不再额外追加——否则 checkpoint 数 > 用户可见轮数，
+        # rewind 的 turns 计数整体偏移，回退第一条消息需两次才能清空。
         self._ensure_file_history()
         if self._file_history is not None and not self._file_history.snapshots:
-            checkpoint_id = 0
-            if self._checkpoint_store is not None:
-                checkpoint_id = await self._checkpoint_store.append_checkpoint()
+            checkpoint_id = (
+                max(0, self._checkpoint_store.next_checkpoint_id - 1)
+                if self._checkpoint_store is not None
+                else 0
+            )
             make_snapshot(self._file_history, str(len(self._messages)), checkpoint_id)
         while True:
             # 1) 终态 wrap-up 优先注入

@@ -435,6 +435,30 @@ export default function ChatArea({
   // 计算可见轮次在原 turns 中的起始偏移
   const turnOffset = turns.length - visibleTurns.length;
 
+  // rewind 步数按"产生 checkpoint 的轮"加权：命令开头的轮（斜杠指令，
+  // 后端不产生 checkpoint）不计入回退步数。当前所有摄入点都会过滤
+  // is_command 消息（useWebSocketSession 三处 pushStatic 前置过滤），
+  // 本计算实际恒等于 turns.length - turnIdx——作为纵深防御保留：
+  // 若未来命令消息开始进入转录，此处自动保证与后端 checkpoint 对齐。
+  // 「回退第一条消息需两次」的活跃修复在后端（query_engine 移除 goal
+  // 快照的额外 checkpoint + checkpoint_store.align_checkpoint_id 对齐
+  // runtime 重建场景的重复 id 行）。
+  const turnRewindCounts = useMemo(() => {
+    const weights = turns.map((turn) => (turn[0]?.is_command ? 0 : 1));
+    const prefixSums: number[] = [];
+    let acc = 0;
+    for (const w of weights) {
+      acc += w;
+      prefixSums.push(acc);
+    }
+    const total = acc;
+    return turns.map((_, i) => total - (i > 0 ? prefixSums[i - 1]! : 0));
+  }, [turns]);
+  const turnIsCommand = useMemo(
+    () => turns.map((turn) => !!turn[0]?.is_command),
+    [turns],
+  );
+
   // tool_use_id → tool_input 映射（增量缓存：追加期间 Map 引用稳定）
   const toolInputMap = useStableToolInputMap(staticItems);
 
@@ -604,17 +628,18 @@ export default function ChatArea({
 
         {visibleTurns.map((turn, visIdx) => {
           const turnIdx = turnOffset + visIdx;
+          const isCommandTurn = turnIsCommand[turnIdx] ?? false;
           return (
             <TurnView
               key={turnIdx}
               turn={turn}
               isLastTurn={turnIdx === turns.length - 1}
-              turnsToRewind={turns.length - turnIdx}
+              turnsToRewind={turnRewindCounts[turnIdx] ?? turns.length - turnIdx}
               busy={busy}
               hasPendingTools={pendingToolCalls.length > 0}
               lang={lang}
               toolInputMap={toolInputMap}
-              onRewindToTurn={stableOnRewindToTurn}
+              onRewindToTurn={!isCommandTurn ? stableOnRewindToTurn : undefined}
               onRegenerate={stableOnRegenerate}
               hasTopGap={visIdx > 0}
               fileStats={fileStats}
