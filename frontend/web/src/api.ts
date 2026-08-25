@@ -69,6 +69,16 @@ export interface SettingsResponse {
   permission_mode?: string;
   /** 权限风险分级配置（LOW/MEDIUM/HIGH 三层级） */
   permission: PermissionRiskSettings;
+  /** 权限 LLM 自动审核配置（auto 模式下高危操作与沙箱拦截由 LLM 审核放行） */
+  permission_review: PermissionReviewSettings;
+}
+
+/** 权限 LLM 自动审核配置 */
+export interface PermissionReviewSettings {
+  /** 是否启用 LLM 自动审核（仅 auto 模式生效，关闭时走现有人工确认） */
+  auto_review: boolean;
+  /** 审核模型（env_N.model_M），为 null 时继承当前会话模型 */
+  review_model: string | null;
 }
 
 /** 权限风险分级配置（明确区分 LOW/MEDIUM/HIGH 三层级） */
@@ -156,6 +166,14 @@ export interface UpdateTitlePayload {
   enabled?: boolean;
   /** 标题生成子代理模型（空字符串清除 = 继承当前） */
   model?: string;
+}
+
+/** PATCH /api/settings/permission-review 请求体（字段可选，只更新提供的字段） */
+export interface UpdatePermissionReviewPayload {
+  /** 是否启用 LLM 自动审核（仅 auto 模式生效） */
+  auto_review?: boolean;
+  /** 审核模型（空字符串清除 = 继承当前会话模型） */
+  review_model?: string;
 }
 
 /** OAuth device flow 启动响应 */
@@ -478,6 +496,12 @@ export const settingsApi = {
   /** 修改会话自动标题配置（enabled / model，只更新提供的字段） */
   updateTitle: (payload: UpdateTitlePayload) =>
     request<{ success: boolean }>('/api/settings/title', {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  /** 修改权限 LLM 自动审核配置（auto_review / review_model，只更新提供的字段） */
+  updatePermissionReview: (payload: UpdatePermissionReviewPayload) =>
+    request<{ success: boolean; permission_review: PermissionReviewSettings }>('/api/settings/permission-review', {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),

@@ -370,6 +370,38 @@ LongCat uses `Authorization: Bearer` authentication, configured via the `auth_to
 }
 ```
 
+#### LLM Auto-Review in auto mode
+
+In `full_auto` (auto) mode there are two kinds of requests that require confirmation: **high-risk operations** (HIGH, e.g. `rm` / `git reset --hard`, plus the built-in high-risk command set: deletions, destructive git operations, formatting / block-device writes, PowerShell deletion / formatting commands, compound-command segments) and **sandbox-blocked regular operations** (e.g. reads/writes outside the workspace). Both default to a manual confirmation dialog. Enable **LLM auto-review** so a review model decides on the user's behalf:
+
+```json
+{
+  "permission": {
+    "mode": "full_auto",
+    "auto_review": true,
+    "review_model": "env_2.model_1"
+  }
+}
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `permission.auto_review` | `false` | Only affects `full_auto`: when enabled, high-risk operations and sandbox-blocked access (outside-workspace reads/writes) are released by the LLM review instead of a manual confirmation dialog; disabled keeps the manual flow. `yolo` / `plan` / `default` are unaffected |
+| `permission.review_model` | unset | Review model (`env_N.model_M`). Unset inherits the current session model |
+
+- The review is a single-turn subagent with fixed `effort = high` and up to `8192` output tokens; API failures / unparseable output are retried 3 times and ultimately fail closed (denied), never silently allowed
+- Review activity is logged to `~/.illusion/logs/permission_review.log` (override with `ILLUSION_LOGS_DIR`)
+- **Web UI**: Settings → General → "Permission LLM Auto-Review" section: toggle the switch and pick the review model
+- **Terminal**: `/permissions auto on|off|toggle|status`, `/permissions model show|set REF|set inherit`, `/permissions` to show the current state
+
+#### Permission Confirmation Timeout (Web & Terminal, Unified Across All Sessions)
+
+Permission confirmations raised by **all sessions** (main conversation and subagents) on the Web and Terminal are guarded by a waiting timeout of about **285s** (deliberately less than the subagent idle timeout of 300s, so the timeout reason surfaces before a generic "Agent timed out"): on timeout the request fails with a reason (e.g. "permission request timed out"), the error flows back as a tool result (the task continues), and any leftover confirmation dialog is cleared automatically. Plain **ask_user_question** dialogs (not sandbox permissions) are treated differently: after a 15-minute timeout they do not error — they return a "(no response)" placeholder answer instructing the agent to pick the best-fitting option and continue.
+
+#### Channel Permission Mode
+
+Channel agents (Feishu / QQ / WeChat) run in **`yolo`** permission mode: no permission confirmation is raised in the channel conversation (neither sandbox / outside-workspace "regular" requests nor high-risk ones). Explicit deny rules still apply (`denied_tools`, path deny rules, `denied_commands`). Explicit questions via `ask_user_question` still send a message into the channel and wait for a reply.
+
 ---
 
 ### Environment Variables

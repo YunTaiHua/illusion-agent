@@ -450,7 +450,9 @@ class ReactBackendHost:
                         answer = parsed
                 except (json.JSONDecodeError, TypeError):
                     pass
-                self._question_requests[req.request_id].set_result(answer)
+                question_future = self._question_requests.pop(req.request_id, None)
+                if question_future is not None and not question_future.done():
+                    question_future.set_result(answer)
             await self._emit(BackendEvent(type="modal_request", modal=None))
             return
         # 列出会话
@@ -2260,14 +2262,20 @@ class ReactBackendHost:
                 })
         return options
 
+    @contextlib.asynccontextmanager
+    async def _acquire_modal_lock(self):
+        """获取 modal 串行锁（同会话排队：前一个完成后自然后续继续）。"""
+        async with self._modal_lock:
+            yield
+
     async def _ask_permission(self, tool_name: str, reason: str, high_risk: bool = False) -> bool:
         # 如果工具在本会话内已获允许，则直接允许（不持久化）。
         # 高危操作（high_risk）不可被会话级豁免：即使工具名已放行，仍须重新确认，
         # 防止"本次会话允许"被用作高危命令（如 rm -rf）的通行证。
         if not high_risk and tool_name in self._session_allowed_tools:
             return True
-        # 串行化 modal 请求：前端 modal 是单例，并发请求会互相覆盖
-        async with self._modal_lock:
+        # 同会话 modal 串行排队：前端 modal 是单例，前一个完成后自然后续继续
+        async with self._acquire_modal_lock():
             request_id = uuid4().hex
             future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
             self._permission_requests[request_id] = future
@@ -2284,13 +2292,24 @@ class ReactBackendHost:
                 )
             )
             try:
-                return await future
+                # 等待用户响应：所有会话的权限请求统一 285s 超时（超时按
+                # "超时拒绝"处理，错误回流为工具结果且清理弹窗，防止
+                # "未确认权限 + 超时"导致弹窗遗留）。
+                from illusion.engine.query import wait_for_permission_decision
+
+                return await wait_for_permission_decision(future, tool_name)
             finally:
+                # 兜底：请求被放弃（超时/取消）时确保 future 不被悬挂
+                if not future.done():
+                    future.set_result(False)
                 self._permission_requests.pop(request_id, None)
+                # 清理前端的权限弹窗：正常响应路径前端已自行关闭（重复发送
+                # modal=None 无害），超时/取消路径必须显式关闭，防止弹窗残留
+                await self._emit(BackendEvent(type="modal_request", modal=None))
 
     async def _ask_question(self, question: str, questions: object = None) -> str | dict[Any, Any]:
-        # 串行化 modal 请求：前端 modal 是单例，并发请求会互相覆盖
-        async with self._modal_lock:
+        # 同会话 modal 串行排队：前端 modal 是单例，前一个完成后自然后续继续
+        async with self._acquire_modal_lock():
             request_id = uuid4().hex
             future: asyncio.Future[str | dict[Any, Any]] = asyncio.get_running_loop().create_future()
             self._question_requests[request_id] = future
@@ -2319,9 +2338,34 @@ class ReactBackendHost:
                 )
             )
             try:
-                return await future
+                # 等待用户回答：提问/沙箱确认统一超时（沙箱确认 285s 超时
+                # 拒绝并清理弹窗；ask_user_question 普通问答 15 分钟超时返回
+                # 占位答案由 agent 自行决策）。
+                from illusion.engine.query import wait_for_ask_user_decision
+
+                # 沙箱确认复用本回调。双条件判定避免误判：questions header 固定
+                # "沙箱"/"Sandbox"（query.py 写死），且 question 文本以沙箱分支
+                # 的固定前缀开头——用户自定义 header="沙箱" 的 ask_user_question
+                # 不会被归类为沙箱确认
+                sandbox_confirm = bool(
+                    questions_data
+                    and isinstance(questions_data, list)
+                    and all(
+                        isinstance(q, dict) and q.get("header") in ("沙箱", "Sandbox")
+                        for q in questions_data
+                    )
+                    and question.startswith(("沙箱限制：「", "Sandbox restriction:"))
+                )
+                return await wait_for_ask_user_decision(
+                    future, "sandbox confirmation" if sandbox_confirm else "ask_user_question"
+                )
             finally:
+                # 兜底：请求被放弃（超时/取消）时确保 future 不被悬挂
+                if not future.done():
+                    future.set_result("")
                 self._question_requests.pop(request_id, None)
+                # 清理前端的提问/确认弹窗：超时/取消路径必须显式关闭，防残留
+                await self._emit(BackendEvent(type="modal_request", modal=None))
 
     async def _ask_plan_approval(self, plan: str) -> tuple[bool, str]:
         """向用户展示计划并等待审批。
@@ -2344,8 +2388,8 @@ class ReactBackendHost:
         )
         # 复用 question 模态，提供批准/拒绝选项
         from illusion.config.i18n import t as _t
-        # 串行化 modal 请求：前端 modal 是单例，并发请求会互相覆盖
-        async with self._modal_lock:
+        # 同会话 modal 串行排队：前端 modal 是单例，前一个完成后自然后续继续
+        async with self._acquire_modal_lock():
             request_id = uuid4().hex
             future: asyncio.Future[str | dict[Any, Any]] = asyncio.get_running_loop().create_future()
             self._question_requests[request_id] = future
@@ -2375,7 +2419,16 @@ class ReactBackendHost:
                 )
             )
             try:
-                answer = await future
+                # 计划审批是安全闸门：285s 有界等待，超时按拒绝处理
+                # （与权限确认一致，避免无限阻塞的孤儿 modal）
+                from illusion.engine.query import AGENT_PERMISSION_TIMEOUT_SECONDS
+
+                try:
+                    answer = await asyncio.wait_for(
+                        future, timeout=AGENT_PERMISSION_TIMEOUT_SECONDS
+                    )
+                except asyncio.TimeoutError:
+                    return False, "Plan approval timed out"
                 # 解析用户回答
                 answer = str(answer).strip()
                 if answer == f"1. {approve_label}" or answer == approve_label:
@@ -2387,6 +2440,14 @@ class ReactBackendHost:
                     return False, answer
             finally:
                 self._question_requests.pop(request_id, None)
+                # 与 _ask_permission/_ask_question 一致：超时/取消/异常路径
+                # 显式关闭计划审批弹窗，防残留
+                try:
+                    self._write_queue.put_nowait(
+                        BackendEvent(type="modal_request", modal=None)
+                    )
+                except QueueShutDown:
+                    pass
 
     async def _stop_active_line(self) -> None:
         task = self._active_line_task

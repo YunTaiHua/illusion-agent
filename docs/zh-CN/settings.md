@@ -371,6 +371,38 @@ LongCat 使用 `Authorization: Bearer` 认证方式，需要通过 `auth_token` 
 }
 ```
 
+#### auto 模式下：LLM 自动审核
+
+`full_auto`（auto）模式下需确认的拦截分两类：**高危操作**（HIGH，如 `rm` / `git reset --hard`，以及删除类、git 破坏性操作、格式化/块设备写入、PowerShell 删除/格式化系列、复合命令分段等内置高危命令集）与**沙箱拦截的常规操作**（如工作区外读写）。默认走人工确认；可开启 **LLM 自动审核**，由审核模型代替人工裁决：
+
+```json
+{
+  "permission": {
+    "mode": "full_auto",
+    "auto_review": true,
+    "review_model": "env_2.model_1"
+  }
+}
+```
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `permission.auto_review` | `false` | 仅 `full_auto` 模式生效：开启后高危操作与沙箱拦截（工作区外读写）均由 LLM 审核放行，不再弹人工确认框；关闭时恢复现有人工确认流程。`yolo` / `plan` / `default` 模式不受影响 |
+| `permission.review_model` | 未设置 | 审核模型（`env_N.model_M` 格式），未设置时继承当前会话模型 |
+
+- 审核为固定 `effort = high`、最大输出 `8192` token 的单轮子代理；API 失败/输出不可解析时重试 3 次，最终失败 fail-closed 拒绝（绝不静默放行）
+- 审核活动记录到 `~/.illusion/logs/permission_review.log`（可用 `ILLUSION_LOGS_DIR` 覆盖）
+- **Web 端**：设置 → 基础配置 →「权限 LLM 自动审核」区块，切换开关并选择审核模型
+- **终端**：`/permissions auto on|off|toggle|status`、`/permissions model show|set REF|set inherit`、`/permissions` 查看当前状态
+
+#### 权限确认超时（Web 与终端，统一作用于所有会话）
+
+**所有会话**（主对话与子代理）在 Web 与终端端发起权限确认时，带约 **285s** 等待超时（取值刻意小于子代理无活动超时 300s，确保超时原因优先于笼统的 "Agent timed out" 出现）：超时后以带原因的失败结束（如「权限确认超时」），错误作为工具结果回流（任务不终止），并自动清理遗留的确认弹窗。**ask_user_question 普通问答**（非沙箱权限）区别对待：15 分钟超时后不报错，返回 "(no response)" 占位答案并提示 agent 自行选择最合适的选项继续。
+
+#### 渠道权限模式
+
+渠道（飞书 / QQ / 微信）运行的 agent 固定使用 `yolo` 权限模式：不向渠道会话弹出权限确认（包括工作区外/沙箱类「常规操作」与高危操作），但 `denied_tools` / 路径 deny 规则 / `denied_commands` 等显式拒绝规则仍然生效；LLM 主动调用提问（`ask_user_question`）时仍会向渠道发送消息询问。
+
 ---
 
 ### 环境变量

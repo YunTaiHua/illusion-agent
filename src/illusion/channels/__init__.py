@@ -765,6 +765,13 @@ class ChannelRunner:
                 permission_prompt=self._make_permission_prompt(msg.chat_id),
                 ask_user_prompt=self._make_ask_user_prompt(msg.chat_id),
                 plan_approval_prompt=self._make_plan_approval_prompt(msg.chat_id),
+                # 渠道使用 YOLO 权限模式。
+                # evaluate() 在 YOLO 下直接放行（跳过 sandbox_blocked 的
+                # ask_user 常规确认分支与 requires_confirmation 分支），
+                # 但显式 deny 规则（denied_tools / 路径 deny 规则 /
+                # denied_commands）仍优先生效。CLI --permission-mode默认不
+                # 影响渠道；如渠道需要恢复确认，改传对应模式即可。
+                permission_mode="yolo",
                 channel_hint=channel_hint,
                 channel_tools=self._build_channel_tools(msg),
                 cwd=channel_cwd,
@@ -863,9 +870,15 @@ class ChannelRunner:
                 logger.debug("刷新打字状态失败: chat_id=%s", chat_id, exc_info=True)
 
     def _make_permission_prompt(self, chat_id: str) -> Any:
-        """构造权限确认回调（渠道自动批准，不影响终端对话）"""
+        """构造权限确认回调（渠道自动放行）
+
+        渠道整体运行在 yolo 权限模式：evaluate 在 YOLO 分支短路返回放行，
+        requires_confirmation / sandbox_blocked 分支在渠道上不可达，权限
+        回调形同虚设（返回 True 兜底）。渠道端仅显式 ask_user_question
+        工具调用会经 _make_ask_user_prompt 发消息征询用户。
+        """
         async def _prompt(tool: str, desc: str, high_risk: bool = False) -> bool:
-            return True  # 渠道消息自动批准所有工具权限
+            return True
         return _prompt
 
     def _make_ask_user_prompt(self, chat_id: str) -> Any:

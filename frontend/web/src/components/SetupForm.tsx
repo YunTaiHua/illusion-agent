@@ -208,6 +208,10 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
   const [titleEnabled, setTitleEnabled] = useState(false);
   /** 标题生成模型（空 = 继承当前） */
   const [titleModel, setTitleModel] = useState('');
+  /** 权限 LLM 自动审核开关（auto 模式高危操作与沙箱拦截由 LLM 审核放行） */
+  const [reviewAuto, setReviewAuto] = useState(false);
+  /** 审核模型（空 = 继承当前会话模型） */
+  const [reviewModel, setReviewModel] = useState('');
   /** 沙箱配置（可删改） */
   const [sandbox, setSandbox] = useState<SandboxSettings | null>(null);
   /** 沙箱保存错误 */
@@ -247,6 +251,9 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
         setMemDir(s.memory?.directory ?? '');
         setTitleEnabled(s.title?.enabled ?? false);
         setTitleModel(s.title?.model ?? '');
+        // 权限 LLM 自动审核配置（auto 模式高危操作与沙箱拦截由 LLM 审核放行）
+        setReviewAuto(s.permission_review?.auto_review ?? false);
+        setReviewModel(s.permission_review?.review_model ?? '');
         // 沙箱配置（默认值由后端保证返回）
         setSandbox(s.sandbox ?? null);
         // 权限风险分级配置（LOW/MEDIUM/HIGH 三层级）
@@ -401,6 +408,16 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
           model: titleModel.trim(),
         });
       }
+      // 3.7 权限 LLM 自动审核配置改动（开关 / 审核模型任一变化即提交）
+      if (settings && (
+        reviewAuto !== settings.permission_review?.auto_review ||
+        (reviewModel.trim() || '') !== (settings.permission_review?.review_model ?? '')
+      )) {
+        await settingsApi.updatePermissionReview({
+          auto_review: reviewAuto,
+          review_model: reviewModel.trim(),
+        });
+      }
       // 4. 渠道配置（兼容旧配置：enabled 但无运行目录的渠道自动填充默认工作区，
       //    避免后端启用校验（enabled 必填目录）拒绝整个保存；其余清空为 null）
       const defaultWs = workspaces.find((w) => w.is_default)?.path;
@@ -436,7 +453,7 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
       setSaving(false);
       setSaveError(err instanceof Error ? err.message : String(err));
     }
-  }, [settings, uiLang, workDir, memEnabled, memAutoExtract, memExtractModel, memDreamModel, memDir, titleEnabled, titleModel, channels, firstLogin, showAddEnv, draft, draftValid, createEnvFromDraft, onSetUiLanguage, onSaved, sandbox]);
+  }, [settings, uiLang, workDir, memEnabled, memAutoExtract, memExtractModel, memDreamModel, memDir, titleEnabled, titleModel, reviewAuto, reviewModel, channels, firstLogin, showAddEnv, draft, draftValid, createEnvFromDraft, onSetUiLanguage, onSaved, sandbox]);
 
   /** 删除环境（即时 API） */
   const handleDeleteEnv = useCallback(async (envKey: string) => {
@@ -594,6 +611,10 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
               onTitleEnabledChange={setTitleEnabled}
               titleModel={titleModel}
               onTitleModelChange={setTitleModel}
+              reviewAuto={reviewAuto}
+              onReviewAutoChange={setReviewAuto}
+              reviewModel={reviewModel}
+              onReviewModelChange={setReviewModel}
               modelOptions={modelOptions}
               envs={envs}
               activeEnvKey={activeEnvKey}
@@ -834,6 +855,12 @@ interface SettingsTabProps {
   /** 标题生成模型（空 = 继承当前） */
   titleModel: string;
   onTitleModelChange: (v: string) => void;
+  /** 权限 LLM 自动审核开关（auto 模式高危操作与沙箱拦截由 LLM 审核放行） */
+  reviewAuto: boolean;
+  onReviewAutoChange: (v: boolean) => void;
+  /** 审核模型（空 = 继承当前会话模型） */
+  reviewModel: string;
+  onReviewModelChange: (v: string) => void;
   /** 模型下拉选项（env_N.model_N 引用） */
   modelOptions: DropdownOption[];
   envs: EnvInfo[];
@@ -1140,6 +1167,27 @@ function SettingsTab(p: SettingsTabProps) {
             options={p.modelOptions}
             onChange={p.onTitleModelChange}
             placeholder={t(lang, 'setupFieldTitleModelHint')}
+          />
+        </div>
+      </div>
+
+      {/* 权限 LLM 自动审核配置（auto 模式高危操作与沙箱拦截由 LLM 审核放行） */}
+      <div className="space-y-3 rounded-lg border border-border-light p-4 bg-surface-card-alt/50">
+        <div className={labelClass}>{t(lang, 'setupFieldPermissionReview')}</div>
+        {/* 启用开关 */}
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-content-primary">{t(lang, 'setupFieldPermissionReviewEnabled')}</span>
+          <ToggleSwitch checked={p.reviewAuto} onChange={p.onReviewAutoChange} label={t(lang, 'setupFieldPermissionReviewEnabled')} />
+        </div>
+        <div className="text-[11px] text-content-disabled">{t(lang, 'setupFieldPermissionReviewHint')}</div>
+        {/* 审核模型 */}
+        <div>
+          <div className={labelClass}>{t(lang, 'setupFieldPermissionReviewModel')}</div>
+          <GlassDropdown
+            value={p.reviewModel}
+            options={p.modelOptions}
+            onChange={p.onReviewModelChange}
+            placeholder={t(lang, 'setupFieldPermissionReviewModelHint')}
           />
         </div>
       </div>
