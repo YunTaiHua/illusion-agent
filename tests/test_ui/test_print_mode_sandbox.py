@@ -132,10 +132,15 @@ async def test_print_mode_sandbox_permission_uses_sandbox_callback(tmp_path):
     from illusion.engine import query as query_module
 
     source = inspect.getsource(query_module)
-    # print 模式沙箱权限分支复用 sandbox_permission_prompt（两选项）
-    assert "if context.print_mode and context.sandbox_permission_prompt is not None:" in source
-    # 交互模式三选项仍保留
-    assert "elif context.ask_user_prompt is not None:" in source
+    # print 模式沙箱权限分支复用 sandbox_permission_prompt（两选项），
+    # 但受 LLM 自动审核 guard 包裹（审核不介入时才走人工三分支）
+    assert "context.print_mode and context.sandbox_permission_prompt is not None" in source
+    # 判官 DENY 不再直接终止：降级人工确认，判官意见附进确认文案
+    # （锚定降级语义：_review_handled 仅 ALLOW 为真 + 文案拼接）
+    assert "_review_handled = _review_result is not None and bool(_review_result[0])" in source
+    assert '" (LLM review denied: {_review_deny})"' in source
+    # 交互模式三选项仍保留（同样是审核 guard 包裹后）
+    assert "context.ask_user_prompt is not None" in source
     # 高危操作在交互模式下也仅提供两选项（去掉"当前会话允许"）
     assert 'if decision.high_risk:' in source
     assert "Allow for session" in source

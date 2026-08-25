@@ -47,6 +47,7 @@ def _make_host(**fields: Any) -> WebBackendHost:
         "_request_queue": asyncio.Queue(),
         "_permission_requests": {},
         "_question_requests": {},
+        "_modal_locks": {},
         "_session_allowed_tools": set(),
         "_running": True,
         "_ws_closed": False,

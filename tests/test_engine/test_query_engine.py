@@ -368,6 +368,10 @@ async def test_query_engine_executes_ask_user_tool(tmp_path: Path):
     assert events[-1].message.text == "Picked green."
 
 
+async def _async_false() -> bool:
+    return False
+
+
 @pytest.mark.asyncio
 async def test_query_engine_applies_path_rules_to_relative_read_file_targets(tmp_path: Path):
     blocked_dir = tmp_path / "blocked"
@@ -414,11 +418,15 @@ async def test_query_engine_applies_path_rules_to_relative_read_file_targets(tmp
 
     events = [event async for event in engine.submit_message("read blocked file")]
 
-    # 权限拒绝现在直接终止查询循环，发出 ErrorEvent 而非 ToolExecutionCompleted
-    from illusion.engine.stream_events import ErrorEvent
-    error_events = [event for event in events if isinstance(event, ErrorEvent)]
-    assert error_events
-    assert "read_file" in error_events[0].message
+    # 权限拒绝不终止查询循环：以 error 工具结果返回原因，LLM 继续生成回复
+    from illusion.engine.stream_events import ToolExecutionCompleted
+    completed = [e for e in events if isinstance(e, ToolExecutionCompleted)]
+    assert completed, "被拒工具应有 ToolExecutionCompleted"
+    blocked_result = next(e for e in completed if e.tool_name == "read_file")
+    assert blocked_result.is_error
+    assert "Permission denied" in blocked_result.output
+    # 后续 LLM 回复正常产生（循环未被终止）
+    assert any(getattr(e, "text", "") == "blocked" for e in events)
 
 
 @pytest.mark.asyncio
@@ -466,12 +474,73 @@ async def test_query_engine_applies_path_rules_to_write_file_targets_in_full_aut
 
     events = [event async for event in engine.submit_message("write blocked file")]
 
-    # 权限拒绝现在直接终止查询循环，发出 ErrorEvent 而非 ToolExecutionCompleted
-    from illusion.engine.stream_events import ErrorEvent
-    error_events = [event for event in events if isinstance(event, ErrorEvent)]
-    assert error_events
-    assert "write_file" in error_events[0].message
-    assert target.exists() is False
+    # 权限拒绝不终止查询循环：以 error 工具结果返回原因，LLM 继续生成回复
+    from illusion.engine.stream_events import ToolExecutionCompleted
+    completed = [e for e in events if isinstance(e, ToolExecutionCompleted)]
+    assert completed, "被拒工具应有 ToolExecutionCompleted"
+    blocked_result = next(e for e in completed if e.tool_name == "write_file")
+    assert blocked_result.is_error
+    assert "Permission denied" in blocked_result.output
+    assert target.exists() is False  # 拒绝生效：文件未写入
+
+
+@pytest.mark.asyncio
+async def test_query_engine_default_mode_denial_returns_error_result(tmp_path: Path):
+    """回归：default 模式人工拒绝权限不终止查询循环，以 error 工具结果返回原因。
+
+    与 full_auto 的 path_rules 测试对称：DEFAULT 模式下 MEDIUM 变更操作
+    requires_confirmation=True，permission_prompt 拒绝后 LLM 收到
+    "[Permission denied] ..." error 结果并继续生成回复。
+    """
+    target = tmp_path / "out.txt"
+
+    engine = QueryEngine(
+        api_client=FakeApiClient(
+            [
+                _FakeResponse(
+                    message=ConversationMessage(
+                        role="assistant",
+                        content=[
+                            ToolUseBlock(
+                                id="toolu_default_deny",
+                                name="write_file",
+                                input={"path": "out.txt", "content": "poc"},
+                            )
+                        ],
+                    ),
+                    usage=UsageSnapshot(input_tokens=1, output_tokens=1),
+                ),
+                _FakeResponse(
+                    message=ConversationMessage(
+                        role="assistant",
+                        content=[TextBlock(text="denied, moving on")],
+                    ),
+                    usage=UsageSnapshot(input_tokens=1, output_tokens=1),
+                ),
+            ]
+        ),
+        tool_registry=create_default_tool_registry(),
+        permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.DEFAULT)),
+        permission_prompt=lambda tool, desc, high_risk=False: _async_false(),
+        cwd=tmp_path,
+        model="claude-test",
+        system_prompt="system",
+    )
+
+    events = [event async for event in engine.submit_message("write a file")]
+
+    from illusion.engine.stream_events import ErrorEvent, ToolExecutionCompleted
+
+    # 不终止：无 ErrorEvent，被拒工具有 completed 事件且为 error
+    assert not [e for e in events if isinstance(e, ErrorEvent)]
+    completed = [e for e in events if isinstance(e, ToolExecutionCompleted)]
+    blocked = next(e for e in completed if e.tool_name == "write_file")
+    assert blocked.is_error
+    assert "[Permission denied]" in blocked.output
+    assert "confirmation" in blocked.output.lower() or "denied" in blocked.output.lower()
+    assert target.exists() is False  # 拒绝生效：文件未写入
+    # 循环继续：后续回复正常产生
+    assert any(getattr(e, "text", "") == "denied, moving on" for e in events)
 
 
 @pytest.mark.asyncio
