@@ -166,8 +166,18 @@ Preview content is rendered as markdown in a monospace box. Multi-line text with
 
         question_text = "\n".join(parts)
 
-        # 将结构化问题数据传给回调，使其能正确渲染单选/多选UI
-        answers = await prompt(question_text, arguments.questions)  # pyright: ignore[reportGeneralTypeIssues]
+        # 将结构化问题数据传给回调，使其能正确渲染单选/多选UI。
+        # 等待期间陪跑活动心跳：子代理场景下父 loop 零事件，心跳刷新
+        # idle 时间戳避免 300s 墙截断 15 分钟问答等待（超时由宿主内层负责）
+        from typing import cast
+
+        from illusion.engine.query import _with_activity_heartbeat
+
+        refresher = context.metadata.get("activity_refresher")
+        answers = await _with_activity_heartbeat(
+            cast(Awaitable[Any], prompt(question_text, arguments.questions)),
+            refresher if callable(refresher) else None,  # pyright: ignore[reportArgumentType]
+        )
 
         if not answers:
             return ToolResult(output="(no response)")

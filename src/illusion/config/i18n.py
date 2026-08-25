@@ -108,6 +108,44 @@ MESSAGES: dict[str, dict[str, str]] = {
         "zh-CN": "需先开启记忆功能，后台自动提取才可启用",
         "en-US": "Enable memory first before enabling auto extract",
     },
+    # --- permission auto review 开关 ---
+    "permission_auto_show": {
+        "zh-CN": "权限 LLM 自动审核: {state}",
+        "en-US": "Permission LLM auto-review: {state}",
+    },
+    "permission_auto_on": {
+        "zh-CN": "权限 LLM 自动审核已启用（auto 模式下的高危操作与沙箱拦截均改由 LLM 审核放行）",
+        "en-US": "Permission LLM auto-review enabled (high-risk ops and sandbox-blocked access in auto mode are reviewed by LLM)",
+    },
+    "permission_auto_off": {
+        "zh-CN": "权限 LLM 自动审核已禁用（auto 模式恢复人工确认）",
+        "en-US": "Permission LLM auto-review disabled (auto mode falls back to manual confirmation)",
+    },
+    "permission_auto_usage": {
+        "zh-CN": "用法: /permissions auto on|off|toggle|status | model show|set REF|set inherit",
+        "en-US": "Usage: /permissions auto on|off|toggle|status | model show|set REF|set inherit",
+    },
+    "permission_review_model_show": {
+        "zh-CN": "审核模型: {model}（未设置时继承当前会话模型）",
+        "en-US": "Review model: {model} (falls back to the current model when unset)",
+    },
+    "permission_review_model_set": {
+        "zh-CN": "审核模型已设为 {model}",
+        "en-US": "Review model set to {model}",
+    },
+    "permission_review_model_inherit": {
+        "zh-CN": "审核模型已重置为继承当前会话模型",
+        "en-US": "Review model reset to inherit the current session model",
+    },
+    "permission_review_model_invalid": {
+        "zh-CN": "无效的模型引用 {ref}（须为 env_N.model_M 且该模型已配置）",
+        "en-US": "Invalid model reference {ref} (expected env_N.model_M with the model configured)",
+    },
+    # 权限被拒绝/超时：携带明确原因（供子代理在工具结果中注明）
+    "permission_denied_stopped_reason": {
+        "zh-CN": "权限被拒绝（{tool}）。原因：{reason}",
+        "en-US": "Permission denied ({tool}). Reason: {reason}",
+    },
     # --- mcp ---
     "mcp_none": {"zh-CN": "未配置 MCP 服务器", "en-US": "No MCP servers configured"},
     "mcp_invalid_json": {"zh-CN": "无效 JSON: {exc}", "en-US": "Invalid JSON: {exc}"},
@@ -216,7 +254,7 @@ MESSAGES: dict[str, dict[str, str]] = {
     "context_used_total": {"zh-CN": "已用上下文：{used:,} tokens ({percentage}%)", "en-US": "Context Used: {used:,} tokens ({percentage}%)"},
     "context_remaining": {"zh-CN": "剩余：{remaining:,} tokens", "en-US": "Remaining: {remaining:,} tokens"},
     "context_cumulative_detail": {"zh-CN": "累积用量：缓存={cache_read:,} 未缓存={input_tokens:,} 输出={output_tokens:,}", "en-US": "Cumulative Usage: cached={cache_read:,} uncached={input_tokens:,} output={output_tokens:,}"},
-    "permission_denied_stopped": {"zh-CN": "权限被拒绝，已终止当前操作（{tool}）。", "en-US": "Permission denied, stopped current operation ({tool})."},
+    "permission_denied_stopped": {"zh-CN": "权限被拒绝（{tool}）。", "en-US": "Permission denied ({tool})."},
     # --- update ---
     "update_checking": {"zh-CN": "正在检查更新...", "en-US": "Checking for updates..."},
     "update_latest": {"zh-CN": "已是最新版本 {version}", "en-US": "Already up to date ({version})"},
@@ -588,7 +626,7 @@ COMMAND_DESCRIPTIONS_ZH: dict[str, str] = {
     "mcp": "显示 MCP 状态",
     "plugin": "管理插件",
     "reload-plugins": "重新加载当前工作区插件发现结果",
-    "permissions": "显示或更新权限模式",
+    "permissions": "显示或更新权限模式（含 LLM 自动审核）",
     "thinking": "显示或更新思考模式",
     "effort": "显示或更新推理强度",
     "turns": "显示或更新最大 agent 轮数",

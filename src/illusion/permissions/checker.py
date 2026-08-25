@@ -115,6 +115,10 @@ class PermissionChecker:
         self._sandbox_deny_read: list[str] = []
         # 会话级沙箱允许路径（不持久化，重启后清除）
         self._session_allowed_paths: set[str] = set()
+        # 自动审批粘滞拒绝缓存（会话级）：同一操作（tool + 规范化 path/command）
+        # 被判官 DENY 后，重试不再重新掷骰子——直接视为"审核已拒绝"降级人工，
+        # 保证无人值守 full_auto 下结论确定且不放大 LLM 成本。ALLOW 不缓存。
+        self._auto_review_denied_keys: set[str] = set()
         # 风险分级规则使用 risk.py 内置默认（LOW/MEDIUM/HIGH），固定不可自定义
         # 从设置中解析路径规则
         self._path_rules: list[PathRule] = []
@@ -290,6 +294,34 @@ class PermissionChecker:
         """清空会话级沙箱允许列表"""
         self._session_allowed_paths.clear()
 
+    @staticmethod
+    def auto_review_denied_key(
+        tool_name: str,
+        file_path: str | None = None,
+        command: str | None = None,
+        session_id: str = "",
+    ) -> str:
+        """构造自动审批粘滞拒绝的缓存键（会话 + tool + 规范化 path/command）
+
+        会话前缀隔离：Web 多会话下各会话独立判定，不跨会话泄漏。
+        command 继规范化（大小写/空白折叠 / 仅用于缓存键，不改变原命令）。
+        """
+        import os as _os
+
+        norm_path = (
+            _os.path.normcase(_os.path.normpath(file_path)) if file_path else ""
+        )
+        norm_cmd = " ".join((command or "").split()).casefold()
+        return f"{session_id}|{tool_name}|{norm_path}|{norm_cmd}"
+
+    def note_auto_review_denied(self, key: str) -> None:
+        """记录一次判官 DENY（会话内粘滞，重试同操作跳过重新审核）"""
+        self._auto_review_denied_keys.add(key)
+
+    def is_auto_review_denied(self, key: str) -> bool:
+        """该操作此前是否已被判官 DENY（本会话内粘滞）"""
+        return key in self._auto_review_denied_keys
+
     def evaluate(
         self,
         tool_name: str,
@@ -353,11 +385,6 @@ class PermissionChecker:
                 allowed=True, reason="memory directory carve-out", risk=risk
             )
 
-        # YOLO 模式：绕过沙箱完全运行。置于沙箱检查之前（跳过沙箱限制），
-        # 但保留显式工具/路径拒绝规则（用户显式 deny 优先）。
-        if self._settings.mode == PermissionMode.YOLO:
-            return PermissionDecision(allowed=True, reason="YOLO mode bypasses sandbox", risk=risk)
-
         # 计划文件豁免：计划文件存储在 ~/.illusion/plans/（工作目录之外），
         # 是 plan mode 的核心产物，须允许创建/写入。放在沙箱检查之前，
         # 避免被 allow_write 默认拒绝拦截。退出计划模式（restore_mode）会
@@ -370,6 +397,23 @@ class PermissionChecker:
             == os.path.normcase(os.path.normpath(self._plan_file_path))
         ):
             return PermissionDecision(allowed=True, reason="plan file is writable", risk=risk)
+
+        # 命令级显式拒绝：denied_commands（如拒绝 "rm -rf /"）。先于 YOLO，
+        # 保证 yolo（含渠道等远程入口）下危险命令仍可被显式规则拦截。
+        if command:
+            for pattern in getattr(self._settings, "denied_commands", []):
+                if isinstance(pattern, str) and fnmatch.fnmatch(command, pattern):
+                    return PermissionDecision(
+                        allowed=False,
+                        reason=f"Command matches deny pattern: {pattern}",
+                    )
+
+        # YOLO 模式：绕过沙箱完全运行。置于命令级显式拒绝之后、沙箱检查
+        # 之前（跳过沙箱限制），但保留显式拒绝规则（用户显式 deny 优先）：
+        # denied_tools / 路径 deny 规则 / denied_commands 先于 YOLO 生效，
+        # 确保 yolo（含渠道等远程入口）下危险命令仍可被显式规则拦截。
+        if self._settings.mode == PermissionMode.YOLO:
+            return PermissionDecision(allowed=True, reason="YOLO mode bypasses sandbox", risk=risk)
 
         # 检查沙箱文件系统限制（对齐 OS 级沙箱语义）
         # 写入：默认拒绝，仅 allow_write 白名单内可写，deny_write 覆盖
@@ -405,19 +449,13 @@ class PermissionChecker:
                     risk=risk,
                 )
 
-        # 检查命令拒绝模式（例如拒绝 "rm -rf /"）
-        if command:
-            for pattern in getattr(self._settings, "denied_commands", []):
-                if isinstance(pattern, str) and fnmatch.fnmatch(command, pattern):
-                    return PermissionDecision(
-                        allowed=False,
-                        reason=f"Command matches deny pattern: {pattern}",
-                    )
-
         # 命令级白名单：用户在 settings.json 的 allowed_shell_commands 配置的命令
         #（bash 与 powershell 通用），命中前缀即放行。高危命令（如 git push --force、
         # rm -rf *）仅当白名单项"完整列出"该高危命令头（即该项本身也是高危模式）时才
         # 可豁免——仅前缀命中（如只配置 git push）不会放行其高危子命令 git push --force。
+        # 不变量：置于沙箱检查之后——非 yolo 模式下 allowlist 不越过沙箱边界，
+        # 工作区外写入仍触发 sandbox_blocked 确认（回归测试锚定此顺序）；
+        # yolo 模式已在上方短路返回，此处仅服务其余模式。
         if command and self._settings.allowed_shell_commands:
             for p in self._settings.allowed_shell_commands:
                 if not self._command_matches_allowlist(command, [p]):

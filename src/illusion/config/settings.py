@@ -66,6 +66,10 @@ class PermissionSettings(BaseModel):
         allowed_shell_commands: 命令级白名单（前缀匹配，命中直接放行，即使高危；bash/powershell 通用）
         path_rules: 路径规则列表
         denied_commands: 拒绝的命令列表
+        auto_review: full_auto 模式下高危操作与沙箱拦截（如工作区外读写）
+            是否由 LLM 自动审核放行
+            （关闭时走现有人工确认流程；开启时由审核模型自行裁决，yolo/plan/default 不受影响）
+        review_model: LLM 审核使用的模型（env_N.model_M 格式），None 继承当前会话模型
     """
 
     mode: PermissionMode = PermissionMode.DEFAULT  # 权限模式，默认为默认模式
@@ -74,6 +78,9 @@ class PermissionSettings(BaseModel):
     allowed_shell_commands: list[str] = Field(default_factory=list)  # 命令级白名单（前缀匹配，命中直接放行，即使高危；bash/powershell 通用）
     path_rules: list[PathRuleConfig] = Field(default_factory=list)  # 路径权限规则
     denied_commands: list[str] = Field(default_factory=list)  # 拒绝的命令列表
+    # 默认关闭 LLM 自动审核：full_auto 模式沿用现有人工确认流程
+    auto_review: bool = False
+    review_model: str | None = None  # 审核模型（env_N.model_M），None 继承当前
 
 
 class MemorySettings(BaseModel):

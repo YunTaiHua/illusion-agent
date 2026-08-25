@@ -72,6 +72,49 @@ from illusion.tools.base import ToolRegistry
 from illusion.utils.file_state_cache import FileStateCache
 
 
+def _collect_task_context(
+    messages: list[ConversationMessage], goal_manager: Any
+) -> str | None:
+    """提取权限自动审批的任务上下文。
+
+    goal objective 优先（活跃目标即当前任务的权威描述）；无目标时取最近
+    三条真实 user 消息（过滤口径与 turn_count 一致：排除后台任务通知与
+    goal 系统注入）。
+
+    Returns:
+        str | None: 任务上下文文本；无可提取内容时为 None
+    """
+    if goal_manager is not None:
+        snap = getattr(goal_manager, "snapshot", None)
+        objective = getattr(snap, "objective", "") if snap is not None else ""
+        if objective:
+            return f"Current goal objective: {objective}"
+    from illusion.engine.messages import ToolResultBlock
+    from illusion.goal.prompts import is_goal_system_message
+    from illusion.memory.log import truncate
+    from illusion.tasks.types import is_task_notification
+
+    recent: list[str] = []
+    for msg in reversed(messages):
+        if msg.role != "user":
+            continue
+        text = msg.text.strip()
+        if not text or is_task_notification(text) or is_goal_system_message(text):
+            continue
+        # 含工具结果的 user 消息（hook additionalContext 以 system-reminder
+        # 附于其上）不是真实用户输入，跳过——对齐 auto_title._user_messages 口径
+        if any(isinstance(b, ToolResultBlock) for b in msg.content):
+            continue
+        # 单条消息截断并单行化：用户粘贴大日志/文件时避免每次审批付全量
+        # 输入成本；单行化同时去除可被利用的文本格式伪装
+        recent.append(truncate(text, limit=2000))
+        if len(recent) >= 3:
+            break
+    if not recent:
+        return None
+    return "\n".join(f"- {t}" for t in reversed(recent))
+
+
 class QueryEngine:
     """拥有对话历史和工具感知模型循环的高级引擎。
 
@@ -96,6 +139,11 @@ class QueryEngine:
     # 后台标题生成完成回调：Web 宿主按会话注入，None 表示未注入。
     # 标题生成后调用，用于刷新会话列表使自动命名即时显现。
     _title_on_generated: Callable[[str], Awaitable[None]] | None = None
+
+    # 子代理守卫标记（防级联）：由记忆提取/整合、标题生成、权限审核等
+    # 后台子代理置位，其回合结束不得再触发提取/整合/标题生成。
+    _is_memory_subagent: bool = False
+    _is_title_subagent: bool = False
 
     def __init__(
         self,
@@ -760,7 +808,13 @@ class QueryEngine:
             last_api_usage_message_count=self._last_api_usage_message_count,
             on_before_tool_execute=self.on_before_tool_execute,
             file_state_cache=self._file_state_cache,
+            # 权限自动审批任务上下文：goal objective 优先，否则最近三条真实
+            # user 消息（过滤口径与 turn_count 一致）
+            task_context_provider=lambda: _collect_task_context(
+                self._messages, self._goal_manager
+            ),
         )
+
 
     async def _track_usage(self, usage: UsageSnapshot) -> None:
         """记录一次 API 调用用量：累加、快照、持久化。"""

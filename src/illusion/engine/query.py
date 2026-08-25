@@ -23,13 +23,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar, cast
 
 from pydantic import ValidationError
+
+logger = logging.getLogger(__name__)
 
 from illusion.api.client import (
     ApiMessageCompleteEvent,
@@ -98,11 +101,215 @@ class PermissionDenied(RuntimeError):
     Attributes:
         tool_name: 被拒绝的工具名称
         message: 拒绝原因描述
+        reason: 明确的拒绝原因（decision.reason / 审核结论等）；为空表示无附加原因
     """
 
-    def __init__(self, tool_name: str, message: str = "") -> None:
+    def __init__(self, tool_name: str, message: str | None = None) -> None:
         self.tool_name = tool_name
-        super().__init__(message or f"Permission denied for {tool_name}")
+        default = f"Permission denied for {tool_name}"
+        self.reason = message if message and message != default else ""
+        super().__init__(message or default)
+
+
+async def _confirm_permission(
+    context: QueryContext,
+    tool_name: str,
+    decision: Any,
+    file_path: str | None,
+    command: str | None,
+) -> tuple[bool, str]:
+    """确认一次需要人工/自动裁决的权限请求（查询循环内调用）。
+
+    分流优先级：
+        1. LLM 自动审核（full_auto + settings.permission.auto_review 开启时）：
+           由审核模型先行裁决——ALLOW 直接放行；DENY 不直接终止，降级为
+           人工确认（判官意见附进确认文案供用户参考）
+        2. 现有人工确认流程（permission_prompt 用户确认弹窗）
+        3. 无确认渠道：直接抛 PermissionDenied
+
+    Returns:
+        tuple[bool, str]: (是否放行, 拒绝原因)；拒绝原因为空表示无附加原因
+    """
+    # LLM 自动审核：不适用（非 full_auto / 未开启）时返回 None，回退人工流程
+    from illusion.permissions.auto_review import maybe_auto_review
+
+    review_result = await maybe_auto_review(
+        context, tool_name, decision, file_path=file_path, command=command
+    )
+    if review_result is not None:
+        allowed, review_reason = review_result
+        if allowed:
+            return True, ""
+        # 判官拒绝：不直接终止任务，降级人工确认做最终裁决；
+        # 判官意见附进确认描述，用户可参考后放行或拒绝
+        confirm_desc = decision.reason or ""
+        if review_reason:
+            confirm_desc = (
+                f"{confirm_desc} (LLM review denied: {review_reason})"
+                if confirm_desc
+                else f"LLM review denied: {review_reason}"
+            )
+        if context.permission_prompt is None:
+            # 无人工确认渠道：维持判官拒绝（fail-closed）
+            return False, review_reason or "permission review rejected"
+        confirmed = await _with_activity_heartbeat(
+            context.permission_prompt(tool_name, confirm_desc, decision.high_risk),
+            context.activity_refresher,
+        )
+        if not confirmed:
+            return False, f"denied by user after LLM review ({review_reason or 'no reason'})"
+        return True, ""
+    # 现有人工确认流程
+    if context.permission_prompt is not None:
+        confirmed = await _with_activity_heartbeat(
+            context.permission_prompt(tool_name, decision.reason, decision.high_risk),
+            context.activity_refresher,
+        )
+        if not confirmed:
+            return False, decision.reason or ""
+        return True, ""
+    raise PermissionDenied(tool_name, decision.reason or f"Permission denied for {tool_name}")
+
+
+# 权限确认等待超时（秒）。统一作用于所有会话（主对话 + 子代理）：
+# 权限确认挂起时 285s 超时拒绝，错误以 error 工具结果回流（任务不终止），
+# 宿主回调 finally 清理遗留弹窗——不再有无限阻塞的孤儿 modal。
+# 取值须小于子代理无活动超时（agent_executor.IDLE_TIMEOUT=300s）：无活动
+# 监控从"最后一次事件"起算、权限等待从请求发出起算，二者等值时会与无活动
+# 超时竞争，导致子代理先被笼统地"Agent timed out"终止而丢失权限原因。
+# 收紧到 285s 让权限/提问超时确定性地先行，以带原因的 PermissionDenied 结束。
+AGENT_PERMISSION_TIMEOUT_SECONDS = 285.0
+
+# 活动心跳间隔（秒）：权限确认/审核等待期间刷新父级 last_activity，
+# 使子代理 idle watcher 的 300s 从"最后活动"起算而非"工具开始"。
+HEARTBEAT_INTERVAL_SECONDS = 5.0
+
+
+async def _with_activity_heartbeat(
+    awaitable: Awaitable[T],
+    refresher: Callable[[], None] | None,
+    *,
+    interval: float = HEARTBEAT_INTERVAL_SECONDS,
+) -> T:
+    """陪跑活动心跳：等待外部输入（用户确认/审核结果）期间周期性刷新
+    父级 idle 活动时间戳，避免子代理场景 300s 墙截断等待。
+
+    超时职责不属于本函数——由宿主内层（wait_for_permission_decision 285s /
+    wait_for_ask_user_decision 285s/900s）与审核限时（REVIEW_TIMEOUT_SECONDS）
+    各自负责；本函数仅保证等待期间 idle 判定不误杀。
+
+    Args:
+        awaitable: 待等待的可等待对象（宿主回调 / 审核流程）
+        refresher: 活动刷新回调；None（主对话/Web）时退化为直接等待
+
+    Returns:
+        T: awaitable 的结果（异常照常传播）
+    """
+    if refresher is None:
+        return await awaitable
+
+    async def _heartbeat() -> None:
+        while True:
+            await asyncio.sleep(interval)
+            with contextlib.suppress(Exception):
+                refresher()  # 刷新失败不影响等待本身
+
+    hb = asyncio.create_task(_heartbeat())
+    try:
+        return await awaitable
+    finally:
+        hb.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await hb
+
+
+# ask_user_question 普通问答（非沙箱权限）的超时（秒）：15 分钟。
+# 与沙箱权限确认区别对待——问答是 agent 主动向用户征询偏好，不是安全闸门；
+# 超时不抛 PermissionDenied 而是返回占位答案（"(no response)" + 自行决策
+# 提示），agent 基于上下文选择最合适的选项继续，任务不被打断。
+ASK_USER_QUESTION_TIMEOUT_SECONDS = 900.0
+
+# 通用等待结果类型（wait_for_ask_user_decision 透传宿主回调的返回类型）
+T = TypeVar("T")
+
+
+async def wait_for_permission_decision(
+    future: Awaitable[bool], tool_name: str
+) -> bool:
+    """等待宿主权限确认结果；所有会话（主对话/子代理）统一 285s 超时。
+
+    权限确认弹窗若无人响应会无限挂起并产生孤儿 modal。此处在所有上下文中
+    给等待加 AGENT_PERMISSION_TIMEOUT_SECONDS 超时，超时抛带原因的
+    PermissionDenied——由 _execute_tool_call 统一捕获转为 error 工具结果
+    （任务不终止），宿主回调的 finally 负责清理遗留的权限弹窗。
+
+    Args:
+        future: permission_prompt 宿主回调返回的可等待对象
+        tool_name: 发起权限请求的工具名称
+
+    Returns:
+        bool: 用户/审核方是否允许
+
+    Raises:
+        PermissionDenied: 权限请求超时
+    """
+    try:
+        return await asyncio.wait_for(
+            future, timeout=AGENT_PERMISSION_TIMEOUT_SECONDS
+        )
+    except asyncio.TimeoutError:
+        raise PermissionDenied(
+            tool_name,
+            f"Permission request for {tool_name} timed out (no response within "
+            f"{AGENT_PERMISSION_TIMEOUT_SECONDS:.0f}s)",
+        ) from None
+
+
+async def wait_for_ask_user_decision(future: Awaitable[T], label: str) -> T:
+    """等待宿主提问/沙箱确认响应；按场景区分超时时长与超时行为。
+
+    两种场景区别对待：
+        - 沙箱权限确认（label == "sandbox confirmation"）：安全闸门，
+          AGENT_PERMISSION_TIMEOUT_SECONDS（285s）超时，抛带原因的
+          PermissionDenied（fail-closed，由 _execute_tool_call 转为
+          error 工具结果）。
+        - ask_user_question 普通问答：agent 向用户征询偏好而非安全闸门，
+          ASK_USER_QUESTION_TIMEOUT_SECONDS（15 分钟）超时；超时不抛异常，
+          返回 "(no response)" 占位答案并提示 agent 自行选择最合适的选项，
+          任务照常继续。
+
+    Args:
+        future: ask_user_prompt 宿主回调返回的可等待对象
+        label: 请求名称——宿主按场景传入 "ask_user_question" 或
+            "sandbox confirmation"
+
+    Returns:
+        Any: 用户回答（str 或 dict）；普通问答超时为占位答案字符串
+
+    Raises:
+        PermissionDenied: 仅沙箱权限确认超时时抛出
+    """
+    is_sandbox = label == "sandbox confirmation"
+    timeout = (
+        AGENT_PERMISSION_TIMEOUT_SECONDS
+        if is_sandbox
+        else ASK_USER_QUESTION_TIMEOUT_SECONDS
+    )
+    try:
+        return await asyncio.wait_for(future, timeout=timeout)
+    except asyncio.TimeoutError:
+        if not is_sandbox:
+            # 普通问答超时：返回占位答案让 agent 自行决策，任务继续
+            return cast(T, (
+                "(no response within 15 minutes; no answer received. "
+                "Choose the option you think best fits the user's intent "
+                "based on the conversation context and continue)"
+            ))
+        raise PermissionDenied(
+            label,
+            f"{label} timed out (no response within "
+            f"{AGENT_PERMISSION_TIMEOUT_SECONDS:.0f}s)",
+        ) from None
 
 
 def _synthesize_pending_tool_results(
@@ -475,6 +682,16 @@ class QueryContext:
     # query_engine 在 finally 中据此重建 checkpoint，保证
     # resume/rewind 恢复的是压缩后的对话而非压缩前的完整历史。
     compacted: bool = False
+    # 权限自动审批的任务上下文提供者：返回 goal objective 或最近三条真实
+    # user 消息（不可信数据，auto_review 侧容器化渲染）。惰性求值——每次
+    # 审批时取最新状态；engine 绑定 self._messages 属性表达式，compact 后
+    # 指向新列表亦自动跟随。
+    task_context_provider: Callable[[], str | None] | None = None
+    # 活动心跳刷新器（子代理场景注入）：权限确认/审核等待期间父 loop 零
+    # 事件，idle watcher 的 300s 从工具开始起算会压缩甚至杀死等待；心跳
+    # 每 5s 刷新父级 last_activity，使 idle 从"最后活动"起算。主对话/Web
+    # 无 idle 概念，保持 None 则心跳退化为无操作。
+    activity_refresher: Callable[[], None] | None = None
     # 压缩完成时的消息数快照。query_engine 重建 checkpoint 时据此判断
     # 压缩后是否还有后续 API 调用：若 last_api_usage_message_count
     # >= compacted_message_count，则 last_usage 是压缩后的真实值，应保留；
@@ -833,16 +1050,24 @@ async def run_query(
                     if pending:
                         await asyncio.gather(*pending, return_exceptions=True)
         except PermissionDenied as exc:
+            # 防御路径：正常流程的权限拒绝已在 _execute_tool_call 内转为
+            # error 工具结果（任务不终止）；此处仅兜底 _execute_tool_call
+            # 之外的遗漏 raise 点，消息文案与"不终止"语义一致。
             from illusion.config.i18n import t
 
             denied_tool_name = exc.tool_name  # 捕获到局部变量，避免 lambda 闭包引用 exc
+            denied_reason = exc.reason  # 拒绝/超时的附加原因（人工拒绝、审核拒绝、确认超时等）
 
             # 为所有未完成的工具合成 tool_result，确保消息历史一致
-            def _denied_error(name: str, _denied: str = denied_tool_name) -> str:
+            def _denied_error(
+                name: str, _denied: str = denied_tool_name, _reason: str = denied_reason
+            ) -> str:
+                if name != _denied:
+                    return f"Tool {name} interrupted"
                 return (
-                    f"Permission denied for {name}"
-                    if name == _denied
-                    else f"Tool {name} interrupted"
+                    f"Permission denied for {name}: {_reason}"
+                    if _reason
+                    else f"Permission denied for {name}"
                 )
             synth = _synthesize_pending_tool_results(
                 tool_calls,
@@ -853,7 +1078,26 @@ async def run_query(
             for ctx in all_hook_ctxs:
                 synth.append(TextBlock(text=_wrap_in_system_reminder(ctx)))
             messages.append(ConversationMessage(role="user", content=synth))
-            yield ErrorEvent(message=t("permission_denied_stopped", tool=exc.tool_name)), None
+            if exc.reason:
+                from illusion.swarm.agent_executor import get_agent_context
+
+                if get_agent_context() is not None:
+                    # 子代理上下文：错误结果直接给父 agent 取用，用英文原因
+                    #（保持模型上下文语言一致，不做 i18n 本地化）
+                    yield ErrorEvent(
+                        message=f"Permission denied for {exc.tool_name}: {exc.reason}"
+                    ), None
+                else:
+                    # 主对话：携带明确拒绝原因（如"LLM 审核拒绝/超时"）
+                    yield ErrorEvent(
+                        message=t(
+                            "permission_denied_stopped_reason",
+                            tool=exc.tool_name,
+                            reason=exc.reason,
+                        )
+                    ), None
+            else:
+                yield ErrorEvent(message=t("permission_denied_stopped", tool=exc.tool_name)), None
             context.final_messages = messages
             return
         except (KeyboardInterrupt, asyncio.CancelledError):
@@ -986,119 +1230,167 @@ async def _execute_tool_call(
     # 在权限检查前规范化通用工具输入，以便路径规则一致地应用于使用 `file_path` 或 `path` 的内置工具
     _file_path = _resolve_permission_file_path(context.cwd, tool_input, parsed_input)
     _command = _extract_permission_command(tool_input, parsed_input)
-    # 评估权限
-    decision = context.permission_checker.evaluate(
-        tool_name,
-        is_read_only=tool.is_read_only(parsed_input),
-        file_path=_file_path,
-        command=_command,
-    )
-    if not decision.allowed:
-        # 系统自动阻止（如计划模式）：返回错误结果给模型，不终止查询循环
-        if decision.auto_blocked:
-            return ToolResultBlock(
-                tool_use_id=tool_use_id,
-                content=f"[Permission blocked] {decision.reason or f'{tool_name} is not allowed in current mode'}",
-                is_error=True,
-            ), hook_additional_contexts, {}
-        # 沙箱限制阻止：向用户请求确认
-        if decision.sandbox_blocked:
-            denied_path = decision.sandbox_denied_path or "unknown"
-            # print 模式：两选项（允许/拒绝），复用 sandbox_permission_prompt 的
-            # 多轮 pending-sandbox 机制（save_pending_sandbox → 退出码 2 →
-            # 下次 -c -p 恢复）。与通用 permission_prompt（print 模式 Y/N，交互模式三选项）区分。
-            if context.print_mode and context.sandbox_permission_prompt is not None:
-                confirmed = await context.sandbox_permission_prompt(
-                    tool_name,
-                    f"Sandbox restriction: {denied_path} - {decision.reason or ''}",
-                    decision.high_risk,
+    # 评估权限。权限拒绝不终止查询循环：以 error 工具结果返回原因，LLM 可据此调整
+    # 后续操作（自主任务不被单次拒绝打断；沙箱硬拦/判官拒绝/人工拒绝/
+    # 确认超时统一走此路径）
+    try:
+        decision = context.permission_checker.evaluate(
+            tool_name,
+            is_read_only=tool.is_read_only(parsed_input),
+            file_path=_file_path,
+            command=_command,
+        )
+        if not decision.allowed:
+            # 系统自动阻止（如计划模式）：返回错误结果给模型，不终止查询循环
+            if decision.auto_blocked:
+                return ToolResultBlock(
+                    tool_use_id=tool_use_id,
+                    content=f"[Permission blocked] {decision.reason or f'{tool_name} is not allowed in current mode'}",
+                    is_error=True,
+                ), hook_additional_contexts, {}
+            # 沙箱限制阻止：向用户请求确认（full_auto + LLM 自动审核开启时先由审核模型裁决）
+            if decision.sandbox_blocked:
+                denied_path = decision.sandbox_denied_path or "unknown"
+                # full_auto + LLM 自动审核：沙箱拦截（如工作区外读写）也由审核
+                # 模型裁决，不再弹人工确认框。审核不适用（非 full_auto / 未开启）
+                # 时返回 None，继续走现有人工确认三分支；审核拒绝则 fail-closed。
+                from illusion.permissions.auto_review import maybe_auto_review as _auto_review
+
+                _review_result = await _auto_review(
+                    context, tool_name, decision, file_path=_file_path, command=_command
                 )
-                if not confirmed:
-                    raise PermissionDenied(tool_name, f"Sandbox denied: {denied_path}")
-            # 交互模式：三选项（一次允许 / 会话级允许 / 拒绝）
-            elif context.ask_user_prompt is not None:
-                from illusion.config.i18n import _is_zh
-                from illusion.config.settings import load_settings as _load_settings
-                _locale = _load_settings().ui_language or "en"
-                _is_cn = _is_zh(_locale)
-                _high = "高危操作" if decision.high_risk else "常规操作"
-                _high_en = "HIGH-RISK operation" if decision.high_risk else "normal operation"
-                if _is_cn:
-                    question_text = (
-                        f"沙箱限制：「{denied_path}」被沙箱配置阻止。\n"
-                        f"工具：{tool_name}\n"
-                        f"风险：{_high}\n"
-                        f"是否允许此操作？"
+                # 仅判官 ALLOW 视为已处理；DENY 不直接终止任务，降级下方人工
+                # 确认流程做最终裁决（判官意见附进确认文案供用户参考）
+                _review_handled = _review_result is not None and bool(_review_result[0])
+                _review_deny = (
+                    _review_result[1]
+                    if (_review_result is not None and not _review_result[0])
+                    else ""
+                )
+                # print 模式：两选项（允许/拒绝），复用 sandbox_permission_prompt 的
+                # 多轮 pending-sandbox 机制（save_pending_sandbox → 退出码 2 →
+                # 下次 -c -p 恢复）。与通用 permission_prompt（print 模式 Y/N，交互模式三选项）区分。
+                if (not _review_handled) and context.print_mode and context.sandbox_permission_prompt is not None:
+                    confirmed = await context.sandbox_permission_prompt(
+                        tool_name,
+                        f"Sandbox restriction: {denied_path} - {decision.reason or ''}"
+                        + (f" (LLM review denied: {_review_deny})" if _review_deny else ""),
+                        decision.high_risk,
                     )
-                    # 高危操作不可被会话级豁免，仅提供两选项（允许一次 / 拒绝）
-                    _options = [
-                        {"label": "允许", "description": "允许本次操作"},
-                        {"label": "当前会话允许", "description": "允许此路径在当前会话中访问（重启后失效）"},
-                        {"label": "拒绝", "description": "阻止此操作"},
-                    ]
-                    if decision.high_risk:
+                    if not confirmed:
+                        raise PermissionDenied(tool_name, f"Sandbox denied: {denied_path}")
+                # 交互模式：三选项（一次允许 / 会话级允许 / 拒绝）
+                elif (not _review_handled) and context.ask_user_prompt is not None:
+                    from illusion.config.i18n import _is_zh
+                    from illusion.config.settings import load_settings as _load_settings
+                    _locale = _load_settings().ui_language or "en"
+                    _is_cn = _is_zh(_locale)
+                    _high = "高危操作" if decision.high_risk else "常规操作"
+                    _high_en = "HIGH-RISK operation" if decision.high_risk else "normal operation"
+                    if _is_cn:
+                        question_text = (
+                            f"沙箱限制：「{denied_path}」被沙箱配置阻止。\n"
+                            f"工具：{tool_name}\n"
+                            f"风险：{_high}\n"
+                            + (f"LLM 审核意见：拒绝（{_review_deny}）\n" if _review_deny else "")
+                            + "是否允许此操作？"
+                        )
+                        # 高危操作不可被会话级豁免，仅提供两选项（允许一次 / 拒绝）
                         _options = [
                             {"label": "允许", "description": "允许本次操作"},
+                            {"label": "当前会话允许", "description": "允许此路径在当前会话中访问（重启后失效）"},
                             {"label": "拒绝", "description": "阻止此操作"},
                         ]
-                    questions_data = [
-                        {
-                            "question": f"允许访问「{denied_path}」？",
-                            "header": "沙箱",
-                            "options": _options,
-                            "multiSelect": False,
-                            "noCustomInput": True,
-                        }
-                    ]
-                else:
-                    question_text = (
-                        f"Sandbox restriction: '{denied_path}' is blocked by sandbox configuration.\n"
-                        f"Tool: {tool_name}\n"
-                        f"Risk: {_high_en}\n"
-                        f"Do you want to allow this operation?"
-                    )
-                    # HIGH-RISK operations cannot be exempted for the session; only two options (allow once / deny)
-                    _options = [
-                        {"label": "Allow", "description": "Allow this single operation"},
-                        {"label": "Allow for session", "description": "Allow this path for the current session (not persistent)"},
-                        {"label": "Deny", "description": "Block this operation"},
-                    ]
-                    if decision.high_risk:
+                        if decision.high_risk:
+                            _options = [
+                                {"label": "允许", "description": "允许本次操作"},
+                                {"label": "拒绝", "description": "阻止此操作"},
+                            ]
+                        questions_data = [
+                            {
+                                "question": f"允许访问「{denied_path}」？",
+                                "header": "沙箱",
+                                "options": _options,
+                                "multiSelect": False,
+                                "noCustomInput": True,
+                            }
+                        ]
+                    else:
+                        question_text = (
+                            f"Sandbox restriction: '{denied_path}' is blocked by sandbox configuration.\n"
+                            f"Tool: {tool_name}\n"
+                            f"Risk: {_high_en}\n"
+                            + (f"LLM review opinion: DENY ({_review_deny})\n" if _review_deny else "")
+                            + "Do you want to allow this operation?"
+                        )
+                        # HIGH-RISK operations cannot be exempted for the session; only two options (allow once / deny)
                         _options = [
                             {"label": "Allow", "description": "Allow this single operation"},
+                            {"label": "Allow for session", "description": "Allow this path for the current session (not persistent)"},
                             {"label": "Deny", "description": "Block this operation"},
                         ]
-                    questions_data = [
-                        {
-                            "question": f"Allow access to '{denied_path}'?",
-                            "header": "Sandbox",
-                            "options": _options,
-                            "multiSelect": False,
-                            "noCustomInput": True,
-                        }
-                    ]
-                answer = await context.ask_user_prompt(question_text, questions_data)
-                # 解析用户选择
-                answer_str = str(answer).strip() if answer else ""
-                # 高危操作不可被会话级豁免：即使选中"当前会话允许"也不放行该路径
-                if (not decision.high_risk) and ("Allow for session" in answer_str or "当前会话允许" in answer_str):
-                    # 会话级允许
-                    context.permission_checker.allow_sandbox_path_for_session(denied_path)
-                elif "Allow" in answer_str or "允许" in answer_str:
-                    # 单次允许（不做任何持久化）
-                    pass
-                else:
-                    # 拒绝
-                    raise PermissionDenied(tool_name, f"Sandbox denied: {denied_path}")
+                        if decision.high_risk:
+                            _options = [
+                                {"label": "Allow", "description": "Allow this single operation"},
+                                {"label": "Deny", "description": "Block this operation"},
+                            ]
+                        questions_data = [
+                            {
+                                "question": f"Allow access to '{denied_path}'?",
+                                "header": "Sandbox",
+                                "options": _options,
+                                "multiSelect": False,
+                                "noCustomInput": True,
+                            }
+                        ]
+                    try:
+                        answer = await _with_activity_heartbeat(
+                            context.ask_user_prompt(question_text, questions_data),
+                            context.activity_refresher,
+                        )
+                    except PermissionDenied as exc:
+                        # 宿主超时抛出的 PermissionDenied 归因于 label
+                        # （"sandbox confirmation"），修正为真实工具名，
+                        # 避免错误工具结果归因混乱
+                        raise PermissionDenied(
+                            tool_name,
+                            exc.reason or f"Sandbox denied: {denied_path}",
+                        ) from exc
+                    # 解析用户选择
+                    answer_str = str(answer).strip() if answer else ""
+                    # 高危操作不可被会话级豁免：即使选中"当前会话允许"也不放行该路径
+                    if (not decision.high_risk) and ("Allow for session" in answer_str or "当前会话允许" in answer_str):
+                        # 会话级允许
+                        context.permission_checker.allow_sandbox_path_for_session(denied_path)
+                    elif "Allow" in answer_str or "允许" in answer_str:
+                        # 单次允许（不做任何持久化）
+                        pass
+                    else:
+                        # 拒绝
+                        raise PermissionDenied(tool_name, f"Sandbox denied: {denied_path}")
+                elif not _review_handled:
+                    raise PermissionDenied(tool_name, decision.reason or f"Sandbox denied: {denied_path}")
+            # 需要用户确认（full_auto + LLM 自动审核开启时由审核模型裁决，否则走人工确认）
+            elif decision.requires_confirmation:
+                confirmed, deny_reason = await _confirm_permission(
+                    context, tool_name, decision, _file_path, _command
+                )
+                if not confirmed:
+                    # 传裸原因：PermissionDenied.reason 由 handler 统一拼
+                    # "Permission denied for {tool}:" 前缀，避免双重前缀
+                    raise PermissionDenied(tool_name, deny_reason or None)
             else:
-                raise PermissionDenied(tool_name, decision.reason or f"Sandbox denied: {denied_path}")
-        # 需要用户确认
-        elif decision.requires_confirmation and context.permission_prompt is not None:
-            confirmed = await context.permission_prompt(tool_name, decision.reason, decision.high_risk)
-            if not confirmed:
-                raise PermissionDenied(tool_name, f"Permission denied for {tool_name}")
-        else:
-            raise PermissionDenied(tool_name, decision.reason or f"Permission denied for {tool_name}")
+                raise PermissionDenied(tool_name, decision.reason or f"Permission denied for {tool_name}")
+    except PermissionDenied as exc:
+        return ToolResultBlock(
+            tool_use_id=tool_use_id,
+            content=(
+                f"[Permission denied] {exc.tool_name}: {exc.reason}"
+                if exc.reason
+                else f"[Permission denied] {exc.tool_name}"
+            ),
+            is_error=True,
+        ), hook_additional_contexts, {}
 
     # 文件历史：工具执行前回调（备份即将被修改的文件）
     if context.on_before_tool_execute is not None:
@@ -1118,6 +1410,7 @@ async def _execute_tool_call(
             metadata={
                 "tool_registry": context.tool_registry,
                 "ask_user_prompt": context.ask_user_prompt,
+                "activity_refresher": context.activity_refresher,
                 "plan_approval_prompt": context.plan_approval_prompt,
                 "permission_checker": context.permission_checker,
                 "file_state_cache": context.file_state_cache,

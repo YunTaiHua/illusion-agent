@@ -212,16 +212,38 @@ async def turns_handler(args: str, context: CommandContext) -> CommandResult:
     return CommandResult(message=f"Max turns set to {turns}.")
 
 
+def _apply_permission_checker(context: CommandContext, settings: Settings) -> None:
+    """将权限配置变更热生效：重建 PermissionChecker 并注入引擎。
+
+    沿用现有模式切换逻辑：权限规则（含 auto_review/review_model）可能被
+    其他会话的检查器持有旧快照，统一按新配置重建并注入。
+    """
+    checker = PermissionChecker(settings.permission)
+    checker.sync_sandbox_restrictions(
+        settings.sandbox, working_directory=settings.working_directory
+    )
+    if context.engine is not None:
+        context.engine.set_permission_checker(checker)
+    if context.app_state is not None:
+        context.app_state.set(permission_mode=settings.permission.mode.value)
+
+
 async def permissions_handler(args: str, context: CommandContext) -> CommandResult:
-    """显示或更新权限模式"""
+    """显示或更新权限模式（含 LLM 自动审核开关与审核模型）"""
+    from illusion.config.i18n import t
+
     settings = load_settings()
     tokens = args.split()
     if not tokens or tokens[0] == "show":
         permission = settings.permission
         label = _MODE_LABELS.get(permission.mode.value, permission.mode.value)
+        auto_state = "on" if permission.auto_review else "off"
+        review_model = permission.review_model or "(inherit)"
         return CommandResult(
             message=(
                 f"Mode: {label}\n"
+                f"LLM auto-review: {auto_state}\n"
+                f"Review model: {review_model}\n"
                 f"Allowed tools: {permission.allowed_tools}\n"
                 f"Denied tools: {permission.denied_tools}"
             )
@@ -229,14 +251,57 @@ async def permissions_handler(args: str, context: CommandContext) -> CommandResu
     if tokens[0] == "set" and len(tokens) == 2:
         settings.permission.mode = PermissionMode(tokens[1])
         save_settings(settings)
-        checker = PermissionChecker(settings.permission)
-        checker.sync_sandbox_restrictions(
-            settings.sandbox, working_directory=settings.working_directory
-        )
-        if context.engine is not None:
-            context.engine.set_permission_checker(checker)
-        if context.app_state is not None:
-            context.app_state.set(permission_mode=settings.permission.mode.value)
+        _apply_permission_checker(context, settings)
         label = _MODE_LABELS.get(tokens[1], tokens[1])
         return CommandResult(message=f"Permission mode set to {label}")
-    return CommandResult(message="Usage: /permissions [show|set MODE]")
+    if tokens[0] == "auto":
+        # /permissions auto on|off|toggle|status（类似 /memory auto 流程）
+        action = tokens[1] if len(tokens) == 2 else "status"
+        if action == "status":
+            return CommandResult(
+                message=t(
+                    "permission_auto_show",
+                    state=("on" if settings.permission.auto_review else "off"),
+                )
+            )
+        enabled = {"on": True, "off": False, "toggle": not settings.permission.auto_review}.get(action)
+        if enabled is None:
+            return CommandResult(message=t("permission_auto_usage"))
+        settings.permission.auto_review = enabled
+        save_settings(settings)
+        # 不重建检查器：maybe_auto_review 实时读磁盘开关，save 即生效。
+        # 重建会连带破坏计划模式状态/会话级沙箱允许/粘滞拒绝缓存
+        return CommandResult(
+            message=t("permission_auto_on" if enabled else "permission_auto_off")
+        )
+    if tokens[0] == "model":
+        # /permissions model [show|set REF|set inherit]
+        action = tokens[1] if len(tokens) >= 2 else "show"
+        if action == "show":
+            return CommandResult(
+                message=t(
+                    "permission_review_model_show",
+                    model=settings.permission.review_model or "(inherit)",
+                )
+            )
+        if action == "set" and len(tokens) == 3:
+            value = tokens[2]
+            if value in {"inherit", ""}:
+                settings.permission.review_model = None
+                save_settings(settings)
+                # 不重建检查器（同 auto 子命令理由）：review_permission 实时
+                # 读磁盘 review_model，save 即生效
+                return CommandResult(message=t("permission_review_model_inherit"))
+            # 设置时即校验引用有效性：坏 ref 若落盘只会在首次审批时懒失败
+            # 并静默回退会话模型，用户无从得知
+            env_key, model_name = settings.resolve_model_ref_with_env(value)
+            if not (env_key and model_name):
+                return CommandResult(
+                    message=t("permission_review_model_invalid", ref=value)
+                )
+            settings.permission.review_model = value
+            save_settings(settings)
+            return CommandResult(
+                message=t("permission_review_model_set", model=value)
+            )
+    return CommandResult(message=t("permission_auto_usage"))

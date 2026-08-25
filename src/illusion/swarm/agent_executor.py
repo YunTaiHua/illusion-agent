@@ -621,6 +621,11 @@ async def run_agent_in_process(
         sandbox_permission_prompt=query_context.sandbox_permission_prompt,
         on_before_tool_execute=query_context.on_before_tool_execute,
         file_state_cache=query_context.file_state_cache,
+        # 继承任务上下文提供者：子代理的自动审批同样携带 goal objective /
+        # 最近 user 消息。provider 由父级 engine 构造时绑定（捕获父级
+        # messages 属性表达式，惰性求值），子代理作为父任务的一部分，
+        # 审核时参考父任务上下文是正确语义
+        task_context_provider=query_context.task_context_provider,
     )
 
     # 初始化消息列表
@@ -654,6 +659,15 @@ async def run_agent_in_process(
         async def _run_query_loop() -> None:
             """执行查询循环的内部协程。"""
             nonlocal last_activity
+
+            def _refresh_activity() -> None:
+                nonlocal last_activity
+                last_activity = time.monotonic()
+
+            # 注入活动心跳刷新器：权限确认/LLM 审核/问答等待期间父 loop 零
+            # 事件，query.py 每 5s 调用本回调刷新 last_activity，使 idle
+            # 从"最后活动"起算——等待不被 300s 墙截断，挂死仍有各自限时兜底
+            agent_query_context.activity_refresher = _refresh_activity
             logger.warning("[agent_executor] %s: entering query loop", agent_id)
             event_count = 0
             # 已上报 "running xxx" 的 tool_use_id 集合。
@@ -865,8 +879,10 @@ async def run_agent_in_process(
 
     duration_ms = int((time.time() - start_time) * 1000)
 
-    # 如果有错误，返回错误结果
-    if error_text and not final_text:
+    # 有错误事件（权限拒绝/超时、API 错误等）时一律返回错误结果：即便
+    # messages 中残留了子代理的思考/半截文本，也不能当作成功结果返回，
+    # 否则权限超时等中断场景会丢失原因，父 agent 只看到截断的产物。
+    if error_text:
         return AgentResult(
             agent_id=agent_id,
             success=False,

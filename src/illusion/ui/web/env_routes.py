@@ -124,6 +124,18 @@ class UpdateTitleRequest(BaseModel):
     model: str | None = None
 
 
+class UpdatePermissionReviewRequest(BaseModel):
+    """修改权限 LLM 自动审核配置请求体。
+
+    字段均可选，只更新提供的字段：
+        - auto_review: auto 模式下高危操作与沙箱拦截（工作区外读写）是否改由 LLM 审核放行
+        - review_model: 审核模型（env_N.model_M），空串清除（继承当前会话模型）
+    """
+
+    auto_review: bool | None = None
+    review_model: str | None = None
+
+
 class UpdateThemeRequest(BaseModel):
     """修改 Web 端主题请求体。
 
@@ -434,6 +446,10 @@ def register_env_routes(app: FastAPI, host_config: Any | None = None) -> None:
             },
             "sandbox": _sandbox_settings_payload(settings.sandbox),
             "permission": _permission_risk_payload(),
+            "permission_review": {
+                "auto_review": settings.permission.auto_review,
+                "review_model": settings.permission.review_model,
+            },
         }
 
     @app.patch("/api/settings/permission")
@@ -448,6 +464,39 @@ def register_env_routes(app: FastAPI, host_config: Any | None = None) -> None:
             status_code=400,
             detail="权限风险分级已内置为只读，可编辑的沙箱路径白名单请使用 /api/settings/sandbox",
         )
+
+    @app.patch("/api/settings/permission-review")
+    async def update_permission_review(req: UpdatePermissionReviewRequest) -> dict[str, Any]:
+        """修改权限 LLM 自动审核配置。
+
+        仅更新请求中提供的字段，其余保持不变；保存后审核层在下次工具确认时
+        读取新配置即时生效（审核只在 full_auto 模式下生效，yolo/plan/default 不变）。
+        """
+        settings = load_settings()
+        updates: dict[str, Any] = {}
+        if req.auto_review is not None:
+            updates["auto_review"] = req.auto_review
+        if req.review_model is not None:
+            review_model_value = (req.review_model or "").strip() or None
+            # 设置时即校验引用有效性（坏 ref 只会在首次审批时懒失败静默回退）
+            if review_model_value is not None:
+                env_key, model_name = settings.resolve_model_ref_with_env(review_model_value)
+                if not (env_key and model_name):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=_t("permission_review_model_invalid", ref=review_model_value),
+                    )
+            updates["review_model"] = review_model_value
+        new_permission = settings.permission.model_copy(update=updates)
+        new_settings = settings.model_copy(update={"permission": new_permission})
+        save_settings(new_settings)
+        return {
+            "success": True,
+            "permission_review": {
+                "auto_review": new_permission.auto_review,
+                "review_model": new_permission.review_model,
+            },
+        }
 
     @app.patch("/api/settings/sandbox")
     async def update_sandbox(req: UpdateSandboxRequest) -> dict[str, Any]:
