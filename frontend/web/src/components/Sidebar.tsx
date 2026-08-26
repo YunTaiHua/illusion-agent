@@ -18,7 +18,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { t, type UiLanguage } from '../i18n';
 import type { WebWorkspaceItem } from '../types/protocol';
-import { FolderClosedIcon, FolderOpenIcon, NewChatIcon } from './icons';
+import {
+  ChevronDownIcon, ChevronRightIcon, DotsIcon, FolderClosedIcon, FolderOpenIcon,
+  GearIcon, NewChatIcon, PanelLeftIcon, PenIcon, SpinnerIcon, TrashIcon,
+} from './icons';
 
 /**
  * 会话列表项（供侧边栏渲染的最小结构）
@@ -200,7 +203,8 @@ function SessionItem({ session, isRestoring, isActive, lang, onSelect, onRename,
   // 状态样式：
   // - 所有会话项预留 1px 透明边框（状态切换无布局跳动）
   // - 活跃（active）：主色淡背景 + 主色细边框（不再加重字重）
-  // - 运行中（busy）：细边框 + 一小段主色系光束沿边框流动（BorderBeam 风格）
+  // - 运行中（busy）：仅一小段主色光束沿边框路径流动（无常驻边框；BorderBeam 风格），
+  //   与选中态的边框互不影响
   // - 无图标：缩进表达所属目录关系；pr-8 预留右侧操作按钮位，悬停显隐无跳动
   const className = [
     'session-item relative w-full text-left pl-9 pr-8 py-2 rounded-lg text-sm transition-colors cursor-pointer flex items-center gap-2 animate-fade',
@@ -230,10 +234,7 @@ function SessionItem({ session, isRestoring, isActive, lang, onSelect, onRename,
             运行中（busy）复用恢复中的动画样式 */}
         {(isRestoring || session.busy) && (
           <span className="absolute left-3 top-1/2 -translate-y-1/2 w-4 flex items-center justify-center">
-            <svg className="animate-spin w-3.5 h-3.5 text-primary" viewBox="0 0 24 24" fill="none">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-            </svg>
+            <SpinnerIcon className="animate-spin w-3.5 h-3.5 text-primary" />
           </span>
         )}
         {/* 两行布局：首行标题截断占据剩余宽度；次行元信息（日期 时间 轮数）不截断固定靠右，
@@ -259,11 +260,7 @@ function SessionItem({ session, isRestoring, isActive, lang, onSelect, onRename,
         title={t(lang, 'session_actions')}
         className={`absolute right-1.5 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center rounded-md text-content-disabled hover:text-content-primary glass-option-hover transition cursor-pointer ${menuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
       >
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-          <circle cx="8" cy="3.5" r="1.5" />
-          <circle cx="8" cy="8" r="1.5" />
-          <circle cx="8" cy="12.5" r="1.5" />
-        </svg>
+        <DotsIcon className="w-3.5 h-3.5" />
       </button>
       {menuOpen && menuPos && createPortal(
         <>
@@ -277,21 +274,14 @@ function SessionItem({ session, isRestoring, isActive, lang, onSelect, onRename,
               onClick={() => { setMenuOpen(false); onRename(session.value); }}
               className="w-full text-left px-4 py-2 border border-transparent hover:border-border-light text-sm text-content-primary glass-option-hover hover:text-content-primary transition-colors cursor-pointer flex items-center gap-2.5"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
-              </svg>
+              <PenIcon className="w-3.5 h-3.5" />
               {t(lang, 'rename_session')}
             </button>
             <button
               onClick={() => { setMenuOpen(false); onDelete(session.value); }}
               className="w-full text-left px-4 py-2 border border-transparent hover:border-border-light text-sm text-danger glass-option-hover transition-colors cursor-pointer flex items-center gap-2.5"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="3 6 5 6 21 6" />
-                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                <line x1="10" y1="11" x2="10" y2="17" />
-                <line x1="14" y1="11" x2="14" y2="17" />
-              </svg>
+              <TrashIcon className="w-3.5 h-3.5" />
               {t(lang, 'delete_session')}
             </button>
           </div>
@@ -341,9 +331,7 @@ function WorkspaceGroupSection({ group, lang, collapsedByDefault, restoringSessi
             <span className="absolute inset-0 flex items-center justify-center transition-opacity duration-100 group-hover:opacity-0">
               {expanded ? <FolderOpenIcon className="w-3.5 h-3.5" /> : <FolderClosedIcon className="w-3.5 h-3.5" />}
             </span>
-            <svg className={`absolute inset-0 m-auto w-3 h-3 opacity-0 transition-[opacity,transform] duration-100 group-hover:opacity-100 group-hover:duration-150 ${expanded ? 'rotate-90' : ''}`} viewBox="0 0 14 14" fill="none">
-              <path d="M4.25 2.82782L4.25 11.1722C4.25 11.6622 4.84243 11.9076 5.18891 11.5611L9.36109 7.38891C9.57588 7.17412 9.57588 6.82588 9.36109 6.61109L5.18891 2.43891C4.84243 2.09243 4.25 2.33782 4.25 2.82782Z" fill="currentColor" />
-            </svg>
+            <ChevronRightIcon className={`absolute inset-0 m-auto w-3 h-3 opacity-0 transition-[opacity,transform] duration-100 group-hover:opacity-100 group-hover:duration-150 ${expanded ? 'rotate-90' : ''}`} />
           </span>
           <span className="truncate flex-1 text-left">{group.name}</span>
         </button>
@@ -376,9 +364,7 @@ function WorkspaceGroupSection({ group, lang, collapsedByDefault, restoringSessi
               className="w-full flex items-center justify-center py-1.5 text-content-disabled hover:text-content-secondary glass-option-hover rounded-lg transition-colors cursor-pointer mt-1"
               title={listExpanded ? t(lang, 'collapse_messages') : t(lang, 'show_earlier').replace('{count}', String(group.sessions.length - 5))}
             >
-              <svg className={`w-3.5 h-3.5 transition-transform duration-150 ${listExpanded ? 'rotate-180' : ''}`} viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 4.5L6 7.5L9 4.5" />
-              </svg>
+              <ChevronDownIcon className={`w-3.5 h-3.5 transition-transform duration-150 ${listExpanded ? 'rotate-180' : ''}`} />
             </button>
           )}
         </div>
@@ -427,15 +413,13 @@ export default function Sidebar({
 
   return (
     <aside className="glass-panel panel-below-titlebar flex flex-col h-full shrink-0 select-none transition-[width] duration-300 ease-in-out" style={{ width: `${width}px` }}>
-      <div className="flex items-center justify-between px-5 py-4">
+      <div className="flex items-center justify-between px-5 pt-4 pb-3 border-b border-border-medium">
         <button
           onClick={onToggle}
-          className="w-8 h-8 flex items-center justify-center rounded-lg text-content-secondary hover:text-content-primary glass-option-hover transition-colors cursor-pointer"
+          className="w-8 h-8 flex items-center justify-center rounded-lg text-content-secondary hover:text-primary transition-colors cursor-pointer"
           title={t(lang, 'collapse_panel')}
         >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <path d="M10 3l-5 5 5 5" />
-          </svg>
+          <PanelLeftIcon className="w-4 h-4" />
         </button>
         <span className="font-body font-bold text-content-primary text-sm tracking-wider">{t(lang, 'sidebar_title')}</span>
         <button
@@ -444,12 +428,7 @@ export default function Sidebar({
           title={t(lang, 'delete_session')}
           aria-label={t(lang, 'delete_session')}
         >
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="3 6 5 6 21 6" />
-            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-            <line x1="10" y1="11" x2="10" y2="17" />
-            <line x1="14" y1="11" x2="14" y2="17" />
-          </svg>
+          <TrashIcon className="w-[15px] h-[15px]" />
         </button>
       </div>
       <div className="px-4 py-3">
@@ -464,7 +443,7 @@ export default function Sidebar({
           {t(lang, 'new_session')}
         </button>
       </div>
-      <div className="flex-1 overflow-y-auto px-3">
+      <div className="flex-1 overflow-y-auto scrollbar-hidden px-3">
         <div className="py-2 text-[11px] text-content-disabled font-semibold px-1 uppercase tracking-widest">
           {t(lang, 'resume_session')}
         </div>
@@ -502,10 +481,7 @@ export default function Sidebar({
           className="pill-badge w-full flex items-center justify-center gap-2 text-xs text-content-secondary hover:text-content-primary rounded-lg px-2 py-2 transition-colors cursor-pointer"
           style={{ borderColor: 'var(--border-medium)' }}
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-          </svg>
+          <GearIcon className="w-3.5 h-3.5" />
           <span className="text-[11px] font-medium">{t(lang, 'settings')}</span>
         </button>
       </div>
@@ -547,9 +523,7 @@ export function SidebarControls({
         aria-label={t(lang, 'expand_panel')}
         className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-card-alt border border-border-light text-content-secondary glass-option-hover hover:text-primary transition-colors cursor-pointer"
       >
-        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-          <path d="M6 3l5 5-5 5" />
-        </svg>
+        <PanelLeftIcon className="w-[15px] h-[15px]" />
       </button>
       {/* 新建会话 */}
       <button
@@ -568,12 +542,7 @@ export function SidebarControls({
         aria-label={t(lang, 'delete_session')}
         className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-card-alt border border-border-light text-danger glass-option-hover transition-colors cursor-pointer"
       >
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <polyline points="3 6 5 6 21 6" />
-          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-          <line x1="10" y1="11" x2="10" y2="17" />
-          <line x1="14" y1="11" x2="14" y2="17" />
-        </svg>
+        <TrashIcon className="w-[15px] h-[15px]" />
       </button>
       {/* 设置 */}
       <button
@@ -582,10 +551,7 @@ export function SidebarControls({
         aria-label={t(lang, 'sidebarSettingsTooltip')}
         className="w-8 h-8 flex items-center justify-center rounded-full bg-surface-card-alt border border-border-light text-content-secondary glass-option-hover hover:text-primary transition-colors cursor-pointer"
       >
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="3" />
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-        </svg>
+        <GearIcon className="w-[15px] h-[15px]" />
       </button>
     </div>
   );

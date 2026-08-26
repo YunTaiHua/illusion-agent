@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { t, type UiLanguage } from '../i18n';
 import { CollapsibleSection } from './RightPanel';
+import { ListChecksIcon, ModifiedFileIcon } from './icons';
 import type { SessionFileItem } from '../types/protocol';
 
 /**
@@ -59,7 +60,7 @@ export default function SessionFilesSection({ lang, files, loading, onRefresh, o
       onRefresh={onRefresh}
       refreshLabel={t(lang, 'refresh')}
       topBorder={topBorder}
-      icon={<ModifiedFileIcon className="w-3.5 h-3.5" />}
+      icon={<ListChecksIcon className="w-3.5 h-3.5" />}
     >
       {files.length === 0 && loading ? (
         <div className="px-2 py-1 text-xs text-content-disabled">{t(lang, 'loading')}</div>
@@ -91,7 +92,7 @@ function SessionFileRow({ file, onOpenFile }: { file: SessionFileItem; onOpenFil
       className="w-[calc(100%_+_2.5rem)] flex items-center gap-1.5 -mx-5 pl-7 pr-5 py-1 rounded-md text-xs transition-colors glass-option-hover cursor-pointer"
       title={file.display}
     >
-      {/* 编辑/修改文件图标：精简编辑铅笔造型 + 主色，与目录树的普通文件图标明显区分 */}
+      {/* 编辑/修改文件图标（icons.tsx 统一管理）：精简编辑铅笔造型 + 主色，与目录树的普通文件图标明显区分 */}
       <ModifiedFileIcon className="w-3.5 h-3.5 shrink-0 text-primary" />
       <span className="flex-1 min-w-0 truncate text-left">
         {dir && <span className="text-content-disabled">{dir}</span>}
@@ -103,22 +104,5 @@ function SessionFileRow({ file, onOpenFile }: { file: SessionFileItem; onOpenFil
         {file.tool === 'write_file' ? 'write' : file.tool === 'edit_file' ? 'edit' : file.tool.replace(/_/g, ' ')}
       </span>
     </button>
-  );
-}
-
-/**
- * 编辑/修改文件图标（精简线性，默认继承当前文本色）
- *
- * 会话文件区块的专属图标：一枚精简的编辑铅笔，传达"被修改/编辑的文件"
- * 语义。造型与目录树的普通文件夹/扩展名着色文件完全不同，用于在视觉上
- * 区分「目录树」与「会话文件」两类区块（含展开后的文件行）。通过
- * className 传 text-primary 等即可突出强调。
- */
-function ModifiedFileIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 12.4l.4-1.9 7-7a1.06 1.06 0 0 1 1.5 0l.6.6a1.06 1.06 0 0 1 0 1.5l-7 7-1.9.4z" />
-      <path d="M10.7 5.7l.6.6" />
-    </svg>
   );
 }

@@ -883,10 +883,11 @@ pre code.hljs,
   background: var(--session-active-bg, var(--primary-light, rgba(42, 157, 153, 0.1)));
 }
 
-/* 运行中会话（busy）：细边框 + 一小段主色系光束沿边框流动
- * ::after 用 conic 渐变 + mask 只保留 1px 边框环；
- * 渐变绝大部分为常驻细边框色，仅一小段为光束（柔和主色渐变），
- * 通过 --beam-angle 旋转实现流动，克制不花哨 */
+/* 运行中会话（busy）：仅一小段主色光束沿边框路径流动，无常驻细边框
+ * ::after 用 conic 渐变 + mask 只保留 1px 环宽；
+ * 环上除流动光束段（柔和主色渐变）外全部透明，
+ * 通过 --beam-angle 旋转实现流动，克制不花哨。
+ * 选中（session-active）的背景色与边框规则与此互不影响，保持原样。 */
 @property --beam-angle {
   syntax: '<angle>';
   initial-value: 0deg;
@@ -903,11 +904,11 @@ pre code.hljs,
   padding: 1px;
   background: conic-gradient(
     from var(--beam-angle) at 50% 50%,
-    var(--beam-track, rgba(42, 157, 153, 0.28)) 0deg,
-    var(--beam-track, rgba(42, 157, 153, 0.28)) 300deg,
+    transparent 0deg,
+    transparent 300deg,
     var(--beam-color-a, #2a9d99) 315deg,
     var(--beam-color-b, #7c6fb0) 345deg,
-    var(--beam-track, rgba(42, 157, 153, 0.28)) 360deg
+    transparent 360deg
   );
   -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   -webkit-mask-composite: xor;
@@ -920,7 +921,7 @@ pre code.hljs,
   to { --beam-angle: 360deg; }
 }
 
-/* 尊重系统减弱动态效果偏好：光束静止（保留常驻细边框） */
+/* 尊重系统减弱动态效果偏好：光束静止（仍无常驻细边框） */
 @media (prefers-reduced-motion: reduce) {
   .session-running::after {
     animation: none;

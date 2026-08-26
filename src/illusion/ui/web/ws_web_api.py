@@ -205,6 +205,7 @@ class WebApiDispatcher:
             "web_set_setting": self.handle_web_set_setting,
             "web_request_sessions": self.handle_web_request_sessions,
             "web_request_models": self.handle_web_request_models,
+            "web_refresh_status": self.handle_web_refresh_status,
             "web_request_resources": self.handle_web_request_resources,
             "web_request_file_tree": self.handle_web_request_file_tree,
             "web_request_git_status": self.handle_web_request_git_status,
@@ -523,7 +524,7 @@ class WebApiDispatcher:
     async def handle_web_set_setting(self, request: FrontendRequest) -> None:
         """统一设置标量（A 通道：工具栏/会话控件触发）。
 
-        复用 _apply_setting 私有函数（B 通道的 web_query 设置类指令也调用它），
+        复用 _apply_setting 私有函数，
         设置成功后发送 web_setting_changed + state_snapshot 强同步事件。
         若 key == model 额外发送 web_models 推送。
 
@@ -713,6 +714,23 @@ class WebApiDispatcher:
             await self._emit(BackendEvent(type="error", message="运行时未就绪"))
             return
         await host._push_sessions()
+
+    async def handle_web_refresh_status(self, request: FrontendRequest) -> None:
+        """设置保存后的状态刷新脉冲（前端主动触发）。
+
+        重新读取 settings.json，把 context_window/max_tokens/max_turns 热应用到
+        本主机的会话引擎与 app_state，并推送全局状态快照——保证右栏上下文窗口
+        与后续实际请求参数立即生效（与 REST /api/settings/model-params 的
+        落盘热应用互备，双保险确保前端在保存后总能拿到最新状态）。
+
+        Args:
+            request: 前端请求（无额外载荷）
+        """
+        host = self._host
+        if host._bundle is None:
+            return
+        host.apply_runtime_settings_sync()
+        # apply_runtime_settings_sync 内部已推送状态快照（后台任务），无需重复推送
 
     async def handle_web_request_models(self, request: FrontendRequest) -> None:
         """拉取模型选项并发送 web_models 事件。
@@ -1211,13 +1229,9 @@ class WebApiDispatcher:
         """B 通道精细化指令处理。
 
         复用 CommandRegistry 的 handler 拿到 CommandResult，但渲染层映射到
-        web_query_result（不产生 command_result 事件）。设置类指令（turns/
-        language）内部调用 _apply_setting，触发与 A 通道相同的
-        web_setting_changed + state_snapshot 同步。
+        web_query_result（不产生 command_result 事件）。
 
         不经过 _process_line/handle_line，避免 transcript_item/hook reload 副作用。
-
-        rewind/context 需要多步选择，仍走 select_request 机制。
 
         Args:
             request: 前端请求（command/args/request_id 必填）
@@ -1252,39 +1266,6 @@ class WebApiDispatcher:
                 else:
                     bundle = ws_bundle
                     session_id = request.session_id
-
-        # rewind/context/max-tokens 需要多步选择，仍走 select_request 机制（保留旧 _handle_select_command）
-        if command in ("rewind", "context", "max-tokens"):
-            await host._handle_select_command(command, session)
-            return
-
-        # 设置类指令：内部走 _apply_setting（与 A 通道共用写入逻辑，DRY）
-        setting_commands = {
-            "turns": "turns",
-            "language": "ui_language",
-        }
-        if command in setting_commands and args:
-            key = setting_commands[command]
-            tokens = args.split()
-            # 参数解析：language set zh-CN → "zh-CN"；turns → 首个 token
-            if command == "language" and len(tokens) >= 2 and tokens[0] == "set":
-                value = " ".join(tokens[1:])
-            else:
-                value = tokens[0] if tokens else ""
-            ok, error = await self._apply_setting(bundle, key, value)
-            if ok:
-                await self._emit(BackendEvent(
-                    type="web_setting_changed", setting_key=key, setting_value=value,
-                ))
-                await self._emit(host._status_snapshot())
-                payload = "已更新"
-            else:
-                payload = error or "设置失败"
-            await self._emit(BackendEvent(
-                type="web_query_result", web_request_id=request_id, web_command=command,
-                web_query_kind="text", web_query_payload=payload,
-            ), session_id=session_id)
-            return
 
         # 执行型/查询型（compact/export/init 及无参查询）：复用 registry handler
         # （rename 跨工作区时 bundle 已切换为目标会话所属工作区）

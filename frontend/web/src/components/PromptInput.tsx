@@ -16,20 +16,24 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffec
 import { t, type UiLanguage } from '../i18n';
 import type { FileMentionCandidate, WebWorkspaceItem } from '../types/protocol';
 import { highlightMentions } from '../utils/mention';
+import { CheckIcon, FolderClosedIcon, GearIcon, PlusIcon, StopIcon } from './icons';
 
 /**
  * Web 端允许的 B 类指令集合（自动补全只显示这些）
  *
  * A 类指令（new/resume/delete/model/effort/permissions/plan）已完全交由 UI 控件承载，
- * 输入框不识别；其余指令当作普通文本发给 LLM。因此自动补全只列出 B 类 10 个指令。
- */
+ * 输入框不识别；其余指令当作普通文本发给 LLM。因此自动补全只列出 B 类指令。
+ *
+ * 阻塞会话的指令：/compact、/goal（busy 时由 App 端 toast 提示不可用）；
+ * 非阻塞指令：/export、/init、/rename、/agent（不改变 busy 状态）。
+ * 回退功能由 user 气泡下方的回退按钮承担，/rewind 不再作为输入框指令。 */
 // 自动补全列表：包含所有前端识别的斜杠指令
 // 注意：'/agent' 虽在此列表中，但在 App.tsx 的 handleSubmit 中有特殊分支处理（分支选择器/创建向导/查看摘要）
 // 因此 '/agent' 不在 B_COMMANDS 中，不会走 web_query 通道
 // '/goal' 同理：在 App.tsx 中走 submit_line（A 通道命令注册表），后端执行 /goal 命令并驱动 goal 轮次
 export const WEB_COMMANDS = [
-  '/rewind', '/compact', '/context', '/export', '/init',
-  '/agent', '/turns', '/language', '/max-tokens', '/rename',
+  '/compact', '/export', '/init',
+  '/agent', '/rename',
   '/goal',
 ];
 
@@ -492,7 +496,13 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
           return;
         }
         e.preventDefault();
-        if (busy || !connected) return;
+        if (!connected) return;
+        // 忙碌时仅放行"已识别指令"（交由 App 判定：阻塞→toast，非阻塞→放行），
+        // 未知斜杠（如 /resume）与普通文本仍禁止，避免向忙碌中的会话注入正文
+        if (busy) {
+          const pending = value.trim();
+          if (!(pending && webCommands.some((c) => pending === c || pending.startsWith(`${c} `)))) return;
+        }
         const line = value.trim();
         if (!line) return;
         if (noWorkspaceOnWelcome) return; // 欢迎界面未选目录时禁止发送
@@ -503,15 +513,25 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
         onMenuOpen(null);
       }
     },
-    [value, busy, connected, onSubmit, showCommands, filteredCommands, selectedIndex, selectCommand, inlineOptions, onInlineSelect, onInlineClose, onMenuOpen, noWorkspaceOnWelcome, showMentionMenu, mentionCandidates, mentionIndex, applyMention],
+    [value, busy, connected, onSubmit, showCommands, filteredCommands, selectedIndex, selectCommand, inlineOptions, onInlineSelect, onInlineClose, onMenuOpen, noWorkspaceOnWelcome, showMentionMenu, mentionCandidates, mentionIndex, applyMention, webCommands],
   );
 
   const handleSend = () => {
-    // busy 或（有后台任务运行且输入框为空）→ 停止任务
-    if (busy || (hasActiveTasks && !value.trim())) {
+    // 忙碌时：已识别指令转发给 App 判定（阻塞→toast/非阻塞→放行，不停止任务）；
+    // 未知斜杠（如 /resume）与普通文本/空白按停止处理，避免向忙碌中的会话注入正文
+    if (busy) {
+      const line = value.trim();
+      if (line && webCommands.some((c) => line === c || line.startsWith(`${c} `))) {
+        onSubmit(line);
+        setValue('');
+        setShowCommands(false);
+        onMenuOpen(null);
+        return;
+      }
       onStop();
       return;
     }
+    if (hasActiveTasks && !value.trim()) { onStop(); return; }
     if (!connected) return;
     const line = value.trim();
     if (!line) return;
@@ -678,9 +698,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
             }`}
             style={{ borderColor: 'var(--border-medium)' }}
           >
-            <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M8 3v10M3 8h10" />
-            </svg>
+            <PlusIcon className="w-4 h-4" />
           </button>
           {/* 目录选择：欢迎界面可见（点选目录即在该目录新建会话）；无三角指示器。
               弹层标题与 ToolBar 下拉（Mode/Model/Effort）同风格：英文、uppercase */}
@@ -695,9 +713,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
               }`}
               style={{ borderColor: 'var(--border-medium)' }}
             >
-              <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M1.5 4.5v7a1.5 1.5 0 001.5 1.5h10a1.5 1.5 0 001.5-1.5V6.5a1.5 1.5 0 00-1.5-1.5H8L6.4 3.1a1.5 1.5 0 00-1.1-.6H3a1.5 1.5 0 00-1.5 1.5v.5z" />
-              </svg>
+              <FolderClosedIcon className="w-3.5 h-3.5 shrink-0" />
               <span className={`max-w-[110px] truncate ${activeCwd ? '' : 'text-content-disabled'}`}>
                 {activeCwd ? (workspaces?.find((w) => w.path === activeCwd)?.name || activeCwd.split(/[\\/]/).filter(Boolean).pop() || activeCwd) : t(lang, 'workspace_label')}
               </span>
@@ -717,15 +733,11 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
                         isActive ? 'text-primary font-medium glass-option-hover' : 'text-content-secondary glass-option-hover'
                       } ${!ws.available ? 'opacity-50' : ''}`}
                     >
-                      <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M1.5 4.5v7a1.5 1.5 0 001.5 1.5h10a1.5 1.5 0 001.5-1.5V6.5a1.5 1.5 0 00-1.5-1.5H8L6.4 3.1a1.5 1.5 0 00-1.1-.6H3a1.5 1.5 0 00-1.5 1.5v.5z" />
-                      </svg>
+                      <FolderClosedIcon className="w-3.5 h-3.5 shrink-0" />
                       <span className="truncate flex-1 text-left">{ws.name}</span>
                       {ws.is_default && <span className="text-[10px] text-content-disabled shrink-0">{t(lang, 'workspace_default_badge')}</span>}
                       {isActive && (
-                        <svg className="w-4 h-4 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M3.5 8.5l3 3 6-7" />
-                        </svg>
+                        <CheckIcon className="w-4 h-4 shrink-0" />
                       )}
                     </button>
                   );
@@ -764,9 +776,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
                     onClick={() => { setWsAddMode(true); requestAnimationFrame(() => wsInputRef.current?.focus()); }}
                     className="w-full flex items-center gap-2 px-3 py-2 border border-transparent hover:border-border-light text-sm text-content-secondary glass-option-hover transition-colors cursor-pointer"
                   >
-                    <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M8 3v10M3 8h10" />
-                    </svg>
+                    <PlusIcon className="w-3.5 h-3.5 shrink-0" />
                     <span>{t(lang, 'workspace_add')}</span>
                   </button>
                 )}
@@ -775,10 +785,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
                     onClick={() => { onMenuOpen(null); onManageWorkspaces(); }}
                     className="w-full flex items-center gap-2 px-3 py-2 border border-transparent hover:border-border-light text-sm text-content-secondary glass-option-hover transition-colors cursor-pointer"
                   >
-                    <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="12" cy="12" r="3" />
-                      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                    </svg>
+                    <GearIcon className="w-3.5 h-3.5 shrink-0" />
                     <span>{t(lang, 'workspace_manage')}</span>
                   </button>
                 )}
@@ -812,7 +819,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
                 <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
               </svg>
             ) : isStopState
-              ? <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><rect width="10" height="10" rx="1.5" /></svg>
+              ? <StopIcon className="w-[10px] h-[10px]" />
               : '↑'}
           </button>
         </div>

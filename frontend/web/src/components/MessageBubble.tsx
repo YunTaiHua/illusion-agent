@@ -26,6 +26,7 @@ import { toolDisplayName } from '../utils/toolDisplayName';
 import { renderAnsi } from '../utils/ansi';
 import { openImagePreview } from '../utils/imagePreview';
 import type { TranscriptItem, PendingToolCall } from '../types/protocol';
+import { CheckIcon, CopyIcon, RegenerateIcon, RewindIcon } from './icons';
 
 /**
  * HTML 消毒 schema（防 XSS，对齐 opencode 的 DOMPurify 处理）
@@ -295,13 +296,9 @@ const MessageActions = memo(function MessageActions({ text, lang, onRewind, onRe
         title={copied ? t(lang, 'copied') : t(lang, 'copy')}
       >
         {copied ? (
-          <svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="square">
-            <path d="M5 11.9657L8.37838 14.7529L15 5.83398" />
-          </svg>
+          <CheckIcon className="w-[13px] h-[13px]" />
         ) : (
-          <svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-            <path d="M6.2513 6.24935V2.91602H17.0846V13.7493H13.7513M13.7513 6.24935V17.0827H2.91797V6.24935H13.7513Z" />
-          </svg>
+          <CopyIcon className="w-[13px] h-[13px]" />
         )}
       </button>
       {onRewind && (
@@ -311,10 +308,7 @@ const MessageActions = memo(function MessageActions({ text, lang, onRewind, onRe
           className={`w-6 h-6 flex items-center justify-center rounded text-content-disabled hover:text-content-primary hover:bg-black/5 transition-colors ${dis}`}
           title={t(lang, 'rewind')}
         >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M3 7v6h6" />
-            <path d="M21 17a9 9 0 0 0-15-6.7L3 13" />
-          </svg>
+          <RewindIcon className="w-[13px] h-[13px]" />
         </button>
       )}
       {onRegenerate && (
@@ -324,10 +318,7 @@ const MessageActions = memo(function MessageActions({ text, lang, onRewind, onRe
           className={`w-6 h-6 flex items-center justify-center rounded text-content-disabled hover:text-content-primary hover:bg-black/5 transition-colors ${dis}`}
           title={t(lang, 'regenerate')}
         >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
-            <path d="M21 3v5h-5" />
-          </svg>
+          <RegenerateIcon className="w-[13px] h-[13px]" />
         </button>
       )}
     </div>
@@ -449,7 +440,7 @@ function DiffLines({ text }: { text: string }) {
           color = 'text-diff-hunk';
         }
         return (
-          <div key={i} className={`whitespace-pre-wrap break-words ${color}`}>
+          <div key={i} className={`whitespace-pre-wrap [overflow-wrap:anywhere] ${color}`}>
             {line || '\u00A0'}
           </div>
         );
@@ -500,7 +491,7 @@ const ToolResultBubble = memo(function ToolResultBubble({ name, text, isError, t
         {/* 圆点右移 3px 使其对称轴（7px）与大脑图标重合；文本缩进不变
             （3px + 8px + 9px = 14px + 6px = 20px）；mt-2 垂直居中 */}
         <span className={`inline-block w-2 h-2 rounded-full shrink-0 mt-2 ml-[3px] mr-[9px] ${isError ? 'bg-danger' : 'bg-primary'}`} />
-        <span>
+        <span className="flex-1 min-w-0 break-all">
           <span className={isError ? 'text-danger' : 'text-content-primary'}>{displayName}</span>
           {/* 预览行在展开/折叠时均保留，展开后与结果正文并存；字号介于工具名与正文之间 */}
           {summary && <span className={`text-sm ${isError ? 'text-danger' : 'text-content-disabled'}`}>（{summary}）</span>}
@@ -510,7 +501,7 @@ const ToolResultBubble = memo(function ToolResultBubble({ name, text, isError, t
       {open && hasContent && (
         <div className={`mt-1 ml-3.5 p-2.5 font-mono text-xs leading-relaxed max-h-96 overflow-y-auto scrollbar-hidden rounded-lg select-text ${isError ? 'text-danger bg-danger/5 border border-danger/20' : 'text-content-primary bg-surface-card-alt border border-border-light'}`}>
           {text && (
-            isDiff ? <DiffLines text={text} /> : <div className="whitespace-pre-wrap break-words">{renderAnsi(text)}</div>
+            isDiff ? <DiffLines text={text} /> : <div className="whitespace-pre-wrap [overflow-wrap:anywhere]">{renderAnsi(text)}</div>
           )}
         </div>
       )}
@@ -654,7 +645,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({
         <div className="animate-fade">
           <div onContextMenu={handleContentContextMenu} className="relative">
             <div className="text-sm text-content-secondary leading-relaxed select-text mt-1.5 opacity-80 py-1">
-              <div className="prose prose-sm max-w-full">
+              <div className="prose prose-sm max-w-full [overflow-wrap:anywhere]">
                 <ReactMarkdown remarkPlugins={[remarkGfm, remarkSuperscript]} rehypePlugins={rehypePlugins} urlTransform={urlTransform} components={mdComponents}>
                   {text}
                 </ReactMarkdown>
@@ -881,7 +872,7 @@ export function StreamingBuffer({ text, reasoning, reasoningStreaming, lang }: {
         />
       )}
       {hasText && (
-        <div className="text-content-primary text-sm prose max-w-full select-text">
+        <div className="text-content-primary text-sm prose max-w-full select-text [overflow-wrap:anywhere]">
           <ReactMarkdown remarkPlugins={[remarkGfm, remarkSuperscript]} rehypePlugins={rehypePlugins} urlTransform={urlTransform} components={mdComponents}>
             {text}
           </ReactMarkdown>

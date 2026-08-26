@@ -1,8 +1,8 @@
 /**
  * @fileoverview 自定义数字输入模态组件
  *
- * Web 前端的轻量模态对话框，用于 /max-tokens 与 /context-window
- * 选择命令的 custom / __custom__ 分支：弹窗接收一个正整数字符串。
+ * Web 前端的轻量模态对话框，现用于 /rename 分支的重命名文本输入
+ * （文本模式；数字模式由 terminal 端的 max-tokens/context-window custom 分支复用）。
  *
  * 视觉风格与 AgentWizardForm 表单保持一致：
  * - bg-surface-card 实色卡片 + border + shadow-card

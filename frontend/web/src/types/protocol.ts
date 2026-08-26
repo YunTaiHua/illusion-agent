@@ -42,7 +42,7 @@ export interface TranscriptItem {
    *  由前端在 tool_completed 时从 pending 状态转移保留——agent 子任务的
    *  思考过程在完成后折叠展示，不随 pending 移除而丢失） */
   progress_messages?: Array<{message: string; type?: string}>;
-  /** 命令产物标记：命令选择器产生的转录（如 /context set 512000），非真实用户输入 */
+  /** 命令产物标记：命令选择器产生的转录（如 /compact 压缩历史），非真实用户输入 */
   is_command?: boolean;
 }
 
@@ -416,6 +416,7 @@ export type FrontendRequest =
   | { type: 'web_set_setting'; setting_key: string; setting_value: string | number | boolean }
   | { type: 'web_request_sessions'; limit?: number; offset?: number }
   | { type: 'web_request_models' }
+  | { type: 'web_refresh_status' }
   | { type: 'web_request_resources'; session_id?: string; cwd?: string }
   | { type: 'web_request_file_tree'; path?: string; session_id?: string; cwd?: string }
   | { type: 'web_request_git_status'; session_id?: string; cwd?: string }

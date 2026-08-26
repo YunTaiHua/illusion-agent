@@ -329,7 +329,7 @@ export interface WebSocketSessionState {
   openSessionFile: (path: string) => void;
   /** 会话级内联选项（活跃视图） */
   inlineOptions: SelectRequestPayload | null;
-  /** 设置活跃会话的内联选项（/language 等前端本地弹出的选择框） */
+  /** 设置活跃会话的内联选项（/rename 等前端本地弹出的选择框） */
   setInlineOptions: (payload: SelectRequestPayload | null) => void;
   // ---- agent 向导相关（全局）----
   /** agent 向导可选工具列表（来自 agent_wizard_init_response） */
@@ -1412,7 +1412,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
           return;
         }
 
-        // 内联选项（B 通道多步选择：rewind/context 等）
+        // 内联选项（后端 select_request 驱动的多步选择）
         if (evt.type === 'select_request') {
           const m = evt.modal ?? {};
           const cmd = String(m.command ?? '');

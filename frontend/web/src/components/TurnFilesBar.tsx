@@ -21,6 +21,7 @@
 import { memo, useCallback, useEffect, useState } from 'react';
 import { t, type UiLanguage } from '../i18n';
 import type { FileStatItem } from '../types/protocol';
+import { ChevronRightIcon, ModifiedFileIcon } from './icons';
 
 /**
  * TurnFilesBar 组件属性接口
@@ -68,19 +69,10 @@ const TurnFilesBar = memo(function TurnFilesBar({ lang, rawPaths, stats, onReque
       >
         {/* 16px 图标槽位：常显铅笔图标；hover 时图标淡出、三角指示器淡入 */}
         <span className="relative w-4 h-4 shrink-0 flex items-center justify-center">
-          <svg
-            className="absolute inset-0 m-auto w-4 h-4 text-primary transition-opacity duration-100 group-hover/head:opacity-0"
-            viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"
-          >
-            <path d="M4 12.4l.4-1.9 7-7a1.06 1.06 0 0 1 1.5 0l.6.6a1.06 1.06 0 0 1 0 1.5l-7 7-1.9.4z" />
-            <path d="M10.7 5.7l.6.6" />
-          </svg>
-          <svg
+          <ModifiedFileIcon className="absolute inset-0 m-auto w-4 h-4 text-primary transition-opacity duration-100 group-hover/head:opacity-0" />
+          <ChevronRightIcon
             className={`absolute inset-0 m-auto w-3.5 h-3.5 text-content-secondary opacity-0 group-hover/head:opacity-100 transition-[opacity,transform] duration-100 group-hover/head:duration-150 ${open ? 'rotate-90' : ''}`}
-            viewBox="0 0 14 14" fill="none"
-          >
-            <path d="M4.25 2.82782L4.25 11.1722C4.25 11.6622 4.84243 11.9076 5.18891 11.5611L9.36109 7.38891C9.57588 7.17412 9.57588 6.82588 9.36109 6.61109L5.18891 2.43891C4.84243 2.09243 4.25 2.33782 4.25 2.82782Z" fill="currentColor" />
-          </svg>
+          />
         </span>
         {/* 标题：普通正文大小 + 加粗；py-2.5 与侧栏目录项同高（text-sm 行高 20px + 20px = 40px） */}
         <span className="text-sm font-bold text-content-primary tracking-wide">{t(lang, 'turn_files_title')}</span>

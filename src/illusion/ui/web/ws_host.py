@@ -246,6 +246,24 @@ class WebHostConfig:
     def __post_init__(self) -> None:
         for entry in self.trusted_hosts:
             assert_trusted_authority(entry)
+
+
+# 活跃主机的模块级注册表：REST 设置路由（如 /api/settings/model-params）只会把
+# settings.json 落盘，此处让路由能找到当前连接运行中的主机，把变更热应用到
+# 会话引擎与 app_state（右栏上下文窗口显示、实际请求参数立即生效）并推送刷新。
+_active_hosts: "set[WebBackendHost]" = set()
+
+
+def iter_active_hosts() -> "list[WebBackendHost]":
+    """返回当前活跃的 Web 后端主机列表（供 REST 路由应用运行时设置变更）。
+
+    注意：这是进程内注册表，仅适用于单进程部署（REST 与 WS 同一事件循环）。
+    多 worker/多进程环境下，REST 落盘的进程可能没有活跃主机，热应用会静默
+    失效——此时由前端保存后主动发送的 web_refresh_status（WS 通道）兜底。
+    """
+    return list(_active_hosts)
+
+
 class WebBackendHost:
     """Web 后端主机。
 
@@ -312,6 +330,8 @@ class WebBackendHost:
 
     async def run(self) -> int:
         """运行后端主机主循环。"""
+        # 注册到活跃主机表：REST 设置路由据此把 settings 变更热应用到本主机
+        _active_hosts.add(self)
         # 构建运行时环境
         from illusion.services import workspace_registry
 
@@ -474,6 +494,7 @@ class WebBackendHost:
                     break
         finally:
             # 清理资源：取消 reader，_shutdown 处理其余 task/队列，最后关闭运行时
+            _active_hosts.discard(self)
             reader.cancel()
             try:
                 await reader
@@ -1846,6 +1867,42 @@ class WebBackendHost:
             seen.add(id(self._bundle))
             bundles.append(self._bundle)
         return bundles
+
+    def apply_runtime_settings_sync(self) -> None:
+        """REST 设置落盘后的运行时热生效（供 /api/settings/model-params 等路由调用）。
+
+        与 A 通道 _apply_setting 的分工互补：REST 路由直接改 settings.json，
+        本方法把 context_window/max_tokens/max_turns 同步到运行中主机——
+        刷新活跃 bundle 的 app_state（context_window/max_tokens 为全局字段，
+        由 state_snapshot 权威驱动，右栏上下文窗口据此更新），并把
+        max_tokens/max_turns 应用到所有已物化会话的独立引擎（真实请求参数）。
+        新建/恢复的会话在 build_session_engine 时按最新 settings 自然生效。
+        """
+        if self._bundle is None:
+            return
+        # 1. app_state 刷新（context_window / max_tokens 等全局字段）：
+        #    sync_app_state 内部按 current_settings()（重新读 settings.json）取值
+        try:
+            sync_app_state(self._active_bundle() or self._bundle)
+        except Exception:
+            log.exception("同步 app_state 失败")
+        # 2. 会话引擎即时生效：每会话持有独立 bundle/引擎，
+        #    sync_app_state 只覆盖 bundle.engine 的 max_turns，其余引擎逐一同步
+        for sr in self._sessions.values():
+            try:
+                settings = sr.bundle.current_settings()
+                sr.bundle.engine.max_tokens = settings.max_tokens
+                sr.bundle.engine.set_max_turns(settings.max_turns)
+            except Exception:
+                log.exception("同步模型参数到会话 %s 失败", sr.session_id)
+        # 2.5 兜底：活跃/共享 bundle 引擎（尚未物化会话的工作区 bundle）
+        try:
+            active_bundle = self._active_bundle() or self._bundle
+            active_bundle.engine.max_tokens = active_bundle.current_settings().max_tokens
+        except Exception:
+            log.exception("同步 max_tokens 到活跃 bundle 失败")
+        # 3. 推送全局状态快照，前端右栏上下文窗口立即刷新
+        self._create_background_task(self._emit(self._status_snapshot()))
 
     async def _close_workspace_bundles(self) -> None:
         """关闭所有已构建的工作区 bundle（连接生命周期结束时调用）。"""

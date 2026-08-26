@@ -39,6 +39,12 @@ export interface SettingsResponse {
   ui_language: string;
   /** 工作目录（未设置时为 null） */
   working_directory: string | null;
+  /** 上下文窗口大小（token） */
+  context_window: number;
+  /** 最大输出 tokens */
+  max_tokens: number;
+  /** 最大对话轮次（1~512） */
+  max_turns: number;
   /** 当前活跃模型引用，如 env_1.model_1 */
   model: string;
   /** Web 端主题：light（浅色）/ dark（深色）/ system（跟随系统） */
@@ -486,6 +492,12 @@ export const settingsApi = {
     request<{ success: boolean; working_directory: string | null }>('/api/settings/working_directory', {
       method: 'PATCH',
       body: JSON.stringify({ working_directory: workingDirectory }),
+    }),
+  /** 修改模型参数（context_window / max_tokens / max_turns，仅更新提供的字段） */
+  updateModelParams: (payload: { context_window?: number; max_tokens?: number; max_turns?: number }) =>
+    request<{ success: boolean }>('/api/settings/model-params', {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
     }),
   /** 修改记忆配置（enabled / extract_model / dream_model / directory，只更新提供的字段） */
   updateMemory: (payload: UpdateMemoryPayload) =>

@@ -94,6 +94,14 @@ class UpdateWorkingDirectoryRequest(BaseModel):
     working_directory: str = ""
 
 
+class UpdateModelParamsRequest(BaseModel):
+    """修改模型参数（context_window / max_tokens / max_turns，均为可选）。"""
+
+    context_window: int | None = Field(default=None, gt=0, description="上下文窗口大小（token）")
+    max_tokens: int | None = Field(default=None, gt=0, description="最大输出 tokens")
+    max_turns: int | None = Field(default=None, ge=1, le=512, description="最大轮次（1~512）")
+
+
 class UpdateMemoryRequest(BaseModel):
     """修改记忆配置请求体。
 
@@ -431,6 +439,9 @@ def register_env_routes(app: FastAPI, host_config: Any | None = None) -> None:
         return {
             "ui_language": settings.ui_language,
             "working_directory": settings.working_directory,
+            "context_window": settings.context_window,
+            "max_tokens": settings.max_tokens,
+            "max_turns": settings.max_turns,
             "model": settings.model,
             "theme": settings.theme,
             "memory": {
@@ -655,3 +666,24 @@ def register_env_routes(app: FastAPI, host_config: Any | None = None) -> None:
         new_settings = settings.model_copy(update={"working_directory": str(resolved)})
         save_settings(new_settings)
         return {"success": True, "working_directory": str(resolved)}
+
+    @app.patch("/api/settings/model-params")
+    async def update_model_params(req: UpdateModelParamsRequest) -> dict[str, Any]:
+        """修改模型参数（context_window / max_tokens / max_turns）。
+
+        仅更新请求体提供的字段；FastAPI 的 Field 校验保证取值为正（max_turns 限 1~512）。
+        保存后把变更热应用到所有活跃 Web 主机的会话引擎与 app_state，
+        使右栏上下文窗口显示与后续实际请求立即生效。
+        """
+        updates = {k: v for k, v in req.model_dump().items() if v is not None}
+        if not updates:
+            return {"success": True}
+        settings = load_settings()
+        new_settings = settings.model_copy(update=updates)
+        save_settings(new_settings)
+        # 运行时热生效：各活跃主机同步会话引擎与 app_state，并推送状态快照
+        from illusion.ui.web.ws_host import iter_active_hosts
+
+        for host in iter_active_hosts():
+            host.apply_runtime_settings_sync()
+        return {"success": True, **updates}

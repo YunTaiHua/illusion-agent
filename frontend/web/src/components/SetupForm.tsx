@@ -208,6 +208,10 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
   const [titleEnabled, setTitleEnabled] = useState(false);
   /** 标题生成模型（空 = 继承当前） */
   const [titleModel, setTitleModel] = useState('');
+  /** 模型参数（上下文窗口大小 / 最大输出 tokens / 最大轮次，字符串态便于自由编辑） */
+  const [contextWindow, setContextWindow] = useState<string>('200000');
+  const [maxTokens, setMaxTokens] = useState<string>('16384');
+  const [maxTurns, setMaxTurns] = useState<string>('200');
   /** 权限 LLM 自动审核开关（auto 模式高危操作与沙箱拦截由 LLM 审核放行） */
   const [reviewAuto, setReviewAuto] = useState(false);
   /** 审核模型（空 = 继承当前会话模型） */
@@ -251,6 +255,10 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
         setMemDir(s.memory?.directory ?? '');
         setTitleEnabled(s.title?.enabled ?? false);
         setTitleModel(s.title?.model ?? '');
+        // 模型参数（默认值与后端 Settings 模型对齐）
+        setContextWindow(String(s.context_window ?? 200000));
+        setMaxTokens(String(s.max_tokens ?? 16384));
+        setMaxTurns(String(s.max_turns ?? 200));
         // 权限 LLM 自动审核配置（auto 模式高危操作与沙箱拦截由 LLM 审核放行）
         setReviewAuto(s.permission_review?.auto_review ?? false);
         setReviewModel(s.permission_review?.review_model ?? '');
@@ -382,6 +390,31 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
       if (settings && (workDir.trim() || '') !== (settings.working_directory ?? '')) {
         await settingsApi.updateWorkingDirectory(workDir.trim());
       }
+      // 3.1 模型参数改动（context_window / max_tokens / max_turns）
+      // 字符串态自由编辑：清空/输入不钳制，保存时统一校验为正整数（max_turns 1~512），
+      // 非法输入报错终止保存，避免"清空即变 1"的反人类体验；空字段视为不改动
+      const tdCw = parseInt(contextWindow, 10);
+      const tdMt = parseInt(maxTokens, 10);
+      const tdTurns = parseInt(maxTurns, 10);
+      const cwValid = contextWindow.trim() === '' || (Number.isInteger(tdCw) && tdCw > 0);
+      const mtValid = maxTokens.trim() === '' || (Number.isInteger(tdMt) && tdMt > 0);
+      const turnsValid = maxTurns.trim() === '' || (Number.isInteger(tdTurns) && tdTurns >= 1 && tdTurns <= 512);
+      if (!cwValid || !mtValid || !turnsValid) {
+        setSaving(false);
+        setSaveError(t(lang, 'modelParamsInvalid'));
+        return;
+      }
+      const modelParamsPayload: { context_window?: number; max_tokens?: number; max_turns?: number } = {};
+      if (contextWindow.trim() !== '' && cwValid) modelParamsPayload.context_window = tdCw;
+      if (maxTokens.trim() !== '' && mtValid) modelParamsPayload.max_tokens = tdMt;
+      if (maxTurns.trim() !== '' && turnsValid) modelParamsPayload.max_turns = tdTurns;
+      if (settings && Object.keys(modelParamsPayload).length > 0 && (
+        (modelParamsPayload.context_window !== undefined && modelParamsPayload.context_window !== settings.context_window) ||
+        (modelParamsPayload.max_tokens !== undefined && modelParamsPayload.max_tokens !== settings.max_tokens) ||
+        (modelParamsPayload.max_turns !== undefined && modelParamsPayload.max_turns !== settings.max_turns)
+      )) {
+        await settingsApi.updateModelParams(modelParamsPayload);
+      }
       // 3.5 记忆配置改动（任一字段变化即提交）
       if (settings && (
         memEnabled !== settings.memory?.enabled ||
@@ -453,7 +486,7 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
       setSaving(false);
       setSaveError(err instanceof Error ? err.message : String(err));
     }
-  }, [settings, uiLang, workDir, memEnabled, memAutoExtract, memExtractModel, memDreamModel, memDir, titleEnabled, titleModel, reviewAuto, reviewModel, channels, firstLogin, showAddEnv, draft, draftValid, createEnvFromDraft, onSetUiLanguage, onSaved, sandbox]);
+  }, [settings, uiLang, workDir, contextWindow, maxTokens, maxTurns, memEnabled, memAutoExtract, memExtractModel, memDreamModel, memDir, titleEnabled, titleModel, reviewAuto, reviewModel, channels, firstLogin, showAddEnv, draft, draftValid, createEnvFromDraft, onSetUiLanguage, onSaved, sandbox, lang]);
 
   /** 删除环境（即时 API） */
   const handleDeleteEnv = useCallback(async (envKey: string) => {
@@ -611,6 +644,12 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
               onTitleEnabledChange={setTitleEnabled}
               titleModel={titleModel}
               onTitleModelChange={setTitleModel}
+              contextWindow={contextWindow}
+              onContextWindowChange={setContextWindow}
+              maxTokens={maxTokens}
+              onMaxTokensChange={setMaxTokens}
+              maxTurns={maxTurns}
+              onMaxTurnsChange={setMaxTurns}
               reviewAuto={reviewAuto}
               onReviewAutoChange={setReviewAuto}
               reviewModel={reviewModel}
@@ -855,6 +894,15 @@ interface SettingsTabProps {
   /** 标题生成模型（空 = 继承当前） */
   titleModel: string;
   onTitleModelChange: (v: string) => void;
+  /** 上下文窗口大小（token，字符串态：保存时校验为正整数） */
+  contextWindow: string;
+  onContextWindowChange: (v: string) => void;
+  /** 最大输出 tokens（字符串态：保存时校验为正整数） */
+  maxTokens: string;
+  onMaxTokensChange: (v: string) => void;
+  /** 最大对话轮次（字符串态：保存时校验为 1~512） */
+  maxTurns: string;
+  onMaxTurnsChange: (v: string) => void;
   /** 权限 LLM 自动审核开关（auto 模式高危操作与沙箱拦截由 LLM 审核放行） */
   reviewAuto: boolean;
   onReviewAutoChange: (v: boolean) => void;
@@ -1101,6 +1149,34 @@ function SettingsTab(p: SettingsTabProps) {
           >
             {t(lang, 'workspace_manage')}
           </button>
+        </div>
+      </div>
+
+      {/* 模型参数（context_window / max_tokens / max_turns，放工作目录下方） */}
+      <div className="space-y-3">
+        <div>
+          <div className={labelClass}>{t(lang, 'setupFieldContextWindow')}</div>
+          <input
+            type="number" min={1} step={1} value={p.contextWindow}
+            onChange={(e) => p.onContextWindowChange(e.target.value)}
+            className={`${inputClass} no-spinner`}
+          />
+        </div>
+        <div>
+          <div className={labelClass}>{t(lang, 'setupFieldMaxTokens')}</div>
+          <input
+            type="number" min={1} step={1} value={p.maxTokens}
+            onChange={(e) => p.onMaxTokensChange(e.target.value)}
+            className={`${inputClass} no-spinner`}
+          />
+        </div>
+        <div>
+          <div className={labelClass}>{t(lang, 'setupFieldMaxTurns')}</div>
+          <input
+            type="number" min={1} max={512} step={1} value={p.maxTurns}
+            onChange={(e) => p.onMaxTurnsChange(e.target.value)}
+            className={`${inputClass} no-spinner`}
+          />
         </div>
       </div>
 

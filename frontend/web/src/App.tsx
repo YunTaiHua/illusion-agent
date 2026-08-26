@@ -42,7 +42,9 @@ const WS_URL = `ws://${window.location.host}/ws`;
 const TOAST_DURATION = 5000;
 
 /** B 通道允许的指令集合（前端识别并走 web_query） */
-const B_COMMANDS = ['rewind', 'compact', 'context', 'export', 'init', 'turns', 'language', 'max-tokens', 'rename'];
+const B_COMMANDS = ['compact', 'export', 'init', 'rename'];
+// 阻塞会话的指令（busy 中不可用，通过 toast 提示）；余下 B 类指令为非阻塞，不改变 busy 状态
+const BLOCKING_COMMANDS = new Set(['compact']);
 
 /** 右栏（区块栏）最小宽度 */
 const MIN_RIGHT_PANEL = 260;
@@ -136,10 +138,10 @@ export default function App() {
   // 内联选项状态：由 hook 按会话维护（session.inlineOptions / session.setInlineOptions），
   // 切换会话时选项随会话隔离，互不串扰
 
-  // 自定义数字输入模态框状态（/max-tokens 与 /context-window 的 custom 分支触发）
+  // 自定义文本输入模态框状态（现仅由 /rename 触发）
   const [customInputModal, setCustomInputModal] = useState<{
     prompt: string;
-    command: 'max-tokens' | 'context-window' | 'rename';
+    command: 'rename';
     invalidMessage?: string;
     targetSessionId?: string;
   } | null>(null);
@@ -304,8 +306,9 @@ export default function App() {
    * 处理用户提交的命令（三通道有序判定）
    *
    * 通道隔离原则：
-   * - B 通道（web_query）：输入框识别的精细化指令（rewind/compact/context/export/init/
-   *   turns/language/max-tokens），走 web_query 结构化处理。
+   * - B 通道（web_query）：输入框识别的精细化指令（compact/export/init/rename），
+   *   走 web_query 结构化处理。阻塞会话的指令（compact）在 busy 时 toast 提示
+   *   不可用；非阻塞指令不改变 busy 状态。
    * - 文本通道（submit_line）：普通文本，或未被识别的斜杠指令（A 类如 /resume /model
    *   以及已删除指令），全部当普通文本发给 LLM。
    *
@@ -336,19 +339,6 @@ export default function App() {
         });
         return;
       }
-      // /language（无参数）→ 弹出语言选择框，不走 web_query
-      if (cmdName === 'language' && !args) {
-        const current = String(session.status?.ui_language ?? 'zh-CN');
-        session.setInlineOptions({
-          command: 'language',
-          title: t(lang, 'language'),
-          options: [
-            { value: 'set zh-CN', label: '简体中文', description: '中文界面', active: current === 'zh-CN' },
-            { value: 'set en', label: 'English', description: 'English UI', active: current === 'en' },
-          ],
-        });
-        return;
-      }
       // /agent create | /agent new → 打开 agent 创建向导
       // /agent（无参数）→ 分支选择器：查看已完成 agent / 创建新 agent
       // /agent <id> → 提交后端查看摘要
@@ -371,20 +361,27 @@ export default function App() {
           });
           return;
         }
-      // /agent <id> → 走命令注册表处理
-      session.setBusyTrue();
+      // /agent <id> → 走命令注册表处理（摘要查询非阻塞，进预览面板，不置 busy）
       session.sendRequest({ type: 'submit_line', line: trimmed });
       return;
       }
       // /goal → 走命令注册表（A 通道，不带 treat_as_text）：后端执行 /goal 命令，
-      // drive_goal 轮次正常流式，命令结果以 toast 呈现（创建目标的长任务入口）
+      // drive_goal 轮次正常流式，命令结果以 toast 呈现（创建目标的长任务入口）。
+      // busy 时不可用，通过 toast 提示
       if (cmdName === 'goal') {
+        if (session.busy) { showToast(t(lang, 'cmd_unavailable_busy').replace('{cmd}', '/goal'), 'info'); return; }
         session.setBusyTrue();
         session.sendRequest({ type: 'submit_line', line: trimmed });
         return;
       }
       if (B_COMMANDS.includes(cmdName)) {
-        session.setBusyTrue();
+        // busy 下：阻塞指令 toast 提醒不可用；非阻塞指令放行且不改变 busy
+        if (session.busy && BLOCKING_COMMANDS.has(cmdName)) {
+          showToast(t(lang, 'cmd_unavailable_busy').replace('{cmd}', `/${cmdName}`), 'info');
+          return;
+        }
+        // 非阻塞指令不置 busy；阻塞指令（空闲时）置 busy 遮挡输入
+        if (!session.busy && BLOCKING_COMMANDS.has(cmdName)) session.setBusyTrue();
         session.sendRequest({
           type: 'web_query',
           command: cmdName,
@@ -436,44 +433,15 @@ export default function App() {
       }
       return;
     }
-    // max-tokens custom 分支：切换到数字输入模态框
-    if (command === 'max-tokens' && value === 'custom') {
-      setCustomInputModal({
-        prompt: t(lang, 'maxTokensCustomPrompt'),
-        command: 'max-tokens',
-        invalidMessage: t(lang, 'maxTokensInvalid'),
-      });
-      session.setInlineOptions(null);
-      return;
-    }
-    // context-window __custom__ 分支：切换到数字输入模态框
-    if (command === 'context-window' && value === '__custom__') {
-      setCustomInputModal({
-        prompt: t(lang, 'contextWindowCustomPrompt'),
-        command: 'context-window',
-        invalidMessage: t(lang, 'contextWindowInvalid'),
-      });
-      session.setInlineOptions(null);
-      return;
-    }
+    // agent_branch 之后其余指令：内联选项直接 apply_select_command 提交
     session.setInlineOptions(null);
-    // language 走 web_query 通道（前端弹出选择框后提交）
-    if (command === 'language') {
-      session.sendRequest({
-        type: 'web_query',
-        command,
-        args: value,
-        request_id: `q-${Date.now()}`,
-      });
+    // agent 摘要：生成唯一 request_id 并传递给后端，用于精确匹配响应
+    if (command === 'agent') {
+      agentRequestIdRef.current = `agent-${Date.now()}`;
     } else {
-      // agent 摘要：生成唯一 request_id 并传递给后端，用于精确匹配响应
-      if (command === 'agent') {
-        agentRequestIdRef.current = `agent-${Date.now()}`;
-      } else {
-        agentRequestIdRef.current = null;
-      }
-      session.sendRequest({ type: 'apply_select_command', command, value, request_id: agentRequestIdRef.current ?? undefined });
+      agentRequestIdRef.current = null;
     }
+    session.sendRequest({ type: 'apply_select_command', command, value, request_id: agentRequestIdRef.current ?? undefined });
   }, [session.sendRequest, lang]);
 
   /**
@@ -484,35 +452,25 @@ export default function App() {
   const handleInlineClose = useCallback(() => session.setInlineOptions(null), []);
 
   /**
-   * 处理自定义数字输入提交
+   * 处理自定义输入提交
    *
-   * 由 CustomInputModal 触发，将用户输入的数字字符串通过 apply_select_command
-   * 通道发回后端（与 rewind/context 等多步指令一致）。
+   * 由 CustomInputModal 触发（现仅由 /rename 触发）。
    *
-   * @param value - 用户输入的数字字符串
+   * @param value - 用户输入的内容
    */
   const handleCustomSubmit = useCallback((value: string) => {
-    if (customInputModal) {
+    if (customInputModal && customInputModal.command === 'rename') {
       // rename 走 web_query 通道（携带目标 session_id，路由到目标会话所在工作区）
       // 重命名是轻量元数据操作，且目标会话可能是非活跃会话；此处不调用
       // setBusyTrue——该函数固定对活跃会话置 busy，会误把活跃会话钉在运行态，
       // 而后端 web_query_result 只重置目标会话 busy，导致活跃会话永久显示运行中。
-      if (customInputModal.command === 'rename') {
-        const sid = customInputModal.targetSessionId;
-        session.sendRequest({
-          type: 'web_query',
-          command: 'rename',
-          args: sid ? `${sid} ${value}` : value,
-          session_id: sid ?? undefined,
-          request_id: `q-${Date.now()}`,
-        });
-        setCustomInputModal(null);
-        return;
-      }
+      const sid = customInputModal.targetSessionId;
       session.sendRequest({
-        type: 'apply_select_command',
-        command: customInputModal.command,
-        value,
+        type: 'web_query',
+        command: 'rename',
+        args: sid ? `${sid} ${value}` : value,
+        session_id: sid ?? undefined,
+        request_id: `q-${Date.now()}`,
       });
     }
     setCustomInputModal(null);
@@ -601,7 +559,10 @@ export default function App() {
   const handleSetupSaved = useCallback(() => {
     session.clearFirstLogin();
     setShowSetupForm(false);
-  }, [session.clearFirstLogin]);
+    // 设置保存后主动向后端请求一次状态刷新（context_window/max_tokens/max_turns
+    // 热应用到运行中主机并推送快照），保证右栏上下文窗口与后续请求参数立即生效
+    session.sendRequest({ type: 'web_refresh_status' });
+  }, [session.clearFirstLogin, session.sendRequest]);
 
   /** 处理关闭设置表单 */
   const handleCloseSetupForm = useCallback(() => {
@@ -1269,13 +1230,13 @@ export default function App() {
         </div>
       )}
 
-      {/* 自定义输入模态框（/max-tokens custom、/context-window __custom__、/rename 分支） */}
+      {/* 自定义文本输入模态框（/rename 分支） */}
       {customInputModal && (
         <CustomInputModal
           lang={lang}
           prompt={customInputModal.prompt}
           invalidMessage={customInputModal.invalidMessage}
-          mode={customInputModal.command === 'rename' ? 'text' : 'numeric'}
+          mode="text"
           onSubmit={handleCustomSubmit}
           onCancel={handleCustomCancel}
         />

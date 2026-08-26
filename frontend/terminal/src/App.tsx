@@ -33,7 +33,7 @@ import {TodoPanel} from './components/TodoPanel.js';
 import {useBackendSession} from './hooks/useBackendSession.js';
 import {normalizeLanguage, t, UiLanguage} from './i18n.js';
 import {ThemeProvider, useTheme} from './theme/ThemeContext.js';
-import type {FrontendConfig} from './types.js';
+import type {FrontendConfig, FileMentionCandidate} from './types.js';
 import {fmtTokens} from './utils/fmtTokens.js';
 import {detectMentionToken, formatMentionInsertion} from './utils/mention.js';
 import {VERSION} from './version.js';
@@ -144,11 +144,11 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 	const [mentionIndex, setMentionIndex] = useState(0);
 	/** Esc 关闭后不再弹出；token 变化时重新武装 */
 	const [mentionDismissed, setMentionDismissed] = useState(false);
-	/** 已发出的最新请求 id（响应 requestId 与之不符视为过期丢弃） */
-	const [acceptedMentionReqId, setAcceptedMentionReqId] = useState<string | null>(null);
 	/** 应用提及后的光标位置（cursorReset 重挂载时定位到插入点之后） */
 	const [pendingCaret, setPendingCaret] = useState<number | null>(null);
 	const mentionReqIdRef = useRef(0);
+	/** 已发出的最新请求 id（ref 形式：仅作响应过期判别，不触发渲染，避免往返期间菜单闪没） */
+	const latestMentionReqIdRef = useRef<string | null>(null);
 	/** /agent create 触发的分步创建向导是否可见 */
 	const [showAgentWizard, setShowAgentWizard] = useState(false);
 	/** Ctrl+G 两段式第二段：等待 p/r/e/c 操作键 */
@@ -247,7 +247,8 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 		if (!tokenKey) return;
 		const timer = setTimeout(() => {
 			const rid = `m${++mentionReqIdRef.current}`;
-			setAcceptedMentionReqId(rid);
+			// 仅更新 ref（不触发渲染），请求在途期间保留旧候选继续显示，避免菜单闪没
+			latestMentionReqIdRef.current = rid;
 			session.sendRequest({
 				type: 'web_request_file_mentions',
 				query: tokenKey.slice(tokenKey.indexOf(':') + 1),
@@ -260,13 +261,27 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 		if (!mentionToken) setMentionIndex(0);
 	}, [mentionToken]);
 
-	// 仅采纳最新请求的响应，并按响应回显的规范化 query 二次过滤（防抖窗口内的旧结果避免闪烁）
+	// 仅采纳最新请求的响应写入缓存；请求在途时保留旧缓存继续渲染，新响应到达后整批替换。
+	// 过期响应（requestId 不符）天然丢弃；过滤统一按当前 tokenQuery 进行，缓存无需保留 query 字段
+	const [mentionCache, setMentionCache] = useState<{
+		requestId: string;
+		candidates: FileMentionCandidate[];
+	} | null>(null);
+	// 过期响应天然丢弃：仅当响应 requestId 等于最新已发出请求 id 时才采纳写入缓存
+	useEffect(() => {
+		const r = session.fileMentions;
+		if (r && latestMentionReqIdRef.current && r.requestId === latestMentionReqIdRef.current) {
+			setMentionCache({ requestId: r.requestId, candidates: r.candidates });
+		}
+	}, [session.fileMentions]);
+
+	// 候选基于缓存 + 当前 token 查询串实时过滤（新请求在途时旧候选按当前输入过滤，保持菜单稳定且响应式）
+	const tokenQuery = mentionToken?.query ?? '';
 	const mentionCandidates = useMemo(() => {
-		const result = session.fileMentions;
-		if (!result || result.requestId !== acceptedMentionReqId) return [];
-		const q = result.query.toLowerCase();
-		return q ? result.candidates.filter((c) => c.path.toLowerCase().includes(q)) : result.candidates;
-	}, [session.fileMentions, acceptedMentionReqId]);
+		if (!mentionCache) return [];
+		const q = tokenQuery.toLowerCase();
+		return q ? mentionCache.candidates.filter((c) => c.path.toLowerCase().includes(q)) : mentionCache.candidates;
+	}, [mentionCache, tokenQuery]);
 
 	const showMentionMenu =
 		mentionToken !== null

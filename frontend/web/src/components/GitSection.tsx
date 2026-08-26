@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { t, type UiLanguage } from '../i18n';
 import { CollapsibleSection } from './RightPanel';
+import { GitBranchIcon } from './icons';
 import type { GitFileStatus, GitStatusSnapshot } from '../types/protocol';
 
 /**
@@ -72,12 +73,7 @@ export default function GitSection({ lang, status, loading, onRefresh, onOpenDif
       refreshLabel={t(lang, 'refresh')}
       topBorder={topBorder}
       icon={
-        <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="4" cy="3.5" r="1.75" />
-          <circle cx="4" cy="12.5" r="1.75" />
-          <circle cx="12" cy="6.5" r="1.75" />
-          <path d="M4 5.25v5.5M5.7 5.6c2.8.5 3.3 1.5 4.6 1.5M5.75 11.2c3.25-.6 3.25-4.5 4.55-4.2" />
-        </svg>
+        <GitBranchIcon className="w-3.5 h-3.5" />
       }
     >
       {notRepo ? (

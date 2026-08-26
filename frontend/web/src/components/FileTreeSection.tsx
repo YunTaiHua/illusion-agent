@@ -12,7 +12,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { t, type UiLanguage } from '../i18n';
 import { CollapsibleSection } from './RightPanel';
 import type { FileTreeNode } from '../types/protocol';
-import { FolderClosedIcon, FolderOpenIcon } from './icons';
+import { ChevronRightIcon, FileIcon as FileGlyphIcon, FolderClosedIcon, FolderOpenIcon, FolderOutlineIcon } from './icons';
 
 /**
  * FileTreeSection 组件属性接口
@@ -94,7 +94,7 @@ export default function FileTreeSection({ lang, fileTree, loadingPaths, onReques
       onRefresh={handleRefresh}
       refreshLabel={t(lang, 'refresh')}
       topBorder={topBorder}
-      icon={<FolderClosedIcon className="w-3.5 h-3.5" />}
+      icon={<FolderOutlineIcon className="w-3.5 h-3.5" />}
     >
       {rootLoading && rootEntries.length === 0 ? (
         <div className="px-2 py-1 text-xs text-content-disabled">{t(lang, 'loading')}</div>
@@ -150,12 +150,9 @@ function TreeRows({
                 style={{ paddingLeft: pad }}
                 title={node.path}
               >
-                <svg
+                <ChevronRightIcon
                   className={`w-3 h-3 shrink-0 text-content-disabled transition-transform duration-150 ${isOpen ? 'rotate-90' : ''}`}
-                  viewBox="0 0 14 14" fill="none"
-                >
-                  <path d="M4.25 2.83v8.34c0 .49.59.74.94.39l4.17-4.17a.54.54 0 0 0 0-.78L5.19 2.44a.55.55 0 0 0-.94.39z" fill="currentColor" />
-                </svg>
+                />
                 <FolderIcon open={isOpen} />
                 <span className="text-content-primary font-medium truncate flex-1 text-left">{node.name}</span>
                 {dirLoading && <span className="text-[10px] text-content-disabled shrink-0">…</span>}
@@ -201,14 +198,8 @@ function FolderIcon({ open }: { open: boolean }) {
   return open ? <FolderOpenIcon className={cls} /> : <FolderClosedIcon className={cls} />;
 }
 
-/** 文件图标（按扩展名着色） */
+/** 文件图标（按扩展名着色；复用 icons.tsx 的 FileIcon） */
 function FileIcon({ name }: { name: string }) {
   const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
-  const color = EXT_COLORS[ext] ?? undefined;
-  return (
-    <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 16 16" fill="none" stroke={color ?? 'currentColor'} style={color ? { color } : undefined} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M9 1.5H4A1.5 1.5 0 0 0 2.5 3v10A1.5 1.5 0 0 0 4 14.5h8a1.5 1.5 0 0 0 1.5-1.5V6L9 1.5z" className={!color ? 'text-content-disabled' : ''} />
-      <path d="M8.75 1.75V6h4.5" className={!color ? 'text-content-disabled' : ''} />
-    </svg>
-  );
+  return <FileGlyphIcon className="w-3.5 h-3.5 shrink-0" color={EXT_COLORS[ext]} />;
 }

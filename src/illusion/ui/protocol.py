@@ -85,6 +85,7 @@ class FrontendRequest(BaseModel):
         "web_set_setting",
         "web_request_sessions",
         "web_request_models",
+        "web_refresh_status",
         "web_request_resources",
         "web_request_file_tree",
         "web_request_git_status",
