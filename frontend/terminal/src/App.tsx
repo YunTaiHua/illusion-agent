@@ -293,6 +293,14 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 		setCursorReset((c) => c + 1);
 	}, [mentionToken]);
 
+	// 消费 pendingCaret：重挂载（cursorReset 变化）已完成初始化后清理，
+	// 避免残留值污染未来其他路径的 cursorReset 递增（正确光标位置）
+	useEffect(() => {
+		if (pendingCaret === null) return;
+		const raf = requestAnimationFrame(() => setPendingCaret(null));
+		return () => cancelAnimationFrame(raf);
+	}, [cursorReset, pendingCaret]);
+
 	/**
 	 * 动态设置终端窗口/tab 标题为当前会话显示名称
 	 *

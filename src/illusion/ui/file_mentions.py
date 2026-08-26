@@ -127,33 +127,36 @@ def file_mention_candidates(root: str, query: str) -> tuple[list[dict[str, Any]]
     while queue and len(candidates) <= _MENTION_MAX_CANDIDATES and scanned < _MENTION_MAX_SCANNED:
         dir_rel, depth = queue.popleft()
         try:
+            # 先过滤可见条目并缓存 is_dir（避免排序比较重复 stat 且隐藏条目
+            # 不消耗扫描预算），再按「目录优先 + 名称不区分大小写」排序
             with os.scandir(root_path / dir_rel if dir_rel else root_path) as it:
-                def _dir_key(e: os.DirEntry[str]) -> tuple[bool, str]:
+                visible: list[tuple[str, bool]] = []
+                for child in it:
                     try:
-                        return (not e.is_dir(follow_symlinks=False), e.name.lower())
+                        is_dir = child.is_dir(follow_symlinks=False)
                     except OSError:
-                        return (True, e.name.lower())
-                children = sorted(it, key=_dir_key)
+                        continue
+                    if not tree_entry_visible(child.name, is_dir):
+                        continue
+                    visible.append((child.name, is_dir))
         except OSError:
             continue
-        for child in children:
+        visible.sort(key=lambda e: (not e[1], e[0].lower()))
+        for name, is_dir in visible:
             scanned += 1
             if scanned > _MENTION_MAX_SCANNED:
                 truncated = True
                 break
-            try:
-                is_dir = child.is_dir(follow_symlinks=False)
-            except OSError:
-                continue
-            if not tree_entry_visible(child.name, is_dir):
-                continue
-            child_rel = f"{dir_rel}/{child.name}" if dir_rel else child.name
+            child_rel = f"{dir_rel}/{name}" if dir_rel else name
             if lowered in child_rel.lower():
                 candidates.append({"path": child_rel, "kind": "dir" if is_dir else "file"})
                 if len(candidates) > _MENTION_MAX_CANDIDATES:
                     break
             if is_dir and depth < _MENTION_MAX_DEPTH:
                 queue.append((child_rel, depth + 1))
+            elif is_dir:
+                # 达到深度上限未继续下钻：标记截断（更深层可能还有匹配）
+                truncated = True
         else:
             continue
         # 内层 break（凑满上限+1 或超扫描上限）：外层同步退出
