@@ -26,7 +26,11 @@ from pydantic import BaseModel, Field
 
 from illusion.permissions.modes import PermissionMode
 from illusion.tools.base import BaseTool, ToolExecutionContext, ToolResult
-from illusion.tools.shell_common import MAX_OUTPUT_LENGTH, CommandExecutor
+from illusion.tools.shell_common import (
+    MAX_OUTPUT_LENGTH,
+    CommandExecutor,
+    append_background_timeout_hint,
+)
 from illusion.utils.shell import create_argv_subprocess
 
 logger = logging.getLogger(__name__)
@@ -474,7 +478,11 @@ class PowerShellTool(BaseTool[PowerShellToolInput]):
             timeout=timeout_seconds,
         )
         return ToolResult(
-            output=result.output,
+            output=append_background_timeout_hint(
+                result.output,
+                timed_out=result.metadata.get("timed_out") is True,
+                timeout_ms=arguments.timeout_ms,
+            ),
             is_error=result.is_error,
             metadata=dict(result.metadata),
         )

@@ -31,7 +31,7 @@ import os
 import re
 import sys
 import threading
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -498,6 +498,10 @@ class ReactBackendHost:
             return
         if req.type == "agent_generate_cancel":
             await self._handle_agent_generate_cancel(req)
+            return
+        # @ 提及补全（terminal 与 web 对称，候选收集复用同一共享模块）
+        if req.type == "web_request_file_mentions":
+            await self._handle_file_mentions(req)
             return
         # 未知请求类型
         if req.type != "submit_line":
@@ -1903,6 +1907,7 @@ class ReactBackendHost:
             #      若 <result> 为空，从 tasks 目录的 .log 文件提取实际输出
             from illusion.config.paths import get_tasks_dir
             from illusion.engine.messages import TextBlock, ToolResultBlock
+            from illusion.swarm.agent_executor import agent_type_display
             from illusion.tasks.types import TASK_NOTIFICATION_RE
 
             task_options: list[dict[str, Any]] = []
@@ -1917,18 +1922,15 @@ class ReactBackendHost:
                         if use_block.name == "agent":
                             inp = use_block.input or {}
                             task_name = str(inp.get("description") or inp.get("name") or "agent")[:30]
-                            # agent 类型：input 完全未到达时显示 "Agent"，到达后无 subagent_type 则默认 "GeneralPurpose"
-                            subagent_type = inp.get("subagent_type")
-                            if subagent_type:
-                                # 转 PascalCase：general-purpose → GeneralPurpose
-                                agent_type = "".join(
-                                    w.title() for w in str(subagent_type).replace("_", "-").split("-")
-                                )
-                            elif inp:
-                                # input 已到达但无 subagent_type，后端默认 general-purpose
-                                agent_type = "GeneralPurpose"
-                            else:
+                            # agent 类型：input 完全未到达时显示 "Agent"；
+                            # 到达后转 PascalCase，无 subagent_type 则默认 "GeneralPurpose"
+                            # （与后台 agent 的 task_name 类型段共用同一转换）
+                            if not inp:
                                 agent_type = "Agent"
+                            else:
+                                agent_type = agent_type_display(
+                                    str(sub) if (sub := inp.get("subagent_type")) is not None else None
+                                )
                             label_name = f"{task_name} · {agent_type}"
                             pending_labels[use_block.id] = label_name
                 elif msg.role == "user":
@@ -1976,9 +1978,16 @@ class ReactBackendHost:
                         except OSError:
                             pass
                     order += 1
-                    # label 优先用 task_name，回退到 summary 提取的名称（兼容旧通知）
+                    # label 优先用 task_name，回退到 summary 提取的名称（兼容旧通知）。
+                    # 旧通知的类型段可能是未转换的原始 subagent_type（如
+                    # "general-purpose"），展示时统一规范化为 PascalCase——
+                    # agent_type_display 对已是驼峰的输入幂等，新旧数据一致
                     if task_name:
-                        label_name = task_name
+                        if " · " in task_name:
+                            name_part, _, type_part = task_name.rpartition(" · ")
+                            label_name = f"{name_part} · {agent_type_display(type_part)}"
+                        else:
+                            label_name = task_name
                     else:
                         name_match = re.match(r"Agent '([^']+)'", summary_tag)
                         label_name = name_match.group(1) if name_match else (summary_tag or "agent")
@@ -2263,7 +2272,7 @@ class ReactBackendHost:
         return options
 
     @contextlib.asynccontextmanager
-    async def _acquire_modal_lock(self):
+    async def _acquire_modal_lock(self) -> AsyncIterator[None]:
         """获取 modal 串行锁（同会话排队：前一个完成后自然后续继续）。"""
         async with self._modal_lock:
             yield
@@ -2540,6 +2549,39 @@ class ReactBackendHost:
         # 当前 generate 为同步 await，取消依赖前端忽略响应；预留扩展点
         request_id = req.request_id or ""
         await self._emit(BackendEvent(type="agent_generate_response", request_id=request_id, error="cancelled"))
+
+    async def _handle_file_mentions(self, req: FrontendRequest) -> None:
+        """收集 @ 提及补全候选并推送 web_file_mentions 事件。
+
+        与 web 端 handle_web_request_file_mentions 对称：仅返回工作区内
+        路径与技能名候选（不读内容），选中后的提及文本保持普通 prompt
+        文本。request_id 原样回显供前端丢弃过期响应。
+
+        Args:
+            req: 前端请求（query 为 @ 后的路径片段；request_id 回显键）
+        """
+        from illusion.ui.file_mentions import (
+            file_mention_candidates,
+            normalize_mention_query,
+            skill_mention_candidates,
+        )
+
+        assert self._bundle is not None
+        cwd = self._bundle.cwd
+        query = normalize_mention_query(req.query)
+        candidates, truncated = await asyncio.to_thread(file_mention_candidates, cwd, query)
+        skills = await asyncio.to_thread(skill_mention_candidates, cwd, query)
+        await self._emit(BackendEvent(
+            type="web_file_mentions",
+            cwd=cwd,
+            request_id=req.request_id,
+            web_file_mentions={
+                "query": query,
+                "candidates": candidates,
+                "skills": skills,
+                "truncated": truncated,
+            },
+        ))
 
     async def _update_phase(self, phase: str) -> None:
         """更新会话阶段。"""

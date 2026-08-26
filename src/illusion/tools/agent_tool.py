@@ -249,10 +249,14 @@ class AgentTool(BaseTool[AgentToolInput]):
 
         if query_engine is not None:
             # 从引擎构建 QueryContext
-            # 继承 on_before_tool_execute 和 file_state_cache：子 agent 修改文件时
-            # 也需触发 track_edit 备份到主 engine 的 file_history，否则 rewind
-            # 无法回退子 agent 的文件修改。使用 getattr 防御旧版 mock/桩对象缺失属性。
+            # 继承 on_before_tool_execute：子 agent 修改文件时也需触发
+            # track_edit 备份到主 engine 的 file_history，否则 rewind 无法
+            # 回退子 agent 的文件修改。使用 getattr 防御旧版 mock/桩对象缺失属性。
+            # 不继承 file_state_cache：子 agent 没读过父会话的文件，继承
+            # 会导致其 read_file 命中父会话的"已读"标记而返回占位提示；
+            # 文件修改后的 mtime 失效机制保证父会话读到的始终是最新磁盘内容。
             from illusion.engine.query import QueryContext
+            from illusion.utils.file_state_cache import FileStateCache
             query_context = QueryContext(
                 api_client=query_engine._api_client,
                 tool_registry=query_engine._tool_registry,
@@ -267,7 +271,7 @@ class AgentTool(BaseTool[AgentToolInput]):
                 hook_executor=query_engine._hook_executor,
                 effort=query_engine._effort,
                 on_before_tool_execute=getattr(query_engine, "on_before_tool_execute", None),
-                file_state_cache=getattr(query_engine, "_file_state_cache", None),
+                file_state_cache=FileStateCache(),
             )
         else:
             query_context = None
@@ -326,6 +330,7 @@ class AgentTool(BaseTool[AgentToolInput]):
                         TeammateMessage,
                         _register_agent,
                         _unregister_agent,
+                        agent_type_display,
                     )
 
                     bg_ctx = AgentExecutionContext(
@@ -339,10 +344,10 @@ class AgentTool(BaseTool[AgentToolInput]):
                     )
                     _register_agent(bg_ctx)
 
-                    # task_name 格式：任务名 · agent类型，类型为空时默认 "general-purpose"
+                    # task_name 格式：任务名 · agent类型（PascalCase，与前台
+                    # /agent 列表一致）；类型为空时默认 "general-purpose"
                     task_name_raw = arguments.description or config.name
-                    agent_type = arguments.subagent_type or "general-purpose"
-                    task_name = f"{task_name_raw} · {agent_type}"
+                    task_name = f"{task_name_raw} · {agent_type_display(arguments.subagent_type)}"
 
                     # 后台模式仅传递 on_activity 回调：对所有事件（含文本生成、
                     # 工具事件）刷新 bg_tracker 的活动时间戳，让主循环通过 idle

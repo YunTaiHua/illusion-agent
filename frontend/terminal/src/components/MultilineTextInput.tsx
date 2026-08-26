@@ -39,6 +39,9 @@ export default function MultilineTextInput({
 	maxVisibleLines = DEFAULT_MAX_VISIBLE_LINES,
 	onChange,
 	onSubmit,
+	onCursorChange,
+	suppressNavigation = false,
+	initialCursorOffset,
 }: {
 	value: string;
 	placeholder?: string;
@@ -48,9 +51,15 @@ export default function MultilineTextInput({
 	maxVisibleLines?: number;
 	onChange: (value: string) => void;
 	onSubmit?: (value: string) => void;
+	/** 光标位置变化回调（@ 提及 token 检测依赖光标位置） */
+	onCursorChange?: (offset: number) => void;
+	/** 为 true 时忽略 ↑↓/Enter/Tab（补全菜单打开时按键交由菜单导航） */
+	suppressNavigation?: boolean;
+	/** 挂载时光标初始位置（缺省为文本末尾；@ 提及插入后定位到插入点之后） */
+	initialCursorOffset?: number;
 }): React.JSX.Element {
 	// === 状态 ===
-	const [cursorOffset, setCursorOffset] = useState((originalValue || '').length);
+	const [cursorOffset, setCursorOffset] = useState(initialCursorOffset ?? (originalValue || '').length);
 	const [preservedColumn, setPreservedColumn] = useState<number | null>(null);
 	const [isPasting, setIsPasting] = useState(false);
 
@@ -70,6 +79,11 @@ export default function MultilineTextInput({
 			return prev;
 		});
 	}, [originalValue, focus, showCursor]);
+
+	// 光标位置变化上报（App 层据此检测 @ 提及 token）
+	useEffect(() => {
+		onCursorChange?.(cursorOffset);
+	}, [cursorOffset, onCursorChange]);
 
 	// === 辅助函数 ===
 
@@ -221,6 +235,11 @@ export default function MultilineTextInput({
 		// Tab 不处理（留给命令选择器）
 		if (key.tab) return;
 
+		// 补全菜单打开时导航键交由菜单处理（↑↓/Enter/Tab/Esc 由 App 层消费）
+		if (suppressNavigation && (key.upArrow || key.downArrow || key.return || key.escape)) {
+			return;
+		}
+
 		// \n (Ctrl+J) 插入换行
 		if (input === '\n') {
 			resetCtrlUCount();
@@ -298,7 +317,7 @@ export default function MultilineTextInput({
 			clearPreservedColumn();
 		}
 	}, [originalValue, cursorOffset, columns, showCursor, isPasting,
-		preservedColumn, onChange, onSubmit, applyCursor,
+		preservedColumn, onChange, onSubmit, applyCursor, suppressNavigation,
 		isPasteInput, addToPasteBuffer, resetCtrlUCount,
 		clearPreservedColumn]);
 

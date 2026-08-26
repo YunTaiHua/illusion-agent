@@ -50,6 +50,38 @@ from illusion.utils.shell import terminate_process_tree
 # 输出截断阈值（描述中对外暴露此值，修改时需同步更新工具描述文本）
 MAX_OUTPUT_LENGTH = 30_000
 
+# bash / powershell 工具允许的最大前台时长（毫秒），与两个工具的
+# timeout_ms 字段上限一致（600000ms = 10 分钟）
+MAX_TIMEOUT_MS = 600_000
+
+
+def append_background_timeout_hint(output: str, *, timed_out: bool, timeout_ms: int) -> str:
+    """前台命令因达到工具最大时长限度而超时失败时，追加后台模式提示。
+
+    仅当同时满足以下条件才追加：
+    - 命令因超时被终止（timed_out=True）；
+    - 本次调用的超时已达到工具允许的最大时长限度——此时增大 timeout
+      已无余地，改用后台模式是唯一出路（后台任务无超时限制）。
+    LLM 自行设置的较短超时导致的中途超时不追加，可自行加大重试。
+
+    Args:
+        output: 原始结果文本（如 "Command timed out after 600s"）
+        timed_out: 是否因超时终止
+        timeout_ms: 本次调用请求的超时毫秒数
+
+    Returns:
+        str: 原文或追加了后台模式提示的文本
+    """
+    if not timed_out or timeout_ms < MAX_TIMEOUT_MS:
+        return output
+    return (
+        f"{output}\n\n"
+        "Note: the command hit this tool's maximum duration limit (10 minutes) and was "
+        "terminated. Background mode (`run_in_background: true`) has no timeout limit — "
+        "use it for long-running commands; you will be notified automatically when it "
+        "completes."
+    )
+
 
 class ShellErrorCode:
     """标准化 shell 退出码常量。"""

@@ -26,7 +26,7 @@ from illusion.permissions.modes import PermissionMode
 from illusion.platforms import get_platform
 from illusion.sandbox import SandboxUnavailableError
 from illusion.tools.base import BaseTool, ToolExecutionContext, ToolResult
-from illusion.tools.shell_common import CommandExecutor
+from illusion.tools.shell_common import CommandExecutor, append_background_timeout_hint
 from illusion.utils.shell import _resolve_windows_bash, create_shell_subprocess
 
 logger = logging.getLogger(__name__)
@@ -459,7 +459,11 @@ class BashTool(BaseTool[BashToolInput]):
             timeout=timeout_seconds,
         )
         return ToolResult(
-            output=result.output,
+            output=append_background_timeout_hint(
+                result.output,
+                timed_out=result.metadata.get("timed_out") is True,
+                timeout_ms=arguments.timeout_ms,
+            ),
             is_error=result.is_error,
             metadata=dict(result.metadata),
         )

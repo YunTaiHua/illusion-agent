@@ -445,6 +445,8 @@ export function QuestionCard({ modal, lang, onRespond, onTabChange }: QuestionCa
   // skipped 中的题目不写入结果。底部提交按钮与 Ctrl+Enter 快捷键共用；
   // 鼠标点击不转移焦点（onMouseDown preventDefault），"其他"输入框不会 blur
   // 落盘——单选题在此补写其未落盘的合法值，避免直接提交丢失。
+  // 未作答也未跳过的单选题以默认选中项（第一项）作答，与"下一题"的
+  // 落盘语义一致——直接提交不丢最后一题。
   const submitMultiNow = useCallback(() => {
     if (submittedRef.current) return;
     submittedRef.current = true;
@@ -465,6 +467,9 @@ export function QuestionCard({ modal, lang, onRespond, onTabChange }: QuestionCa
       } catch { /* 旧格式异常时从空数组重建 */ }
       if (!arr.includes(pending)) arr.push(pending);
       answers[currentHeader] = JSON.stringify(arr);
+    } else if (!skippedEff.has(currentHeader) && !(currentHeader in answers)
+        && !isMultiSelect && hasOptions && filteredOptions.length > 0) {
+      answers[currentHeader] = `1. ${filteredOptions[0]!.label}`;
     }
     const result: Record<string, string | string[]> = {};
     for (const [k, v] of Object.entries(answers)) {
@@ -483,6 +488,26 @@ export function QuestionCard({ modal, lang, onRespond, onTabChange }: QuestionCa
   useEffect(() => {
     submittedRef.current = false;
   }, [requestId]);
+
+  /**
+   * 前进到下一题并落盘当前题答案。
+   * 只要用户没有显式点击"跳过"，当前题的默认选中选项（第一项，已有逻辑）
+   * 就视为用户的选项——点击"下一题"/按 → 即接受该默认值；已有"其他"
+   * 待落盘文本时优先记录"其他"。多选无默认选中概念，空选不落盘。
+   */
+  const advanceWithDefault = useCallback(() => {
+    const header = currentQuestion?.header ?? `Q${currentIndex + 1}`;
+    const pending = allOtherText[currentIndex]?.trim();
+    if (pending && !isMultiSelect) {
+      recordAnswer(header, pending);
+    } else if (!isMultiSelect && !skippedHeaders.has(header)
+        && !(header in multiAnswers) && hasOptions && filteredOptions.length > 0) {
+      recordAnswer(header, `1. ${filteredOptions[0]!.label}`);
+    }
+    if (currentIndex < questions.length - 1) {
+      goToQuestion(currentIndex + 1);
+    }
+  }, [currentQuestion, currentIndex, allOtherText, isMultiSelect, skippedHeaders, multiAnswers, hasOptions, filteredOptions, questions.length, recordAnswer, goToQuestion]);
 
   const handleOptionClick = useCallback(
     (idx: number, label: string) => {
@@ -625,6 +650,10 @@ export function QuestionCard({ modal, lang, onRespond, onTabChange }: QuestionCa
         ? 1 : 0)
       + skippedHeaders.size
     : 0;
+  /** 是否可提交：全部题目完成；或在最后一题仅剩当前题未完成（提交时以默认选中项补写） */
+  const canSubmitMultiNow = isMultiQuestion
+    && (multiDoneCount === questions.length
+      || (currentIndex === questions.length - 1 && multiDoneCount >= questions.length - 1));
 
   // 键盘导航使用 window 级监听而非卡片 onFocus——DOM 焦点会随点击主题切换、
   // 滚动页面等操作离开卡片，导致箭头/回车失效。全局监听排除：
@@ -651,11 +680,14 @@ export function QuestionCard({ modal, lang, onRespond, onTabChange }: QuestionCa
       || tag === 'SUMMARY' || target?.getAttribute('role') === 'button';
     const confirmScopeOk = insideCard || (!onActivatable && (target === document.body || target === document.documentElement));
 
-    // 多问题模式：←/→ 切换题目 tab
+    // 多问题模式：←/→ 切换题目 tab（→ 前进时落盘当前题默认答案，与"下一题"一致）
     if (isMultiQuestion && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
       e.preventDefault();
-      const delta = e.key === 'ArrowRight' ? 1 : -1;
-      const next = Math.max(0, Math.min(questions.length - 1, currentIndex + delta));
+      if (e.key === 'ArrowRight') {
+        advanceWithDefault();
+        return;
+      }
+      const next = Math.max(0, currentIndex - 1);
       goToQuestion(next);
       return;
     }
@@ -696,8 +728,8 @@ export function QuestionCard({ modal, lang, onRespond, onTabChange }: QuestionCa
     // Ctrl/Cmd+Enter：统一提交快捷键
     if (e.ctrlKey || e.metaKey) {
       if (isMultiQuestion) {
-        // 多问题：全部题目完成才提交
-        if (multiDoneCount >= questions.length) submitMultiNow();
+        // 多问题：全部题目完成（或最后一题仅剩当前题，提交时补默认值）才提交
+        if (canSubmitMultiNow) submitMultiNow();
       } else if (isMultiSelect) {
         confirmSingleMultiSelect();
       }
@@ -1111,7 +1143,7 @@ export function QuestionCard({ modal, lang, onRespond, onTabChange }: QuestionCa
         <div className="flex items-center gap-2">
           {isMultiQuestion && currentIndex < questions.length - 1 && (
             <button
-              onClick={() => goToQuestion(currentIndex + 1)}
+              onClick={advanceWithDefault}
               onMouseDown={(e) => e.preventDefault()}
               className={FOOTER_BTN_PRIMARY}
             >
@@ -1130,8 +1162,9 @@ export function QuestionCard({ modal, lang, onRespond, onTabChange }: QuestionCa
               {t(lang, 'question_skip')}
             </button>
           )}
-          {/* 完成数见 multiDoneCount：已记录答案 + 当前题"其他"合法值待落盘 + 已跳过 */}
-          {isMultiQuestion && multiDoneCount === questions.length && (
+          {/* 完成数见 multiDoneCount；最后一题放宽一题余量：submitMultiNow
+              会以默认选中项（第一项）补写未作答未跳过的单选题 */}
+          {canSubmitMultiNow && (
             <button
               onClick={submitMultiNow}
               onMouseDown={(e) => e.preventDefault()}

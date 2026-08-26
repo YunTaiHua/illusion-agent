@@ -493,6 +493,10 @@ class QueryEngine:
         # 人类以任何措辞要求继续时模型应调用 update_goal resume 重新武装）
         if self._goal_manager is not None:
             self._goal_manager.restore_from(result.goal_state)
+        # 清空文件状态缓存：rewind/resume 回退后模型上下文不再持有此前
+        # read 注入的内容，缓存若保留会导致 read_file 去重命中而正文不
+        # 重新注入（"File unchanged since last read" 失配，terminal/web 同病）
+        self._file_state_cache.clear()
 
     def load_file_history(self, checkpoint_count: int | None = None) -> None:
         """显式加载文件历史状态（用于 /resume 后）。
@@ -581,6 +585,10 @@ class QueryEngine:
             messages: 新的消息列表
         """
         self._messages = list(messages)
+        # 对话历史被替换（compact/恢复）后，旧的文件状态缓存不再可靠：
+        # 早期 read 注入的内容已从上下文移除，缓存若保留会导致 read_file
+        # 去重命中只回提示不回正文（与 apply_restore 清缓存同一语义）
+        self._file_state_cache.clear()
 
     @property
     def file_history(self) -> FileHistoryState | None:

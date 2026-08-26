@@ -277,3 +277,34 @@ class TestResolveAgentTools:
         assert "agent" not in names
         assert "bash" in names
         assert "read" in names
+
+
+class TestAgentTypeDisplay:
+    """agent_type_display：subagent_type → PascalCase 展示名。"""
+
+    def test_hyphenated(self):
+        from illusion.swarm.agent_executor import agent_type_display
+
+        assert agent_type_display("general-purpose") == "GeneralPurpose"
+
+    def test_underscored(self):
+        from illusion.swarm.agent_executor import agent_type_display
+
+        assert agent_type_display("statusline_setup") == "StatuslineSetup"
+
+    def test_single_word(self):
+        from illusion.swarm.agent_executor import agent_type_display
+
+        assert agent_type_display("explore") == "Explore"
+
+    def test_none_falls_back_to_default(self):
+        from illusion.swarm.agent_executor import agent_type_display
+
+        assert agent_type_display(None) == "GeneralPurpose"
+        assert agent_type_display("") == "GeneralPurpose"
+
+    def test_preserves_inner_case(self):
+        """词内已有大写（自定义类型）不被 title() 降为小写"""
+        from illusion.swarm.agent_executor import agent_type_display
+
+        assert agent_type_display("myAgent-type") == "MyAgentType"

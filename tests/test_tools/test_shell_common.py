@@ -231,3 +231,38 @@ class TestRunAndNormalizeCancel:
             assert mock_terminate.called, (
                 "terminate_process_tree() should be called on CancelledError"
             )
+
+
+class TestAppendBackgroundTimeoutHint:
+    """append_background_timeout_hint：达到工具最大时长限度的超时才追加后台模式提示。"""
+
+    def test_appends_hint_at_max_timeout(self):
+        """timeout 达到上限且超时 → 追加后台模式提示"""
+        from illusion.tools.shell_common import MAX_TIMEOUT_MS, append_background_timeout_hint
+
+        out = append_background_timeout_hint(
+            "Command timed out after 600s",
+            timed_out=True,
+            timeout_ms=MAX_TIMEOUT_MS,
+        )
+        assert out.startswith("Command timed out after 600s")
+        assert "run_in_background" in out
+        assert "no timeout limit" in out
+
+    def test_no_hint_below_max_timeout(self):
+        """未达上限的超时（LLM 自设较短超时）→ 不追加，可加大重试"""
+        from illusion.tools.shell_common import append_background_timeout_hint
+
+        out = append_background_timeout_hint(
+            "Command timed out after 30s", timed_out=True, timeout_ms=30_000,
+        )
+        assert out == "Command timed out after 30s"
+
+    def test_no_hint_when_not_timed_out(self):
+        """非超时路径（正常失败/成功）→ 不追加"""
+        from illusion.tools.shell_common import MAX_TIMEOUT_MS, append_background_timeout_hint
+
+        out = append_background_timeout_hint(
+            "some output\nExit code: 1", timed_out=False, timeout_ms=MAX_TIMEOUT_MS,
+        )
+        assert out == "some output\nExit code: 1"

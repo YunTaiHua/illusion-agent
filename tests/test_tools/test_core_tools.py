@@ -429,3 +429,99 @@ async def test_bash_tool_empty_success_has_contextual_message(tmp_path: Path):
     assert result.is_error is False
     assert result.output != "(no output)"
     assert "successfully" in result.output
+
+
+@pytest.mark.asyncio
+async def test_rewind_restore_clears_read_dedup_cache(tmp_path: Path):
+    """rewind/resume（apply_restore）后 read_file 不再命中去重缓存。
+
+    回归：apply_restore 若不清理 file_state_cache，回退后模型上下文
+    已无之前 read 的内容，但 read_file 去重命中返回占位而非正文。
+    """
+    from illusion.engine.cost_tracker import CostTracker
+    from illusion.engine.messages import ConversationMessage
+    from illusion.engine.query_engine import QueryEngine
+    from illusion.services.checkpoint_store import RestoreResult
+    from illusion.tools.file_read_tool import FileReadTool, FileReadToolInput
+    from illusion.utils.file_state_cache import FileStateCache
+
+    target = tmp_path / "notes.txt"
+    target.write_text("hello rewind\n", encoding="utf-8")
+
+    # 用 object.__new__ 绕过构造（QueryEngine 依赖太多），
+    # 仅注入 apply_restore 访问的字段
+    engine = object.__new__(QueryEngine)
+    engine._file_state_cache = FileStateCache()
+    engine._messages = []
+    engine._cost_tracker = CostTracker()
+    engine._last_api_usage = None
+    engine._last_api_usage_message_count = 0
+    engine._goal_manager = None
+
+    ctx = ToolExecutionContext(
+        cwd=tmp_path,
+        metadata={"file_state_cache": engine._file_state_cache},
+    )
+    tool = FileReadTool()
+
+    # 第一次读：正文注入 + 缓存记录
+    first = await tool.execute(FileReadToolInput(path="notes.txt"), ctx)
+    assert "hello rewind" in first.output
+
+    # 第二次读：去重缓存命中，返回占位
+    second = await tool.execute(FileReadToolInput(path="notes.txt"), ctx)
+    assert "unchanged since last read" in second.output
+
+    # rewind/resume 回退状态
+    engine.apply_restore(RestoreResult(
+        messages=[ConversationMessage.from_user_text("x")],
+        usage_input=0, usage_output=0,
+        usage_cache_read=0, usage_cache_creation=0,
+        last_usage=None, last_usage_message_count=0,
+        checkpoint_count=1,
+    ))
+    assert engine._file_state_cache.size == 0
+
+    # 第三次读：缓存已清空，正文重新注入
+    third = await tool.execute(FileReadToolInput(path="notes.txt"), ctx)
+    assert "hello rewind" in third.output
+    assert "unchanged since last read" not in third.output
+
+
+@pytest.mark.asyncio
+async def test_load_messages_clears_read_dedup_cache(tmp_path: Path):
+    """compact（load_messages 替换对话历史）后 read_file 不再命中去重缓存。
+
+    手动 /compact 与子引擎恢复都走 engine.load_messages；对话历史被摘要
+    替换后旧缓存不可靠，必须清空让 read_file 重新注入正文。
+    """
+    from illusion.engine.messages import ConversationMessage
+    from illusion.engine.query_engine import QueryEngine
+    from illusion.tools.file_read_tool import FileReadTool, FileReadToolInput
+    from illusion.utils.file_state_cache import FileStateCache
+
+    target = tmp_path / "notes.txt"
+    target.write_text("hello compact\n", encoding="utf-8")
+
+    engine = object.__new__(QueryEngine)
+    engine._file_state_cache = FileStateCache()
+    engine._messages = []
+
+    ctx = ToolExecutionContext(
+        cwd=tmp_path,
+        metadata={"file_state_cache": engine._file_state_cache},
+    )
+    tool = FileReadTool()
+
+    first = await tool.execute(FileReadToolInput(path="notes.txt"), ctx)
+    assert "hello compact" in first.output
+    second = await tool.execute(FileReadToolInput(path="notes.txt"), ctx)
+    assert "unchanged since last read" in second.output
+
+    # compact：替换对话历史（摘要替代旧消息）
+    engine.load_messages([ConversationMessage.from_user_text("summary")])
+    assert engine._file_state_cache.size == 0
+
+    third = await tool.execute(FileReadToolInput(path="notes.txt"), ctx)
+    assert "hello compact" in third.output
+    assert "unchanged since last read" not in third.output

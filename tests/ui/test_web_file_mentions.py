@@ -9,15 +9,17 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from illusion.ui.protocol import BackendEvent, FrontendRequest
-from illusion.ui.web.ws_web_api import (
+from illusion.ui.file_mentions import (
     _MENTION_MAX_CANDIDATES,
     _MENTION_MAX_SKILLS,
+    _skill_registry_cache,
+)
+from illusion.ui.protocol import BackendEvent, FrontendRequest
+from illusion.ui.web.ws_web_api import (
     WebApiDispatcher,
     _file_mention_candidates,
     _normalize_mention_query,
     _skill_mention_candidates,
-    _skill_registry_cache,
 )
 
 

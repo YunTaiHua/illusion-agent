@@ -314,6 +314,29 @@ export type BackendEvent = {
 	errors?: Record<string, string> | null;
 	/** 最新可用版本号（可选，update_available 事件携带） */
 	latest_version?: string | null;
+	// ---- @ 提及补全（web_file_mentions 事件携带；与 web 端协议同构） ----
+	/** @ 提及补全候选载荷（query 为规范化后的查询串，request_id 回显供前端丢弃过期响应） */
+	web_file_mentions?: {
+		query: string;
+		candidates: FileMentionCandidate[];
+		skills?: {name: string; description: string}[];
+		truncated?: boolean;
+		request_id?: string;
+	} | null;
+};
+
+/**
+ * @ 提及补全的单个文件候选
+ *
+ * 仅名称/路径文本（不读内容）；kind='skill' 表示技能候选（path 字段存技能名）。
+ */
+export type FileMentionCandidate = {
+	/** 根相对路径（/ 分隔）或技能名 */
+	path: string;
+	/** 候选类型：dir=目录、file=文件、skill=技能 */
+	kind: 'dir' | 'file' | 'skill';
+	/** 技能描述（仅 skill 候选携带） */
+	description?: string;
 };
 
 /**

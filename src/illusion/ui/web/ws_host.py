@@ -33,7 +33,7 @@ import logging
 import os
 import re
 import time
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -2617,6 +2617,7 @@ class WebBackendHost:
             # 列出已完成 agent 任务摘要（前台 tool_result + 后台 task-notification）
             from illusion.config.paths import get_tasks_dir
             from illusion.engine.messages import TextBlock, ToolResultBlock
+            from illusion.swarm.agent_executor import agent_type_display
             from illusion.tasks.types import TASK_NOTIFICATION_RE
 
             task_options: list[dict[str, Any]] = []
@@ -2630,15 +2631,14 @@ class WebBackendHost:
                         if use_block.name == "agent":
                             inp = use_block.input or {}
                             task_name = str(inp.get("description") or inp.get("name") or "agent")[:30]
-                            subagent_type = inp.get("subagent_type")
-                            if subagent_type:
-                                agent_type = "".join(
-                                    w.title() for w in str(subagent_type).replace("_", "-").split("-")
-                                )
-                            elif inp:
-                                agent_type = "GeneralPurpose"
-                            else:
+                            # input 完全未到达时显示 "Agent"；到达后转 PascalCase
+                            # （与后台 task_name 类型段共用同一共享转换）
+                            if not inp:
                                 agent_type = "Agent"
+                            else:
+                                agent_type = agent_type_display(
+                                    str(sub) if (sub := inp.get("subagent_type")) is not None else None
+                                )
                             pending_labels[use_block.id] = f"{task_name} · {agent_type}"
                 elif msg.role == "user":
                     for result_block in msg.content:
@@ -2680,8 +2680,15 @@ class WebBackendHost:
                         except OSError:
                             pass
                     order += 1
+                    # 旧通知的类型段可能是未转换的原始 subagent_type（如
+                    # "general-purpose"），展示时统一规范化为 PascalCase——
+                    # agent_type_display 对已是驼峰的输入幂等，新旧数据一致
                     if task_name:
-                        label_name = task_name
+                        if " · " in task_name:
+                            name_part, _, type_part = task_name.rpartition(" · ")
+                            label_name = f"{name_part} · {agent_type_display(type_part)}"
+                        else:
+                            label_name = task_name
                     else:
                         name_match = re.match(r"Agent '([^']+)'", summary_tag)
                         label_name = name_match.group(1) if name_match else (summary_tag or "agent")
@@ -3087,7 +3094,7 @@ class WebBackendHost:
         return options
 
     @contextlib.asynccontextmanager
-    async def _acquire_modal_lock(self, session_id: str):
+    async def _acquire_modal_lock(self, session_id: str) -> AsyncIterator[None]:
         """获取指定会话的 modal 串行锁（同会话排队，跨会话不阻塞）。
 
         前端 modal 按会话路由（patchView(sid)），不同会话的 modal 可同时

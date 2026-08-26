@@ -55,6 +55,9 @@ export function PromptInput({
 	cursorReset,
 	language,
 	todoItems,
+	onCursorChange,
+	suppressNavigation,
+	initialCursorOffset,
 }: {
 	busy: boolean;
 	stopping?: boolean;
@@ -67,6 +70,12 @@ export function PromptInput({
 	cursorReset?: number;
 	language: UiLanguage;
 	todoItems?: TodoItemSnapshot[];
+	/** 光标位置变化回调（@ 提及 token 检测依赖光标位置） */
+	onCursorChange?: (offset: number) => void;
+	/** 为 true 时忽略 ↑↓/Enter/Tab（补全菜单打开时按键交由菜单导航） */
+	suppressNavigation?: boolean;
+	/** 重挂载时光标初始位置（@ 提及插入后定位到插入点之后） */
+	initialCursorOffset?: number;
 }): React.JSX.Element {
 	const theme = useTheme();
 	const {columns} = useTerminalSize();
@@ -95,6 +104,9 @@ export function PromptInput({
 				placeholder={t(language, 'longTextHint')}
 				focus={!busy && inputFocus}
 				columns={inputColumns}
+				onCursorChange={onCursorChange}
+				suppressNavigation={suppressNavigation}
+				initialCursorOffset={initialCursorOffset}
 			/>
 		</Box>
 		</Box>

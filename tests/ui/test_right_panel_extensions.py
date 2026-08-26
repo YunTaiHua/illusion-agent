@@ -337,6 +337,68 @@ class TestCollectAgentTasks:
         assert items[1]["id"] == "agent-111"
         assert items[1]["type"] == "agent"
 
+    def test_task_notification_prefix_is_authoritative(self):
+        """分类按 task_id 前缀判断（a/r/t=智能体，b=任务），不受名称含 'agent' 干扰。
+
+        真实 id 格式来自 tasks/manager._task_id：a{8hex} / b{8hex}。
+        旧实现按 "agent" 子串匹配：含 agent 字样的 bash 命令被误判为
+        智能体、类型段不含 agent 的后台智能体被误判为任务——均已修正。
+        """
+        from illusion.engine.messages import TextBlock
+
+        def notification(task_id: str, name: str) -> str:
+            return (
+                f"<task-notification>\n<task-id>{task_id}</task-id>\n"
+                f"<status>completed</status>\n<summary>s {task_id}</summary>\n"
+                f"<task-name>{name}</task-name>\n<result>done</result>\n</task-notification>"
+            )
+
+        messages = self._messages([
+            # 后台 bash 任务：命令文本恰含 "agent"（如 grep agent src/）→ 仍是任务
+            ("user", [TextBlock(text=notification("b3k9x2qf", "grep -rn agent src/ · ·"))]),
+            # 后台智能体：类型段为 PascalCase，不含 "agent" 字样 → 是智能体
+            ("user", [TextBlock(text=notification("ar7m1z0p", "调研配置 · GeneralPurpose"))]),
+            # 团队队友（t 前缀）→ 智能体；远程代理（r 前缀）→ 智能体
+            ("user", [TextBlock(text=notification("t0a1b2c3d", "队友任务"))]),
+            ("user", [TextBlock(text=notification("rdeadbeef", "远程调研"))]),
+        ])
+        by_id = {item["id"]: item["type"] for item in _collect_agent_tasks(messages)}
+        assert by_id == {
+            "b3k9x2qf": "task",
+            "ar7m1z0p": "agent",
+            "t0a1b2c3d": "agent",
+            "rdeadbeef": "agent",
+        }
+
+    def test_legacy_task_name_type_normalized(self):
+        """历史通知的类型段为原始 subagent_type 时展示前规范化为 PascalCase。
+
+        生成端（agent_tool）已统一驼峰；此处保证旧会话数据在右栏与
+        /agent 列表显示一致。已是 PascalCase 的输入幂等不变形。
+        """
+        from illusion.engine.messages import TextBlock
+
+        def notification(task_id: str, name: str) -> str:
+            return (
+                f"<task-notification>\n<task-id>{task_id}</task-id>\n"
+                f"<status>completed</status>\n<summary>s {task_id}</summary>\n"
+                f"<task-name>{name}</task-name>\n<result>done</result>\n</task-notification>"
+            )
+
+        messages = self._messages([
+            # 旧格式：类型段未转换
+            ("user", [TextBlock(text=notification("a00000001", "研究代码 · general-purpose"))]),
+            ("user", [TextBlock(text=notification("a00000002", "检查环境 · statusline-setup"))]),
+            # 新格式：已驼峰，幂等保持
+            ("user", [TextBlock(text=notification("a00000003", "写文档 · GeneralPurpose"))]),
+        ])
+        titles = {item["id"]: item["title"] for item in _collect_agent_tasks(messages)}
+        assert titles == {
+            "a00000001": "研究代码 · GeneralPurpose",
+            "a00000002": "检查环境 · StatuslineSetup",
+            "a00000003": "写文档 · GeneralPurpose",
+        }
+
     def test_empty(self):
         """空会话返回空列表"""
         assert _collect_agent_tasks([]) == []

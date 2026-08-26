@@ -21,6 +21,7 @@ import {normalizeLanguage, t} from '../i18n.js';
 
 import type {
 	BackendEvent,
+	FileMentionCandidate,
 	FrontendConfig,
 	McpServerSnapshot,
 	PendingToolCall,
@@ -118,6 +119,16 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 	const [tasks, setTasks] = useState<TaskSnapshot[]>([]);
 	/** 可用命令列表 */
 	const [commands, setCommands] = useState<string[]>([]);
+	/**
+	 * @ 提及补全最近一次结果
+	 * requestId 不匹配的过期响应由 App 层丢弃；null = 尚无结果。
+	 * skills 排在文件前（kind='skill'），与 web 端候选顺序一致。
+	 */
+	const [fileMentions, setFileMentions] = useState<{
+		requestId: string;
+		query: string;
+		candidates: FileMentionCandidate[];
+	} | null>(null);
 	/** MCP 服务器列表快照 */
 	const [mcpServers, setMcpServers] = useState<McpServerSnapshot[]>([]);
 	/** 当前活动的模态对话框配置 */
@@ -708,6 +719,22 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 			setModal(event.modal ?? null);
 			return;
 		}
+		if (event.type === 'web_file_mentions') {
+			// @ 提及补全候选：requestId 不匹配的迟到响应由 App 层丢弃；
+			// skills 排在文件前面（搜索结果 skills 优先），kind='skill' 供菜单分区
+			const payload = event.web_file_mentions;
+			if (payload) {
+				setFileMentions({
+					requestId: payload.request_id ?? event.request_id ?? '',
+					query: payload.query,
+					candidates: [
+						...(payload.skills ?? []).map((s) => ({path: s.name, kind: 'skill' as const, description: s.description})),
+						...(payload.candidates ?? []),
+					],
+				});
+			}
+			return;
+		}
 		if (event.type === 'error') {
 			pushStatic({role: 'system', text: `error: ${event.message ?? 'unknown error'}`});
 			clearAssistantDelta();
@@ -796,6 +823,7 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 			status,
 			tasks,
 			commands,
+			fileMentions,
 			mcpServers,
 			modal,
 			selectRequest,
@@ -832,6 +860,7 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 			agentGenerated, agentWizardModels, agentWizardResult, agentWizardTools,
 			agentGenerateError, agentGenerateLoading,
 			assistantBuffer, busy, clearCount, commandResult, commands,
+			fileMentions,
 			exited, mcpServers, modal, pendingToolCalls, ready, selectRequest,
 			showThinking, staticItems, status, swarmNotifications, swarmTeammates,
 			tasks, todoItems, bgAgentLabel,

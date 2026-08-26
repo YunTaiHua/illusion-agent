@@ -807,6 +807,11 @@ async def run_query(
             context.last_api_usage_message_count = 0
             context.compacted = True
             context.compacted_message_count = len(messages)
+            # 压缩后早期 read 注入的内容已从上下文移除（摘要替代），
+            # 工具层"已读"缓存必须同步失效，否则 read_file 去重命中
+            # 只回提示不回正文（与 apply_restore 清缓存同一语义）
+            if context.file_state_cache is not None:
+                context.file_state_cache.clear()
             yield StatusEvent(message=t("compact_compacted")), None
         # ---------------------------------------------------------------
 
@@ -868,6 +873,10 @@ async def run_query(
                 )
                 if was_compacted:
                     yield StatusEvent(message=t("compact_reactive_success")), None
+                    # 重试当前轮次（不增加 turn_count）；压缩改变了上下文，
+                    # 工具层"已读"缓存同步失效（与自动压缩同一语义）
+                    if context.file_state_cache is not None:
+                        context.file_state_cache.clear()
                     # 重试当前轮次（不增加 turn_count）
                     turn_count -= 1
                     continue

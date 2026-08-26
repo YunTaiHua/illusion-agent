@@ -304,7 +304,11 @@ def _on_task_complete(
         task: 任务记录
         tracker: 后台代理追踪器，用于注入 <task-notification> XML
     """
-    from illusion.swarm.agent_executor import TaskNotification, format_task_notification
+    from illusion.swarm.agent_executor import (
+        TaskNotification,
+        agent_type_display,
+        format_task_notification,
+    )
 
     # 读取任务实际输出（从 output_file 或内存 result）
     result_text = ""
@@ -324,11 +328,10 @@ def _on_task_complete(
         if task.status == "killed":
             tracker.discard(agent_id)
             return
-        # task_name 格式：任务名 · agent类型，类型为空时默认 "GeneralPurpose"
+        # task_name 格式：任务名 · agent类型（PascalCase，与 /agent 列表一致），
+        # 类型为空时默认 "GeneralPurpose"
         task_name_raw = task.metadata.get("name") or task.description or ""
-        subagent_type = task.metadata.get("subagent_type") or "general-purpose"
-        # 转 PascalCase：general-purpose → GeneralPurpose
-        agent_type = "".join(w.title() for w in subagent_type.replace("_", "-").split("-"))
+        agent_type = agent_type_display(task.metadata.get("subagent_type"))
         task_name = f"{task_name_raw} · {agent_type}"
         notification = TaskNotification(
             task_id=agent_id,

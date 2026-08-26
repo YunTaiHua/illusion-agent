@@ -102,3 +102,70 @@ async def test_context_window_custom_does_not_emit_error():
     line_completes = [e for e in emitted_events if e.type == "line_complete"]
     assert line_completes
     assert line_completes[0].session_id == "s1"
+
+
+@pytest.mark.asyncio
+async def test_agent_select_normalizes_legacy_type_names(tmp_path, monkeypatch):
+    """/agent 列表：类型段统一 PascalCase（前台转换 + 后台旧数据规范化）。
+
+    web 宿主 _handle_select_command 与 terminal 宿主 backend_host 是平行
+    实现，两者都必须用共享 agent_type_display；历史 task_name 里的原始
+    subagent_type（如 general-purpose）展示前规范化，已驼峰的幂等不变形。
+    """
+    from illusion.engine.messages import (
+        ConversationMessage,
+        TextBlock,
+        ToolResultBlock,
+        ToolUseBlock,
+    )
+
+    # 隔离 tasks 目录（result_text 已非空，不会真正读取 log，仅防御性隔离）
+    monkeypatch.setattr("illusion.config.paths.get_tasks_dir", lambda: tmp_path)
+
+    messages = [
+        # 前台 agent：input 已到达且带 subagent_type
+        ConversationMessage(role="assistant", content=[
+            ToolUseBlock(id="toolu_1", name="agent", input={"description": "调研配置", "subagent_type": "general-purpose"}),
+        ]),
+        ConversationMessage(role="user", content=[
+            ToolResultBlock(tool_use_id="toolu_1", content="调研完成"),
+        ]),
+        # 后台 agent：旧格式通知，类型段未转换
+        ConversationMessage(role="user", content=[
+            TextBlock(text=(
+                "<task-notification>\n<task-id>ar7m1z0p</task-id>\n"
+                "<status>completed</status>\n<summary>Agent done</summary>\n"
+                "<task-name>研究代码 · general-purpose</task-name>\n"
+                "<result>done</result>\n</task-notification>"
+            )),
+        ]),
+    ]
+
+    session = MagicMock()
+    session.session_id = "s1"
+    session.engine.messages = messages
+    state = MagicMock()
+    state.ui_language = "zh-CN"
+    settings_mock = MagicMock()
+    settings_mock.ui_language = "zh-CN"
+    session.app_state = MagicMock()
+    session.app_state.get.return_value = state
+    session.bundle.current_settings.return_value = settings_mock
+    session.bundle.app_state.get.return_value = state
+
+    emitted: list[BackendEvent] = []
+
+    async def fake_emit(event: BackendEvent, **kwargs: Any) -> None:
+        emitted.append(event)
+
+    host = _make_host(_bundle=MagicMock())
+    host._emit = fake_emit  # type: ignore[method-assign]
+
+    await host._handle_select_command("agent", session)
+
+    select_events = [e for e in emitted if e.type == "select_request"]
+    assert len(select_events) == 1
+    labels = [o["label"] for o in select_events[0].select_options]
+    assert any("调研配置 · GeneralPurpose" in lb for lb in labels), labels
+    assert any("研究代码 · GeneralPurpose" in lb for lb in labels), labels
+    assert not any("general-purpose" in lb for lb in labels), labels

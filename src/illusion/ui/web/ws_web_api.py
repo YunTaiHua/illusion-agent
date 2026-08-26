@@ -26,7 +26,6 @@ import asyncio
 import logging
 import os
 import subprocess
-from collections import deque
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -49,6 +48,20 @@ from illusion.services.session_storage import (
 )
 from illusion.services.session_storage import (
     list_session_snapshots as _list_session_snapshots,
+)
+
+# @ 提及补全候选收集（terminal 与 web 共享，见 illusion.ui.file_mentions）
+from illusion.ui.file_mentions import (
+    file_mention_candidates as _file_mention_candidates,
+)
+from illusion.ui.file_mentions import (
+    normalize_mention_query as _normalize_mention_query,
+)
+from illusion.ui.file_mentions import (
+    skill_mention_candidates as _skill_mention_candidates,
+)
+from illusion.ui.file_mentions import (
+    tree_entry_visible as _tree_entry_visible,
 )
 from illusion.ui.protocol import BackendEvent, FrontendRequest
 from illusion.ui.runtime import RuntimeBundle, build_session_engine
@@ -1432,17 +1445,6 @@ def _collect_resources(bundle: RuntimeBundle) -> dict[str, Any]:
 # （独立于 dispatcher，便于单元测试）
 # ---------------------------------------------------------------------------
 
-# 文件树忽略的目录名（生成产物/依赖/缓存，体积大且无导航价值）
-_TREE_IGNORED_NAMES = frozenset({
-    "node_modules", "__pycache__", ".git", ".hg", ".svn",
-    ".venv", "venv", "env", "dist", "build", "out", "target",
-    ".next", ".nuxt", ".cache", ".mypy_cache", ".pytest_cache",
-    ".ruff_cache", ".tox", ".idea", "coverage", ".turbo", ".parcel-cache",
-})
-# 点文件目录白名单（项目配置相关，导航有意义才展示）
-_TREE_DOTDIR_ALLOW = frozenset({
-    ".github", ".illusion", ".claude", ".cursor", ".devcontainer", ".vscode",
-})
 # 单层目录条目上限（超出截断，前端显示省略行）
 _TREE_MAX_ENTRIES = 500
 # 文件预览限制
@@ -1450,26 +1452,6 @@ _PREVIEW_MAX_BYTES = 512 * 1024
 _PREVIEW_MAX_LINES = 4000
 # git 子进程超时（秒）
 _GIT_TIMEOUT = 5.0
-
-
-def _tree_entry_visible(name: str, is_dir: bool) -> bool:
-    """判断目录条目是否在文件树中可见。
-
-    规则：忽略名单一律隐藏；点文件仅展示白名单内的目录，其余
-    点文件/点目录（.env、.DS_Store 等）视为噪音隐藏。
-
-    Args:
-        name: 条目名（不含路径）
-        is_dir: 是否目录
-
-    Returns:
-        bool: 可见返回 True
-    """
-    if name in _TREE_IGNORED_NAMES:
-        return False
-    if name.startswith("."):
-        return is_dir and name in _TREE_DOTDIR_ALLOW
-    return True
 
 
 def _resolve_within_root(root: str, rel: str) -> Path | None:
@@ -1531,154 +1513,6 @@ def _list_dir_entries(directory: Path, root: str) -> tuple[list[dict[str, Any]],
         return [], False
     entries.sort(key=lambda x: (x["kind"] != "dir", x["name"].lower()))
     return entries, truncated
-
-
-# @ 提及补全候选上限（下拉菜单容量）
-_MENTION_MAX_CANDIDATES = 20
-# @ 提及补全扫描条目上限（防止巨型仓库全量遍历；超出标记截断）
-_MENTION_MAX_SCANNED = 5000
-# @ 提及补全目录深度上限
-_MENTION_MAX_DEPTH = 12
-
-
-def _normalize_mention_query(query: str | None) -> str:
-    """规范化 @ 提及查询串：统一 / 分隔、去首尾空白与多余前缀。
-
-    Args:
-        query: 前端输入的原始查询（@ 之后、光标之前的路径片段）
-
-    Returns:
-        str: 规范化后的查询串（可能为空串）
-    """
-    q = (query or "").strip().replace("\\", "/")
-    while q.startswith("./"):
-        q = q[2:]
-    if q.startswith("/"):
-        q = q.lstrip("/")
-    return q.strip()
-
-
-def _file_mention_candidates(root: str, query: str) -> tuple[list[dict[str, Any]], bool]:
-    """在工作区内收集 @ 提及补全候选（仅路径，不读内容）。
-
-    以 root 为界 BFS 遍历，过滤规则与文件树一致（_tree_entry_visible）。
-    每层条目按「目录优先 + 名称不区分大小写」排序，BFS 天然浅层优先，
-    因此凑满上限即可提前返回。匹配为大小写不敏感的子串包含
-    （query 为空串时全部可见条目命中，等价于从根浏览）。
-
-    Args:
-        root: 工作区根目录（绝对路径）
-        query: 规范化后的查询串
-
-    Returns:
-        tuple[list[dict[str, Any]], bool]: (候选列表, 是否因扫描/深度上限截断)；
-        候选为 {path: 根相对路径(/ 分隔), kind: dir|file}
-    """
-    root_path = Path(root)
-    lowered = query.lower()
-    candidates: list[dict[str, Any]] = []
-    truncated = False
-    scanned = 0
-    # FIFO 队列：元素为 (相对目录, 深度)；根目录 rel="" depth=0。
-    # 多收集 1 个候选用于判定截断：恰好凑满上限时无法区分"正好这么多"
-    # 与"还有更多"，找到上限+1 个才可靠地标记 truncated。
-    queue: deque[tuple[str, int]] = deque([("", 0)])
-    while queue and len(candidates) <= _MENTION_MAX_CANDIDATES and scanned < _MENTION_MAX_SCANNED:
-        dir_rel, depth = queue.popleft()
-        try:
-            with os.scandir(root_path / dir_rel if dir_rel else root_path) as it:
-                def _dir_key(e: os.DirEntry[str]) -> tuple[bool, str]:
-                    try:
-                        return (not e.is_dir(follow_symlinks=False), e.name.lower())
-                    except OSError:
-                        return (True, e.name.lower())
-                children = sorted(it, key=_dir_key)
-        except OSError:
-            continue
-        for child in children:
-            scanned += 1
-            if scanned > _MENTION_MAX_SCANNED:
-                truncated = True
-                break
-            try:
-                is_dir = child.is_dir(follow_symlinks=False)
-            except OSError:
-                continue
-            if not _tree_entry_visible(child.name, is_dir):
-                continue
-            child_rel = f"{dir_rel}/{child.name}" if dir_rel else child.name
-            if lowered in child_rel.lower():
-                candidates.append({"path": child_rel, "kind": "dir" if is_dir else "file"})
-                if len(candidates) > _MENTION_MAX_CANDIDATES:
-                    break
-            if is_dir and depth < _MENTION_MAX_DEPTH:
-                queue.append((child_rel, depth + 1))
-        else:
-            continue
-        # 内层 break（凑满上限+1 或超扫描上限）：外层同步退出
-        if len(candidates) > _MENTION_MAX_CANDIDATES:
-            break
-    if len(candidates) > _MENTION_MAX_CANDIDATES:
-        truncated = True
-    return candidates[:_MENTION_MAX_CANDIDATES], truncated
-
-
-# @ 技能提及候选上限
-_MENTION_MAX_SKILLS = 8
-
-
-# 技能注册表短 TTL 缓存（补全按击键触发请求，避免每次重读/解析全部 SKILL.md）
-_SKILL_REGISTRY_TTL = 5.0
-_skill_registry_cache: dict[str, tuple[float, Any]] = {}
-
-
-def _skill_mention_candidates(cwd: str, query: str) -> list[dict[str, str]]:
-    """收集 @ 技能提及候选（名称 + 描述，按查询串过滤并按相关度排序）。
-
-    与文件候选同走一个补全菜单；匹配为大小写不敏感的子串包含。
-    排序按相关度分层：名称前缀命中 > 名称包含 > 仅描述命中，
-    层内按名称字母序——避免描述含常见字母的长尾技能把精确
-    前缀候选挤出上限窗口。注册表按 cwd 缓存 5 秒（TTL），
-    加载失败返回空列表，补全菜单静默降级。
-
-    Args:
-        cwd: 工作区根目录（技能注册表按此解析用户级/项目级技能）
-        query: 规范化后的查询串
-
-    Returns:
-        list[dict[str, str]]: 候选列表，元素为 {name, description}
-    """
-    import time
-
-    now = time.monotonic()
-    cached = _skill_registry_cache.get(cwd)
-    if cached is not None and now - cached[0] <= _SKILL_REGISTRY_TTL:
-        registry = cached[1]
-    else:
-        try:
-            from illusion.skills.loader import load_skill_registry
-            registry = load_skill_registry(cwd)
-        except Exception:
-            log.exception("收集技能提及候选失败")
-            return []
-        _skill_registry_cache[cwd] = (now, registry)
-    lowered = query.lower()
-
-    def _rank(s: dict[str, str]) -> tuple[int, str]:
-        name = s["name"].lower()
-        if not lowered or name.startswith(lowered):
-            return (0, name)
-        if lowered in name:
-            return (1, name)
-        return (2, name)
-
-    skills = [
-        {"name": s.name, "description": s.description or ""}
-        for s in registry.list_skills()
-        if lowered in s.name.lower() or lowered in (s.description or "").lower()
-    ]
-    skills.sort(key=_rank)
-    return skills[:_MENTION_MAX_SKILLS]
 
 
 def _run_git(cwd: str, *args: str, ok_codes: tuple[int, ...] = (0,)) -> str | None:
@@ -1861,11 +1695,23 @@ def _collect_agent_tasks(messages: list[Any]) -> list[dict[str, Any]]:
         按出现顺序倒排（最近的在最前）
     """
     from illusion.engine.messages import TextBlock, ToolResultBlock, ToolUseBlock
+    from illusion.swarm.agent_executor import agent_type_display
     from illusion.tasks.types import TASK_NOTIFICATION_RE
 
     def _is_agent_id(task_id: str, task_name: str) -> bool:
-        hay = f"{task_id} {task_name}".lower()
-        return "agent" in hay
+        # task_id 前缀即类型权威（tasks/manager._task_id）：
+        #   a/r = 后台 agent（in_process_agent/local_agent/remote_agent）
+        #   t = in_process_teammate（团队队友，同为智能体）
+        #   b = local_bash（后台命令任务）
+        # 未知格式回退：仅按 task_name 判断（task_id 为随机 hex 不含语义，
+        # 旧实现把含 "agent" 字样的 bash 命令误判为智能体、把类型段不含
+        # "agent" 的后台智能体误判为任务——正是分类混乱的根源）。
+        prefix = task_id[:1].lower()
+        if prefix in ("a", "r", "t"):
+            return True
+        if prefix == "b":
+            return False
+        return "agent" in task_name.lower()
 
     items: list[dict[str, Any]] = []
 
@@ -1913,6 +1759,11 @@ def _collect_agent_tasks(messages: list[Any]) -> list[dict[str, Any]]:
                 continue
             task_id = match.group("task_id").strip()
             task_name = (match.group("task_name") or "").strip()
+            # 类型段统一规范化为 PascalCase（旧通知可能是原始 subagent_type；
+            # agent_type_display 对已是驼峰的输入幂等），与 /agent 列表一致
+            if " · " in task_name:
+                name_part, _, type_part = task_name.rpartition(" · ")
+                task_name = f"{name_part} · {agent_type_display(type_part)}"
             items.append({
                 "id": task_id,
                 "title": task_name or task_id,

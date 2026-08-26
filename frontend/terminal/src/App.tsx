@@ -11,7 +11,7 @@
  * @module App
  */
 
-import React, {useEffect, useMemo, useRef, useState} from 'react';
+import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {Box, Text, useApp, useInput} from 'ink';
 
 import {getActivityDescription} from './tools/registry.js';
@@ -19,6 +19,7 @@ import {AgentWizard} from './components/AgentWizard.js';
 import {CommandPicker} from './components/CommandPicker.js';
 import {ConversationView} from './components/ConversationView.js';
 import {CustomInputModal} from './components/CustomInputModal.js';
+import {MentionPicker} from './components/MentionPicker.js';
 import {ModalHost, QuestionModal} from './components/ModalHost.js';
 import {PromptInput} from './components/PromptInput.js';
 import {SelectModal, type SelectOption} from './components/SelectModal.js';
@@ -34,6 +35,7 @@ import {normalizeLanguage, t, UiLanguage} from './i18n.js';
 import {ThemeProvider, useTheme} from './theme/ThemeContext.js';
 import type {FrontendConfig} from './types.js';
 import {fmtTokens} from './utils/fmtTokens.js';
+import {detectMentionToken, formatMentionInsertion} from './utils/mention.js';
 import {VERSION} from './version.js';
 
 /**
@@ -60,6 +62,9 @@ const scriptedSteps = (() => {
 		return [];
 	}
 })();
+
+/** @ 提及补全防抖间隔（ms）：连续输入时减少补全请求（与 web 端一致） */
+const MENTION_DEBOUNCE_MS = 120;
 
 /**
  * 权限模式选项列表
@@ -132,6 +137,18 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 	const [cursorReset, setCursorReset] = useState(0);
 	/** 停止请求已发送、等待后端确认（终止过程可能有 1-2s 延迟，期间提示符显示旋转动画） */
 	const [stopping, setStopping] = useState(false);
+	// === @ 提及补全（与 web 端对称：光标处 token 检测 + 防抖请求 + 过期响应丢弃） ===
+	/** 光标位置（MultilineTextInput 上报，token 检测依据） */
+	const [caret, setCaret] = useState(0);
+	/** 补全菜单当前选中候选索引 */
+	const [mentionIndex, setMentionIndex] = useState(0);
+	/** Esc 关闭后不再弹出；token 变化时重新武装 */
+	const [mentionDismissed, setMentionDismissed] = useState(false);
+	/** 已发出的最新请求 id（响应 requestId 与之不符视为过期丢弃） */
+	const [acceptedMentionReqId, setAcceptedMentionReqId] = useState<string | null>(null);
+	/** 应用提及后的光标位置（cursorReset 重挂载时定位到插入点之后） */
+	const [pendingCaret, setPendingCaret] = useState<number | null>(null);
+	const mentionReqIdRef = useRef(0);
 	/** /agent create 触发的分步创建向导是否可见 */
 	const [showAgentWizard, setShowAgentWizard] = useState(false);
 	/** Ctrl+G 两段式第二段：等待 p/r/e/c 操作键 */
@@ -211,6 +228,70 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 	useEffect(() => {
 		setPickerIndex(0);
 	}, [canShowPicker, commandHints.length, input]);
+
+	// === @ 提及补全（与 web 端 PromptInput 同构的检测/防抖/过期丢弃逻辑） ===
+	/** 光标处提及 token；斜杠命令选择器、忙碌或模态框期间不触发 */
+	const mentionToken = useMemo(
+		() => (showPicker || session.busy || session.modal || selectModal
+			? null
+			: detectMentionToken(input, caret)),
+		[input, caret, showPicker, session.busy, session.modal, selectModal],
+	);
+	const tokenKey = mentionToken ? `${mentionToken.start}:${mentionToken.query}` : null;
+
+	// token 变化时重新武装菜单；变化后防抖拉取候选（request_id 供响应关联）
+	useEffect(() => {
+		setMentionDismissed(false);
+	}, [tokenKey]);
+	useEffect(() => {
+		if (!tokenKey) return;
+		const timer = setTimeout(() => {
+			const rid = `m${++mentionReqIdRef.current}`;
+			setAcceptedMentionReqId(rid);
+			session.sendRequest({
+				type: 'web_request_file_mentions',
+				query: tokenKey.slice(tokenKey.indexOf(':') + 1),
+				request_id: rid,
+			});
+		}, MENTION_DEBOUNCE_MS);
+		return () => clearTimeout(timer);
+	}, [tokenKey, session.sendRequest]);
+	useEffect(() => {
+		if (!mentionToken) setMentionIndex(0);
+	}, [mentionToken]);
+
+	// 仅采纳最新请求的响应，并按响应回显的规范化 query 二次过滤（防抖窗口内的旧结果避免闪烁）
+	const mentionCandidates = useMemo(() => {
+		const result = session.fileMentions;
+		if (!result || result.requestId !== acceptedMentionReqId) return [];
+		const q = result.query.toLowerCase();
+		return q ? result.candidates.filter((c) => c.path.toLowerCase().includes(q)) : result.candidates;
+	}, [session.fileMentions, acceptedMentionReqId]);
+
+	const showMentionMenu =
+		mentionToken !== null
+		&& !mentionDismissed
+		&& mentionCandidates.length > 0
+		&& !showPicker
+		&& !session.busy
+		&& !session.modal
+		&& !selectModal;
+
+	// 候选列表变化时钳制选中索引（响应缩窄列表时避免索引越界产生死高亮）
+	useEffect(() => {
+		setMentionIndex((i) => (mentionCandidates.length === 0 ? 0 : Math.min(i, mentionCandidates.length - 1)));
+	}, [mentionCandidates.length]);
+
+	/** 应用选中的提及候选：替换 @token 为插入文本并定位光标到插入点之后 */
+	const applyMention = useCallback((candidatePath: string, kind: 'dir' | 'file' | 'skill') => {
+		if (!mentionToken) return;
+		const insertion = formatMentionInsertion({path: candidatePath, kind});
+		const nextCaret = mentionToken.start + insertion.length;
+		setInput((prev) => prev.slice(0, mentionToken.start) + insertion + prev.slice(mentionToken.end));
+		// 重挂载 MultilineTextInput 并把光标定位到插入点之后（与 web 端 setSelectionRange 对称）
+		setPendingCaret(nextCaret);
+		setCursorReset((c) => c + 1);
+	}, [mentionToken]);
 
 	/**
 	 * 动态设置终端窗口/tab 标题为当前会话显示名称
@@ -648,6 +729,27 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 			return;
 		}
 
+		// --- @ 提及补全选择器（优先于命令选择器；输入框导航键已被 suppressNavigation 抑制） ---
+		if (showMentionMenu) {
+			if (key.upArrow) {
+				setMentionIndex((i) => Math.max(0, i - 1));
+				return;
+			}
+			if (key.downArrow) {
+				setMentionIndex((i) => Math.min(mentionCandidates.length - 1, i + 1));
+				return;
+			}
+			if (key.return || key.tab) {
+				const picked = mentionCandidates[mentionIndex];
+				if (picked) applyMention(picked.path, picked.kind);
+				return;
+			}
+			if (key.escape) {
+				setMentionDismissed(true);
+				return;
+			}
+		}
+
 		// --- 命令选择器 ---
 		if (showPicker) {
 			if (key.upArrow) {
@@ -905,6 +1007,11 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 				<CommandPicker hints={commandHints} selectedIndex={pickerIndex} totalCommands={session.commands.length} />
 			) : null}
 
+			{/* @ 提及补全选择器（技能在前、文件在后；按键由 App 层统一拦截） */}
+			{!showPicker && showMentionMenu ? (
+				<MentionPicker candidates={mentionCandidates} selectedIndex={mentionIndex} />
+			) : null}
+
 			{/* 指令结果显示 */}
 			{session.commandResult ? (
 				<CommandPicker
@@ -1001,11 +1108,14 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 			setInput={setInput}
 			onSubmit={onSubmit}
 			toolName={session.busy ? currentToolName : undefined}
-			suppressSubmit={showPicker || goalKeyMode}
+			suppressSubmit={showPicker || goalKeyMode || showMentionMenu}
 			inputFocus={!goalKeyMode}
 			cursorReset={cursorReset}
 			language={language}
 			todoItems={session.todoItems}
+			onCursorChange={setCaret}
+			suppressNavigation={showMentionMenu}
+			initialCursorOffset={pendingCaret ?? undefined}
 		/>
 	)}
 

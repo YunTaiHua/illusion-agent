@@ -513,3 +513,33 @@ async def test_concurrent_ask_question_serialized_by_modal_lock():
 
     result_b = await asyncio.wait_for(task_b, timeout=2.0)
     assert result_b == "answer B"
+
+
+async def test_handle_file_mentions_emits_candidates(tmp_path):
+    """_handle_file_mentions：terminal 通道 @ 提及补全，request_id 回显 + 候选载荷。
+
+    与 web 端 handle_web_request_file_mentions 对称：同一共享候选收集，
+    仅返回路径与技能名（不读内容）。
+    """
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("print('hi')\n", encoding="utf-8")
+
+    bundle = MagicMock()
+    bundle.cwd = str(tmp_path)
+    host = _make_host(_bundle=bundle)
+
+    await host._process_request(FrontendRequest(
+        type="web_request_file_mentions", query="ma", request_id="m1",
+    ))
+
+    event = host._write_queue.get_nowait()
+    assert event.type == "web_file_mentions"
+    assert event.request_id == "m1"
+    assert event.web_file_mentions is not None
+    payload = event.web_file_mentions
+    # 规范化 query 原样回显；文件命中子串 "ma"（main.py），无技能环境不崩溃
+    assert payload["query"] == "ma"
+    paths = [c["path"] for c in payload["candidates"]]
+    assert any(p.endswith("main.py") for p in paths)
+    assert all(c["kind"] in ("dir", "file") for c in payload["candidates"])

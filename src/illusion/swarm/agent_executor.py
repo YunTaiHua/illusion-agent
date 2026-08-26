@@ -46,6 +46,7 @@ from illusion.engine.messages import ConversationMessage
 from illusion.tasks.manager import get_task_manager
 from illusion.tools.base import ToolRegistry
 from illusion.utils.aioqueue import Queue, QueueShutDown
+from illusion.utils.file_state_cache import FileStateCache
 
 logger = logging.getLogger(__name__)
 
@@ -215,6 +216,23 @@ def _register_agent(ctx: AgentExecutionContext) -> None:
 def _unregister_agent(agent_id: str) -> None:
     """从活跃注册表中移除代理。"""
     _active_agents.pop(agent_id, None)
+
+
+def agent_type_display(subagent_type: str | None) -> str:
+    """将 subagent_type 转为 PascalCase 展示名（前台 / 后台 agent 通用）。
+
+    分隔符（- 与 _）切词后逐词首字母大写拼接：
+    general-purpose → GeneralPurpose、statusline-setup → StatuslineSetup。
+    空值回退 "GeneralPurpose"（后端默认类型）。
+
+    Args:
+        subagent_type: 原始类型标识（如 'general-purpose'）；None/空串取默认
+
+    Returns:
+        str: PascalCase 展示名
+    """
+    raw = (subagent_type or "").strip() or "general-purpose"
+    return "".join(w[:1].upper() + w[1:] for w in raw.replace("_", "-").split("-") if w)
 
 
 # ---------------------------------------------------------------------------
@@ -599,9 +617,11 @@ async def run_agent_in_process(
     permission_checker = query_context.permission_checker
 
     # 创建代理专用的 QueryContext（继承父级的权限和问答回调）
-    # 继承 on_before_tool_execute 和 file_state_cache：子 agent 修改文件时
-    # 也需触发 track_edit 备份到主 engine 的 file_history，否则 rewind
-    # 无法回退子 agent 的文件修改。
+    # 继承 on_before_tool_execute：子 agent 修改文件时也需触发 track_edit
+    # 备份到主 engine 的 file_history，否则 rewind 无法回退子 agent 的修改。
+    # 不继承 file_state_cache：子 agent 没读过父会话的文件，继承会导致其
+    # read_file 命中父会话的"已读"标记而返回占位提示；文件修改后的 mtime
+    # 失效机制保证父会话读到的始终是最新磁盘内容。
     agent_query_context = QueryContext(
         api_client=query_context.api_client,
         tool_registry=agent_tools,
@@ -620,7 +640,7 @@ async def run_agent_in_process(
         print_mode=query_context.print_mode,
         sandbox_permission_prompt=query_context.sandbox_permission_prompt,
         on_before_tool_execute=query_context.on_before_tool_execute,
-        file_state_cache=query_context.file_state_cache,
+        file_state_cache=FileStateCache(),
         # 继承任务上下文提供者：子代理的自动审批同样携带 goal objective /
         # 最近 user 消息。provider 由父级 engine 构造时绑定（捕获父级
         # messages 属性表达式，惰性求值），子代理作为父任务的一部分，
