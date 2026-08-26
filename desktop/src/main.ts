@@ -33,18 +33,6 @@ let appUrl = '';
 // 是否处于"真正退出"流程（区分关闭到托盘与退出）
 let isQuitting = false;
 
-/**
- * 加载页莫比乌斯环路径（复刻 web 端 ConnectedOverlay 的 MOBIUS_PATH，
- * 80x80 viewBox，中心 40,40）。仅用于本地加载页的内联 SVG。
- */
-const MOBIUS_PATH = [
-  'M 40 20',
-  'C 55 20, 65 32, 55 40',
-  'C 48 46, 44 36, 40 36',
-  'C 36 36, 32 46, 25 40',
-  'C 15 32, 25 20, 40 20',
-].join(' ');
-
 /** 窗口图标路径解析：打包资源 → 工程内 resources → 源 assets（开发时） */
 function resolveWindowIcon(): string | undefined {
   const candidates = [
@@ -160,24 +148,17 @@ app.whenReady().then(async () => {
   // 后台启动可能耗时（运行时检测 + Python 初始化），若等后端就绪再建窗，
   // 用户会长时间看到"空白/无响应"，造成"启动很慢"的体感。故先把窗口
   // 亮出来并展示本地加载页，后端就绪后再切换到应用 URL。
-  // 加载页视觉复刻 web 端 ConnectingOverlay 的莫比乌斯环遮罩（白色底 +
-  // 浅色主题青紫两色光带 + 呼吸缩放，无光晕），保证与启动后的应用 UI 谐和统一。
+  // 加载页为纯白底：与 web 端 ConnectingOverlay 的 bg-white 同框一致，
+  // 消除粒子球旋转 + 切白底之间的间隙卡顿感。web 端遮罩层淡入接管，
+  // 1s opacity 过渡柔化切换。
   mainWindow = createWindow();
   mainWindow.loadURL(
     'data:text/html;charset=utf-8,' +
       encodeURIComponent(
         `<!DOCTYPE html><html><head><style>
           html,body{margin:0;height:100%}
-          body{display:flex;align-items:center;justify-content:center;background:#ffffff}
-          #mobi{animation:pulseSoft 2.5s ease-in-out infinite}
-          #ring{fill:none;stroke-width:3.5;stroke-linecap:round;stroke-dasharray:100 28;animation:mobiFlow 1.8s linear infinite}
-          @keyframes pulseSoft{0%,100%{transform:scale(1);opacity:.9}50%{transform:scale(1.08);opacity:1}}
-          @keyframes mobiFlow{from{stroke-dashoffset:0}to{stroke-dashoffset:-128}}
-        </style></head><body>
-          <svg id="mobi" width="112" height="112" viewBox="0 0 80 80">
-            <path id="ring" stroke="#dc4a78" d="${MOBIUS_PATH}"/>
-          </svg>
-        </body></html>`,
+          body{background:#ffffff}
+        </style></head><body></body></html>`,
       ),
   );
   mainWindow.show();

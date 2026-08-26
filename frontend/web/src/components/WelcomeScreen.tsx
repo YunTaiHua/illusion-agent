@@ -45,7 +45,8 @@ function readSparkColor(): string {
   if (root.classList.contains('dark')) {
     return css.getPropertyValue('--text-primary').trim() || '#eaeaea';
   }
-  return '#dc4a78';
+  /* 浅色火花 = 磷光品牌青 #3dbab5：与主标题「群青海岸」磷光带同色，扫过时如磷光溅起 */
+  return '#3dbab5';
 }
 
 /**

@@ -994,14 +994,20 @@ pre code.hljs,
 /* ========== 欢迎屏标题样式 ========== */
 
 /* 渐变文字 — GradientText（静态渐变） */
+/* 浅色：群青海岸（U2）——两端群青浅滩向中央沉入深靛海底，
+   品牌青磷光带偏左 41% 不在正中；首尾同色 #2a3d80 保证闪光扫过无缝衔接 */
 .gradient-text {
   background: linear-gradient(120deg in oklch,
-    #dc4a78 0%,
-    #f29db5 25%,
-    #f6a866 40%,
-    #f7cd9e 50%,
-    #f29db5 75%,
-    #dc4a78 100%);
+    #2a3d80 0%,
+    #233257 18%,
+    #263a5e 32%,
+    #2f8f96 38%,
+    #3dbab5 41%,
+    #86d4cf 44%,
+    #3dbab5 47%,
+    #263a5e 66%,
+    #233257 82%,
+    #2a3d80 100%);
   background-size: 200% auto;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
