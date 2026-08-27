@@ -610,7 +610,7 @@ class ChannelRunner:
         history_checkpoint_count: int | None
         try:
             history_result = await self.session_store.load_messages(session)
-            history_checkpoint_count: int | None = history_result.checkpoint_count
+            history_checkpoint_count = history_result.checkpoint_count
         except Exception:
             # 计数传 None 而非 0：瞬时 IO 失败时让 build_runtime 的磁盘
             # 兜底对齐仍可生效，避免从 id=0 重复写 checkpoint 行

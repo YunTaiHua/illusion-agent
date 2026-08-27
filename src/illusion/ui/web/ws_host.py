@@ -1180,7 +1180,7 @@ class WebBackendHost:
         # goal 驱动行（创建/resume，drive_goal=True）除外——其行内错误属于
         # 对话流故障，必须持久化到转录，而非 5 秒即逝的 toast
         is_command_line = parsed_cmd is not None
-        if is_command_line and parsed_cmd[0].name == "goal":
+        if parsed_cmd is not None and parsed_cmd[0].name == "goal":
             is_command_line = False
         session.current_line_is_command = is_command_line
         is_goal_create = False
