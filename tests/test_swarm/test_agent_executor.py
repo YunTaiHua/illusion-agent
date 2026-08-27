@@ -290,7 +290,7 @@ class TestAgentTypeDisplay:
     def test_underscored(self):
         from illusion.swarm.agent_executor import agent_type_display
 
-        assert agent_type_display("statusline_setup") == "StatuslineSetup"
+        assert agent_type_display("my_agent") == "MyAgent"
 
     def test_single_word(self):
         from illusion.swarm.agent_executor import agent_type_display

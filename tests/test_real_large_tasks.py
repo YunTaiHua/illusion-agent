@@ -336,10 +336,11 @@ async def task_migration_plan_with_memory():
                 source="user",
             ))
 
-            # Use plan agent system prompt
-            plan_def = get_agent_definition("plan")
+            # Plan agent has been removed as redundant: use general-purpose directly,
+            # and use a dedicated architect prompt when the definition is unavailable
+            gp_def = get_agent_definition("general-purpose")
             engine = make_engine(
-                plan_def.system_prompt if plan_def and plan_def.system_prompt else
+                gp_def.system_prompt if gp_def and gp_def.system_prompt else
                 "You are a software architect. Explore code and create migration plans.",
             )
 

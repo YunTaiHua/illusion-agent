@@ -222,7 +222,7 @@ def agent_type_display(subagent_type: str | None) -> str:
     """将 subagent_type 转为 PascalCase 展示名（前台 / 后台 agent 通用）。
 
     分隔符（- 与 _）切词后逐词首字母大写拼接：
-    general-purpose → GeneralPurpose、statusline-setup → StatuslineSetup。
+    general-purpose → GeneralPurpose、verification → Verification。
     空值回退 "GeneralPurpose"（后端默认类型）。
 
     Args:

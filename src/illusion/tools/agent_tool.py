@@ -34,7 +34,7 @@ class AgentToolInput(BaseModel):
     属性：
         description: 任务的简短描述（3-5 个词）
         prompt: 代理要执行的完整任务
-        subagent_type: 代理类型（如 'general-purpose', 'explore', 'worker'）
+        subagent_type: 代理类型（如 'general-purpose', 'explore', 'verification'）
         model: 可选的模型覆盖
         run_in_background: 是否在后台运行
         name: 代理名称，用于通过 SendMessage 寻址

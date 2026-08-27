@@ -388,14 +388,14 @@ class TestCollectAgentTasks:
         messages = self._messages([
             # 旧格式：类型段未转换
             ("user", [TextBlock(text=notification("a00000001", "研究代码 · general-purpose"))]),
-            ("user", [TextBlock(text=notification("a00000002", "检查环境 · statusline-setup"))]),
+            ("user", [TextBlock(text=notification("a00000002", "检查环境 · explore"))]),
             # 新格式：已驼峰，幂等保持
             ("user", [TextBlock(text=notification("a00000003", "写文档 · GeneralPurpose"))]),
         ])
         titles = {item["id"]: item["title"] for item in _collect_agent_tasks(messages)}
         assert titles == {
             "a00000001": "研究代码 · GeneralPurpose",
-            "a00000002": "检查环境 · StatuslineSetup",
+            "a00000002": "检查环境 · Explore",
             "a00000003": "写文档 · GeneralPurpose",
         }
 

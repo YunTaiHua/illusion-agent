@@ -57,9 +57,14 @@ def test_get_builtin_returns_expected_names():
     names = {a.name for a in builtins}
     assert "general-purpose" in names
     assert "explore" in names
-    assert "plan" in names
-    assert "worker" in names
     assert "verification" in names
+
+
+def test_redundant_builtins_removed():
+    """冗余内置子代理（statusline-setup/illusion-guide/plan/worker）保持移除。"""
+    names = {a.name for a in get_builtin_agent_definitions()}
+    for gone in ("statusline-setup", "illusion-guide", "plan", "worker"):
+        assert gone not in names
 
 
 def test_builtin_agents_have_descriptions():
