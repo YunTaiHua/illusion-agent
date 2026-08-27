@@ -17,7 +17,7 @@ illusion-agent/
 │   ├── prompts/            # Prompt system
 │   ├── skills/             # Skill system
 │   ├── tasks/              # Task management
-│   ├── tools/              # Toolset (30 base tools + 4 channel tools)
+│   ├── tools/              # Toolset (base + channel tools)
 │   ├── ui/                 # User interface
 │   │   ├── web/            # Web backend (FastAPI + WebSocket)
 │   │   └── ...
@@ -47,7 +47,7 @@ Supports multiple AI providers:
 
 ### Tool System
 
-Provides 30 base tools, covering:
+Provides base tools, covering:
 
 - **File Operations**: `file_read`, `file_write`, `file_edit`
 - **Command Execution**: `bash`, `powershell`
@@ -85,17 +85,13 @@ Four permission modes:
 
 ### Multi-Agent Coordinator
 
-Built-in 7 specialized Agents:
+Built-in specialized agents:
 
 | Agent | Purpose |
 |-------|---------|
 | `general-purpose` | General research and multi-step tasks |
 | `explore` | File search and code exploration expert |
-| `plan` | Architecture design and implementation planning expert |
 | `verification` | Adversarial verification expert |
-| `worker` | Implementation-oriented Worker |
-| `statusline-setup` | Shell PS1 converter |
-| `illusion-guide` | Illusion Agent / SDK / API documentation expert |
 
 ---
 

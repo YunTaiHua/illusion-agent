@@ -19,7 +19,7 @@ illusion-agent/
 │   ├── prompts/            # 提示词系统
 │   ├── skills/             # 技能系统
 │   ├── tasks/              # 任务管理
-│   ├── tools/              # 工具集 (30 个基础工具 + 4 个渠道工具)
+│   ├── tools/              # 工具集（基础 + 渠道工具）
 │   ├── ui/                 # 用户界面
 │   │   ├── web/            # Web 后端 (FastAPI + WebSocket)
 │   │   └── ...
@@ -49,7 +49,7 @@ illusion-agent/
 
 ### 工具系统
 
-提供 30 个基础工具，涵盖：
+提供基础工具，涵盖：
 
 - **文件操作**: `file_read`, `file_write`, `file_edit`
 - **命令执行**: `bash`, `powershell`
@@ -87,17 +87,13 @@ illusion-agent/
 
 ### 多智能体协调器
 
-内置 7 种专业 Agent：
+内置专业子代理：
 
 | Agent | 用途 |
 |-------|------|
 | `general-purpose` | 通用研究和多步任务 |
 | `explore` | 文件搜索和代码探索专家 |
-| `plan` | 架构设计和实施规划专家 |
 | `verification` | 对抗性验证专家 |
-| `worker` | 实现导向的 Worker |
-| `statusline-setup` | Shell PS1 转换器 |
-| `illusion-guide` | Illusion Agent / SDK / API 文档专家 |
 
 ---
 

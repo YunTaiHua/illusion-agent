@@ -16,7 +16,8 @@ a flexible extension ecosystem into a single intelligent agent — at home
 on Windows, macOS, and Linux.
 
 Whether you prefer the discipline of the terminal or the ease of the browser,
-IllusionAgent resonates with your workflow: 34 built-in tools, 7 specialized sub-agents, 2 compaction methods, MCP server support, hooks, plugins, and
+IllusionAgent resonates with your workflow: a rich built-in toolset, specialized
+sub-agents, two compaction methods, MCP server support, hooks, plugins, and
 a cron scheduler for unattended automation — spanning Feishu, WeChat, and QQ.
 
 > Standing on the shoulders of giants — Claude Code prompts, OpenHarness
@@ -26,8 +27,8 @@ a cron scheduler for unattended automation — spanning Feishu, WeChat, and QQ.
 ## Core Features
 
 - 🤖 **Multi AI Provider Support** - Anthropic Claude, OpenAI, GitHub Copilot, OpenAI Codex, and any OpenAI-compatible endpoint
-- 🧠 **Multi-Agent Collaboration** - 7 built-in specialized Agents, supporting task orchestration
-- 🛠️ **Rich Toolset** - 34 built-in tools (30 base + 4 channel) + MCP dynamic tool extension
+- 🧠 **Multi-Agent Collaboration** - Built-in specialized agents (general-purpose, explore, verification), supporting task orchestration
+- 🛠️ **Rich Toolset** - Full base + channel toolset + MCP dynamic tool extension
 - 📦 **Context Compaction** - Microcompact (clear old tool results) + full compaction (LLM summary), auto-triggered as context fills
 - 🌐 **Web UI Interface** - Browser-based chat interface with `illusion web`, featuring warm color design, session management, and real-time streaming (supplementary to the recommended terminal interface)
 - 🌍 **Bilingual Interface** - All CLI output automatically switches between Chinese and English based on `ui_language` setting
