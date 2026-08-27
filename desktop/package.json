@@ -1,6 +1,6 @@
 {
   "name": "@illusion/desktop",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "description": "Illusion Agent 桌面版 - Electron 壳，内置 Python / Node.js 运行时",
   "private": true,
   "main": "dist/main.js",

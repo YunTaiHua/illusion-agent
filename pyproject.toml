@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "illusion-agent"
-version = "0.4.7"
+version = "0.4.8"
 description = "Where fantasy meets functionality. The best of many worlds, refined into one intelligent agent."
 readme = "README.md"
 license = "MIT"
