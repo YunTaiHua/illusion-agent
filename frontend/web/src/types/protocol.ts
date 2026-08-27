@@ -441,6 +441,27 @@ export type FrontendRequest =
 // ---- 后端事件 ----
 
 /**
+ * Toast 通知载荷（toast 事件携带）
+ *
+ * 后端在任务完成/终止、询问、权限等待时按 settings.json 的
+ * notifications 开关过滤后下发；标题与正文已按 ui_language 本地化。
+ * 前端据此决定呈现方式：监管中丢弃，否则应用内 toast + 音效，
+ * 页面不可见时透传系统级通知。
+ */
+export interface ToastPayload {
+  /** 通知类别：任务完成 / 任务终止 / 询问 / 权限 */
+  kind: 'task_complete' | 'task_stopped' | 'ask' | 'permission';
+  /** 展示级别：决定 toast 颜色与提示音样式 */
+  level: 'success' | 'error' | 'info';
+  /** 已本地化的标题 */
+  title: string;
+  /** 已本地化的正文（任务完成时为最终答案预览） */
+  body: string;
+  /** 是否播放提示音效（后端已联动 notifications.enabled/sound） */
+  play_sound: boolean;
+}
+
+/**
  * 后端事件接口
  *
  * 后端通过 WebSocket 发送到前端的所有可能事件类型。
@@ -591,6 +612,8 @@ export interface BackendEvent {
     /** 后端按 ui_language 本地化好的 toast 文案（前端直接展示，不再自行本地化） */
     message?: string;
   };
+  /** toast 事件携带的通知载荷（监管外提醒，可透传系统级通知） */
+  toast?: ToastPayload;
 }
 
 /**

@@ -12,6 +12,7 @@
   - [Environment Variables](#environment-variables)
   - [Memory System Configuration](#memory-system-configuration)
   - [Auto Title Configuration](#auto-title-configuration)
+  - [Notification Toggles (Toast & Sound)](#notification-toggles-toast--sound)
   - [Sandbox Configuration](#sandbox-configuration)
 
 ---
@@ -116,6 +117,10 @@ Uses `env_N` grouped format. Each `env_N` is an independent environment config (
     "enabled": false,
     "model": "env_1.model_1"
   },
+  "notifications": {
+    "enabled": true,
+    "sound": true
+  },
   "sandbox": {
     "enabled_platforms": [],
     "excluded_commands": [],
@@ -160,6 +165,8 @@ Uses `env_N` grouped format. Each `env_N` is an independent environment config (
 | `max_turns` | int | 200 | Maximum conversation turns |
 | `ui_language` | string | "" | UI language (empty triggers first-login prompt; fallback zh-CN) |
 | `effort` | string | "medium" | Reasoning effort: low/medium/high/xhigh/max |
+| `notifications.enabled` | bool | true | Master toggle for toast notifications (task completion/termination, questions, permission reminders); when off the backend stops emitting toast events |
+| `notifications.sound` | bool | true | Toast sound-effect toggle (only effective while `notifications.enabled` is on) |
 | `working_directory` | string | - | Fixed working directory (optional) |
 
 ---
@@ -457,6 +464,38 @@ After the first turn, a lightweight sub-agent runs in the background to generate
 - Runs only on the first turn, using only the user's first real message; if the first message is a `/goal` command, it falls back to the current goal objective.
 - If the session was already renamed manually (meta already has a `title`), auto title will not overwrite it.
 - Title generation is a background task that automatically retries on occasional empty results; activity is logged to `~/.illusion/logs/title.log`.
+
+---
+
+### Notification Toggles (Toast & Sound)
+
+Controls toast notifications on the Web / Desktop clients. The backend emits toasts on four kinds of events: **task completion, task termination, questions awaiting an answer, and permission requests**. The frontend decides how to present them based on whether the user is present:
+
+| User state | Behavior |
+|------------|----------|
+| Supervising the app UI (page visible and focused) | Fully silent — no toast, no sound, no system notification (the running state and pending confirmation dialogs are directly visible) |
+| Page visible but unfocused | In-app toast + sound effect + **system-level notification** |
+| Page hidden (switched tab / minimized to tray) | Sound effect + system-level notification. No in-app toast card is shown or replayed — the task result has already been delivered via the system notification, so returning to the app shows nothing twice |
+
+System-level notifications are Electron notifications in the desktop shell (click one to return to the app), or Web Notifications in plain browsers. Both are **minimal two-part** banners — a fixed short title localized per event type plus a one-line plain-text summary (Markdown in the body is flattened automatically so it never clashes with native banner typography); the full result stays in the in-app card. **Browsers require a one-time grant**: the permission request is triggered by your first click/keypress (background-tab requests are blocked by browsers); if denied, only in-app reminders remain, re-enableable in the site settings of your browser.
+
+```json
+{
+  "notifications": {
+    "enabled": true,
+    "sound": true
+  }
+}
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `enabled` | true | Master toggle for toasts. When off, the backend stops emitting any toast events (including pass-through system notifications) |
+| `sound` | true | Toast sound-effect toggle |
+
+Besides editing settings.json directly, these toggles are also available in the **Web settings dialog → Settings → Notifications** and take effect immediately after saving.
+
+> **Coupling rule**: the two toggles are stored independently, but **the sound is processed only while the toast master toggle is on** — with `enabled=false` nothing plays regardless of `sound`.
 
 ---
 

@@ -32,7 +32,9 @@ import { CustomInputModal } from './components/CustomInputModal';
 import { AgentWizardForm } from './components/AgentWizardForm';
 import { SetupForm } from './components/SetupForm';
 import { GoalBar } from './components/GoalBar';
+import { ToastMarkdown } from './components/ToastMarkdown';
 import type { GoalStatus } from './types/protocol';
+import { isAppSupervised, isPageHidden, notificationNeedsPriming, notifyDesktop, playToastSound, primeNotificationPermission, type NotifyLevel } from './utils/notify';
 import { FolderClosedIcon, FolderOpenIcon } from './components/icons';
 
 /** WebSocket 连接地址 */
@@ -41,10 +43,26 @@ const WS_URL = `ws://${window.location.host}/ws`;
 /** Toast 通知显示时长（毫秒） */
 const TOAST_DURATION = 5000;
 
+/**
+ * 去掉命令反馈中的 Usage 用法提示段
+ *
+ * Usage 是斜杠命令的终端语法教学（后端 registry 统一追加，或处理器自带），
+ * 对 terminal 有意义；Web/Desktop 的 toast 只关心执行结果本身。命中
+ * 「行首 Usage:/用法:」即整段截断——若全文就是用法提示则返回空串，
+ * 由调用方直接吞掉这次 toast。
+ */
+function stripUsageHint(text: string): string {
+  const idx = text.search(/(?:^|\n)\s*(?:Usage|用法|使用方法)\s*[:：]/i);
+  if (idx === -1) return text;
+  return text.slice(0, idx).trim();
+}
+
 /** B 通道允许的指令集合（前端识别并走 web_query） */
 const B_COMMANDS = ['compact', 'export', 'init', 'rename'];
 // 阻塞会话的指令（busy 中不可用，通过 toast 提示）；余下 B 类指令为非阻塞，不改变 busy 状态
 const BLOCKING_COMMANDS = new Set(['compact']);
+/** /goal 的瞬时子命令：不驱动轮次，不进入 busy（resume 除外——它 rearm 并立即续跑） */
+const GOAL_INSTANT_SUBCOMMANDS = new Set(['clear', 'pause', 'edit']);
 
 /** 右栏（区块栏）最小宽度 */
 const MIN_RIGHT_PANEL = 260;
@@ -93,20 +111,49 @@ export default function App() {
     }
   }, [session.connected, session.bootstrapping]);
 
-  // 遮罩淡出：条件满足后不立即卸载，先播 fade-out 动画（150ms，与
-  // tailwind animate-fade-out 时长一致），动画期间放行下层交互，
-  // 结束后再真正卸载，避免遮罩"闪没"的生硬感
+  // 遮罩淡出：两段式——先保持不透明（主界面重组件在同 commit 挂载，双
+  // rAF + 90ms 空闲拍等长尾冲刷），再启动 700ms ease-out 过渡；过渡自然
+  // 结束经 onFaded 回调在此卸载，另有兜底定时器防 transitionEnd 丢失
+  // （后台节流 / reduced-motion）。淡出期间放行下层交互，结束后再卸载。
   const overlayVisible = !session.connected || session.bootstrapping || !revealReady;
   const [overlayMounted, setOverlayMounted] = useState(overlayVisible);
+  const [overlayFading, setOverlayFading] = useState(false);
+  const handleOverlayFaded = useCallback(() => setOverlayMounted(false), []);
   useEffect(() => {
     if (overlayVisible) {
       setOverlayMounted(true);
+      setOverlayFading(false);
       return;
     }
     if (!overlayMounted) return;
-    const timer = setTimeout(() => setOverlayMounted(false), 150);
-    return () => clearTimeout(timer);
+    // 两段式淡出：本 effect 触发时主界面正与遮罩在同一个 React commit 里
+    // 完成首次大规模挂载（revealReady 门控翻转）——若同帧启动 opacity 过渡，
+    // 过渡前几帧会被挂载长任务挤掉，表现为起步卡顿。故先保持遮罩完全不
+    // 透明（重挂载被盖在背后，卡顿不可见），双 rAF 确认该帧绘制完成、主
+    // 线程空闲后再启动过渡；此后 opacity 走合成器，稳定顺滑。
+    let raf1 = 0;
+    let raf2 = 0;
+    let beat = 0;
+    raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        // 再让出一拍（~90ms）：挂载后紧跟的增量布局/字体/图片解码等
+        // 长尾工作在遮罩仍不透明时冲刷完毕，过渡启动时主线程真正空闲
+        beat = window.setTimeout(() => setOverlayFading(true), 90);
+      });
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+      clearTimeout(beat);
+    };
   }, [overlayVisible, overlayMounted]);
+  // 兜底卸载：正常由 onTransitionEnd 触发；900ms 覆盖 700ms 过渡 + 余量，
+  // 防过渡事件丢失（后台节流 / reduced-motion 场景）
+  useEffect(() => {
+    if (!overlayFading) return;
+    const timer = setTimeout(() => setOverlayMounted(false), 900);
+    return () => clearTimeout(timer);
+  }, [overlayFading]);
   const lang: UiLanguage = useMemo(
     () => normalizeLanguage(session.status?.ui_language),
     [session.status?.ui_language],
@@ -171,7 +218,8 @@ export default function App() {
     setTimeout(() => { setToastMessage(null); setToastExiting(false); }, 200);
   }, []);
 
-  const showToast = useCallback((text: string, type: string) => {
+  const showToast = useCallback((text: string, type: string, sound = false) => {
+    if (sound) playToastSound(type as NotifyLevel);
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     toastKeyRef.current += 1;
     setToastExiting(false);
@@ -213,20 +261,62 @@ export default function App() {
         agentRequestIdRef.current = null;
         setAgentResult(text);
       } else {
-        showToast(text, type);
+        // Usage 用法提示是终端专属信息，web/desktop 的 toast 不展示；
+        // 历史来源可能带 "error:" 字面前缀，统一剥掉由红色样式表达错误语义
+        const clean = stripUsageHint(text).replace(/^error:\s*/i, '');
+        if (clean) showToast(clean, type);
       }
     });
     // 版本更新提醒：连接建立后后端异步检查，有新版本时弹 toast
     session.setOnUpdateAvailable((version) => {
       showToast(t(lang, 'update_available').replace('{version}', version), 'info');
     });
+    // toast 通知（任务完成/终止、询问、权限）：后端已按 settings.json 的
+    // notifications 开关过滤并本地化文案，这里只做呈现决策——
+    //   1. 用户正在监管界面（可见且聚焦）时静默丢弃：界面内的运行状态与
+    //      待确认模态框用户直接可见，toast / 系统通知都属于重复打扰；
+    //   2. 所有非监管状态一律透传系统级通知（桌面壳为 Electron 系统通知，
+    //      浏览器为 Web Notification）——离场期间的任务结果由它独自承担
+    //      提醒职责，用户从系统通知即知完成与否；
+    //   3. 页面不可见时不显示也不暂存应用内 toast（回到应用后不再重看），
+    //      仅播放提示音；可见但失焦时正常显示应用内 toast + 提示音。
+    session.setOnToast((payload) => {
+      if (isAppSupervised()) return;
+      notifyDesktop(payload.title || 'Illusion Agent', payload.body);
+      if (isPageHidden()) {
+        if (payload.play_sound) playToastSound(payload.level);
+        return;
+      }
+      showToast([payload.title, payload.body].filter(Boolean).join('\n'), payload.level, payload.play_sound);
+    });
     return () => {
       session.setOnSelectRequest(null);
       session.setOnRewindRestored(null);
       session.setOnCommandResult(null);
       session.setOnUpdateAvailable(null);
+      session.setOnToast(null);
     };
-  }, [session.setOnSelectRequest, session.setOnCommandResult, session.setOnUpdateAvailable, showToast, lang]);
+  }, [session.setOnSelectRequest, session.setOnCommandResult, session.setOnUpdateAvailable, session.setOnToast, showToast, lang]);
+
+  // 浏览器模式下的通知权限预申请：Chromium 拦截后台/无手势的
+  // requestPermission，若等页面隐藏后透传时才申请会被静默拒绝。
+  // 借首次点击/按键手势申请一次；拿到结果（granted/denied）后自动摘除监听。
+  useEffect(() => {
+    if (!notificationNeedsPriming()) return;
+    const maybePrime = () => {
+      primeNotificationPermission();
+      if (!notificationNeedsPriming()) {
+        document.removeEventListener('pointerdown', maybePrime, true);
+        document.removeEventListener('keydown', maybePrime, true);
+      }
+    };
+    document.addEventListener('pointerdown', maybePrime, true);
+    document.addEventListener('keydown', maybePrime, true);
+    return () => {
+      document.removeEventListener('pointerdown', maybePrime, true);
+      document.removeEventListener('keydown', maybePrime, true);
+    };
+  }, []);
 
   /**
    * 处理面板大小调整开始
@@ -361,8 +451,12 @@ export default function App() {
           });
           return;
         }
-      // /agent <id> → 走命令注册表处理（摘要查询非阻塞，进预览面板，不置 busy）
-      session.sendRequest({ type: 'submit_line', line: trimmed });
+      // /agent <id> → 命令注册表查摘要：busy 时拒绝（避免 "Session is busy"
+      // error 落入转录）；携带 request_id 使摘要响应精确匹配进预览面板，
+      // 而非 5 秒即逝的 toast（后端 submit_line 绑定 session.current_request_id）
+      if (session.busy) { showToast(t(lang, 'cmd_unavailable_busy').replace('{cmd}', '/agent'), 'info'); return; }
+      agentRequestIdRef.current = `agent-${Date.now()}`;
+      session.sendRequest({ type: 'submit_line', line: trimmed, request_id: agentRequestIdRef.current });
       return;
       }
       // /goal → 走命令注册表（A 通道，不带 treat_as_text）：后端执行 /goal 命令，
@@ -370,7 +464,17 @@ export default function App() {
       // busy 时不可用，通过 toast 提示
       if (cmdName === 'goal') {
         if (session.busy) { showToast(t(lang, 'cmd_unavailable_busy').replace('{cmd}', '/goal'), 'info'); return; }
-        session.setBusyTrue();
+        // busy 只随「驱动轮次」的 /goal 进入（与后端 drive_goal 标志对齐）：
+        //   创建（非空且首词非子命令）与 resume 会立即续跑自主轮次 → 占用会话；
+        //   空（状态查询）/ clear / pause / edit 为瞬时注册表操作 → 不进 busy，
+        //   避免"闪一下"。语义锚点：illusion/commands/goal.py::goal_handler。
+        const goalArgs = trimmed.slice(cmdName.length + 1).trim();
+        // 首词原样比较（不 lower）：后端 goal_handler 用精确小写匹配子命令，
+        // 如 "Pause" 不匹配任何子命令 → 按创建处理驱动轮次；前端判定必须
+        // 与该行为一致，否则两端 busy 判定漂移
+        const goalHead = goalArgs.split(/\s+/)[0] || '';
+        const drivesRounds = goalArgs !== '' && !GOAL_INSTANT_SUBCOMMANDS.has(goalHead);
+        if (drivesRounds) session.setBusyTrue();
         session.sendRequest({ type: 'submit_line', line: trimmed });
         return;
       }
@@ -424,7 +528,7 @@ export default function App() {
     if (command === 'agent_branch') {
       session.setInlineOptions(null);
       if (value === '__view__') {
-        session.setBusyTrue();
+        // 列表拉取为瞬时操作且失败走 toast 反馈，不再进入 busy（避免闪一下）
         session.sendRequest({ type: 'select_command', command: 'agent' });
       } else if (value === '__create__') {
         session.clearAgentWizardState();
@@ -986,7 +1090,7 @@ export default function App() {
         onManageWorkspaces={() => { setSetupInitialTab('workspaces'); setShowSetupForm(true); }}
         initialDraft={rewindDraft ?? undefined}
         onConsumeInitialDraft={() => setRewindDraft(null)}
-        fileMentionResult={session.fileMentionResult}
+        subscribeFileMentions={session.subscribeFileMentions}
         onRequestFileMentions={session.requestFileMentions}
         activeMenu={activeMenu} onMenuOpen={setActiveMenu}>
         <Toolbar lang={lang} status={session.status}
@@ -1309,17 +1413,20 @@ export default function App() {
       {toastMessage && (
         <div
           key={toastKeyRef.current}
-          className={`fixed bottom-20 right-6 z-50 ${toastExiting ? 'animate-toast-out' : 'animate-toast-in'}`}
+          className={`fixed bottom-8 right-6 z-50 ${toastExiting ? 'animate-toast-out' : 'animate-toast-in'}`}
           onMouseEnter={handleToastMouseEnter} onMouseLeave={handleToastMouseLeave}
         >
-          <div className="glass-surface border border-black/10 rounded-2xl max-w-sm overflow-hidden">
-            <div className="flex items-start gap-3 px-4 py-3">
-              <pre className="text-sm text-content-primary whitespace-pre-wrap font-mono leading-relaxed flex-1 max-h-40 overflow-y-auto">{toastMessage.text}</pre>
-              <button onClick={closeToast}
-                className="shrink-0 w-5 h-5 flex items-center justify-center rounded text-content-disabled hover:text-content-primary glass-option-hover transition-colors cursor-pointer">
-                <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M2 2l8 8M10 2l-8 8" /></svg>
-              </button>
+          <div className="glass-surface border border-black/10 rounded-2xl max-w-lg overflow-hidden relative">
+            {/* 滚动容器全宽：右 padding 只是内容让位区（不改变滚动条位置），
+                因此滚动条始终贴卡片最右侧；关闭按钮绝对定位悬浮于右上角，
+                脱离文档流、不挤占正文与滚动条的任何空间 */}
+            <div className="prose toast-md text-sm text-content-primary leading-relaxed max-h-72 overflow-y-auto pl-5 pr-16 pt-4 pb-3">
+              <ToastMarkdown text={toastMessage.text} />
             </div>
+            <button onClick={closeToast}
+              className="absolute top-3 right-7 z-10 w-6 h-6 flex items-center justify-center rounded-md text-content-disabled hover:text-content-primary glass-option-hover transition-colors cursor-pointer">
+              <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M2 2l8 8M10 2l-8 8" /></svg>
+            </button>
             <div className="h-0.5 bg-black/10">
               <div
                 key={toastKeyRef.current}
@@ -1338,7 +1445,9 @@ export default function App() {
           由 ChatArea 的局部加载卡承担反馈，侧栏/右栏保持可见可交互，避免切换
           会话时整屏闪烁。避免"连接 → 欢迎 → 恢复 → 欢迎"的时序翻转在未就绪时
           露出主界面。 */}
-      {overlayMounted && <ConnectingOverlay lang={lang} fading={!overlayVisible} />}
+      {overlayMounted && (
+        <ConnectingOverlay lang={lang} fading={overlayFading} onFaded={handleOverlayFaded} />
+      )}
       {/* 应用内图片预览（Lightbox）：点击 markdown 图片/图片链接时打开 */}
       <ImagePreview lang={lang} />
       {/* 文件预览弹窗：停靠列"弹窗查看"按钮触发放大形态；关闭返回停靠列 */}

@@ -1,5 +1,6 @@
 """ws_host select_command 路由测试。
 
+（原 max-tokens 委托测试已随 ws_web_api 内联化重构删除）
 覆盖 Task 3.1：
     - max-tokens 命令经 WebApiDispatcher.handle_web_query 委托给 _handle_select_command
     - context-window __custom__ 不再发射 error 事件，静默返回 line_complete
@@ -9,13 +10,12 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
-from illusion.ui.protocol import BackendEvent, FrontendRequest
+from illusion.ui.protocol import BackendEvent
 from illusion.ui.web.ws_host import WebBackendHost
-from illusion.ui.web.ws_web_api import WebApiDispatcher
 from illusion.utils.aioqueue import Queue
 
 
@@ -48,31 +48,6 @@ def _make_host(**fields: Any) -> WebBackendHost:
     for key, value in defaults.items():
         setattr(host, key, value)
     return host
-
-
-@pytest.mark.asyncio
-async def test_max_tokens_routes_to_select_command():
-    """web_query 的 max-tokens 命令应委托给 _handle_select_command（会话级）。"""
-    host = MagicMock()
-    host._emit = AsyncMock()
-    host._bundle = MagicMock()  # 非 None，绕过 bundle 检查
-    host._handle_select_command = AsyncMock()
-    session = MagicMock()
-    session.session_id = "s1"
-    session.bundle = MagicMock()
-    host._resolve_session = MagicMock(return_value=session)
-    dispatcher = WebApiDispatcher(host)
-
-    req = FrontendRequest(
-        type="web_query",
-        command="max-tokens",
-        args="",
-        request_id="test",
-    )
-    await dispatcher.handle_web_query(req)
-
-    host._resolve_session.assert_called_once_with(None)
-    host._handle_select_command.assert_awaited_once_with("max-tokens", session)
 
 
 @pytest.mark.asyncio

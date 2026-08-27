@@ -17,6 +17,12 @@ interface IllusionDesktopBridge {
   maximize: () => void;
   /** 关闭窗口（触发主进程 close → 最小化到托盘） */
   close: () => void;
+  /**
+   * 发送系统级通知（toast 透传）
+   * 由主进程创建 Electron Notification，点击通知聚焦应用窗口；
+   * 渲染进程不可见时由 toast 分发逻辑调用
+   */
+  showNotification: (title: string, body: string) => void;
 }
 
 interface Window {

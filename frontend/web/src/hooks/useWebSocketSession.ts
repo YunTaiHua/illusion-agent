@@ -38,6 +38,7 @@ import type {
   SwarmTeammateSnapshot,
   TaskSnapshot,
   TodoItemSnapshot,
+  ToastPayload,
   TranscriptItem,
   WebWorkspaceItem,
 } from '../types/protocol';
@@ -256,8 +257,9 @@ export interface WebSocketSessionState {
   fileStats: Map<string, FileStatItem>;
   /** 批量拉取文件增删行数统计（已缓存/在途的路径自动跳过） */
   requestFileStats: (paths: string[]) => void;
-  /** @ 提及补全最近一次结果（requestId/query 用于丢弃过期响应；null = 尚无结果） */
-  fileMentionResult: { requestId: string; query: string; candidates: FileMentionCandidate[] } | null;
+  /** @ 提及补全候选订阅：返回取消订阅函数。响应直通订阅方（PromptInput 本地持有缓存），
+      不进入 hook 状态，避免每次补全响应触发整页重渲染 */
+  subscribeFileMentions: (cb: (result: { requestId: string; query: string; candidates: FileMentionCandidate[] }) => void) => () => void;
   /** 拉取 @ 提及补全候选（web_request_file_mentions，绑定当前活跃会话工作区） */
   requestFileMentions: (query: string, requestId: string) => void;
   /** Git 状态快照（null = 未拉取；is_repo=false 前端隐藏区块） */
@@ -382,6 +384,8 @@ export interface WebSocketSessionState {
   setOnUpdateAvailable: (fn: ((latestVersion: string) => void) | null) => void;
   /** 注册 rewind 回填回调（session_rewind 事件触发，参数为被回退的 user 消息） */
   setOnRewindRestored: (fn: ((text: string) => void) | null) => void;
+  /** 注册 toast 通知回调（toast 事件触发：监管判定 / 音效 / 系统级通知透传由 App 决策） */
+  setOnToast: (fn: ((payload: ToastPayload) => void) | null) => void;
 }
 
 /**
@@ -451,7 +455,12 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   const fileStatsRef = useRef<Map<string, FileStatItem>>(fileStats);
   // 已发出未返回的统计请求去重（ref 不触发渲染）
   const fileStatsInFlightRef = useRef<Set<string>>(new Set());
-  const [fileMentionResult, setFileMentionResult] = useState<{ requestId: string; query: string; candidates: FileMentionCandidate[] } | null>(null);
+  // @ 提及补全：响应直通订阅方（PromptInput 持有缓存），不设状态避免整页重渲染
+  const fileMentionListenersRef = useRef<Set<(r: { requestId: string; query: string; candidates: FileMentionCandidate[] }) => void>>(new Set());
+  const subscribeFileMentions = useCallback((cb: (r: { requestId: string; query: string; candidates: FileMentionCandidate[] }) => void): (() => void) => {
+    fileMentionListenersRef.current.add(cb);
+    return () => { fileMentionListenersRef.current.delete(cb); };
+  }, []);
   const [gitStatus, setGitStatus] = useState<GitStatusSnapshot | null>(null);
   const [gitLoading, setGitLoading] = useState(false);
   const [filePreview, setFilePreview] = useState<FileContentPayload | null>(null);
@@ -527,6 +536,8 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   /** rewind 被回退的 user 消息回调（App 注册，回填输入框） */
   const onRewindRestoredRef = useRef<((text: string) => void) | null>(null);
   const onUpdateAvailableRef = useRef<((latestVersion: string) => void) | null>(null);
+  /** toast 事件回调（App 注册：监管判定 + 音效 + 系统级通知透传） */
+  const onToastRef = useRef<((payload: ToastPayload) => void) | null>(null);
   const suppressCommandResultCountRef = useRef(0);
   const suppressTranscriptRef = useRef(false);
   // 乐观渲染的用户消息（按会话记录最近一次待确认文本，用于回执去重）。
@@ -538,6 +549,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   const setOnCommandResult = useCallback((fn: ((text: string, type: string) => void) | null) => { onCommandResultRef.current = fn; }, []);
   const setOnRewindRestored = useCallback((fn: ((text: string) => void) | null) => { onRewindRestoredRef.current = fn; }, []);
   const setOnUpdateAvailable = useCallback((fn: ((latestVersion: string) => void) | null) => { onUpdateAvailableRef.current = fn; }, []);
+  const setOnToast = useCallback((fn: ((payload: ToastPayload) => void) | null) => { onToastRef.current = fn; }, []);
 
   /**
    * 同步视图状态到 state 与 ref（双写，事件处理器经 ref 读取最新值）
@@ -1688,17 +1700,26 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       }
       if (evt.type === 'web_file_mentions') {
         // @ 提及补全候选：requestId 不匹配的迟到响应由 PromptInput 侧丢弃；
-        // skills 排在文件前面（搜索结果 skills 优先），kind='skill' 供菜单分区渲染
+        // skills 排在文件前面（搜索结果 skills 优先），kind='skill' 供菜单分区渲染。
+        // 直通订阅方不落状态：补全按击键高频往返，进状态会拖累整页渲染
         const payload = evt.web_file_mentions;
         if (payload) {
-          setFileMentionResult({
+          const result = {
             requestId: payload.request_id ?? evt.request_id ?? '',
             query: payload.query,
             candidates: [
               ...(payload.skills ?? []).map((s) => ({ path: s.name, kind: 'skill' as const, description: s.description })),
               ...(payload.candidates ?? []),
             ],
-          });
+          };
+          // 逐监听器隔离异常：单个订阅方抛错不中断其余分发与消息处理
+          for (const cb of fileMentionListenersRef.current) {
+            try {
+              cb(result);
+            } catch (exc) {
+              console.error('file mention listener failed:', exc);
+            }
+          }
         }
         return;
       }
@@ -1796,6 +1817,12 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       }
 
       // === 其他全局事件 ===
+      if (evt.type === 'toast' && evt.toast) {
+        // toast 通知：转发给 App 做监管判定（界内不打扰）、播放音效、
+        // 页面不可见时透传系统级通知。文案由后端本地化，这里原样传递。
+        onToastRef.current?.(evt.toast);
+        return;
+      }
       if (evt.type === 'command_result' && evt.command_result_data) {
         const msg = evt.command_result_data.message ?? '';
         // 检查是否需要抑制显示
@@ -1876,7 +1903,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       agentTasks, fileTree, fileTreeLoadingPaths, gitStatus, gitLoading,
       sessionFiles, sessionFilesLoading,
       fileStats, requestFileStats,
-      fileMentionResult, requestFileMentions,
+      subscribeFileMentions, requestFileMentions,
       filePreview, filePreviewLoading,
       requestFileTree, requestGitStatus, openFilePreview, openFileDiff, closeFilePreview,
       requestAgentTasks, viewAgentSummary, requestSessionFiles, openSessionFile,
@@ -1923,13 +1950,14 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       // GoalBar（活跃视图）
       goalActionError, sendGoalAction, clearGoalActionError,
       setOnSelectRequest, setOnCommandResult, setOnUpdateAvailable, setOnRewindRestored,
+      setOnToast,
     };
   }, [
     status, tasks, commands, mcpServers, skills, plugins, rules, modelOptions,
     agentTasks, fileTree, fileTreeLoadingPaths, gitStatus, gitLoading,
     sessionFiles, sessionFilesLoading,
     fileStats, requestFileStats,
-    fileMentionResult, requestFileMentions,
+    subscribeFileMentions, requestFileMentions,
     filePreview, filePreviewLoading,
     requestFileTree, requestGitStatus, openFilePreview, openFileDiff, closeFilePreview,
     requestAgentTasks, viewAgentSummary, requestSessionFiles, openSessionFile,
@@ -1946,6 +1974,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     sendRequest, sendStop, clearStaticItems, optimisticSubmit,
     goalActionError, sendGoalAction, clearGoalActionError,
     setOnSelectRequest, setOnCommandResult, setOnUpdateAvailable, setOnRewindRestored,
+    setOnToast,
     modelSwitching, setModelSwitching,
   ]);
 }

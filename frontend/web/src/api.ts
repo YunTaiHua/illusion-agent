@@ -49,6 +49,13 @@ export interface SettingsResponse {
   model: string;
   /** Web 端主题：light（浅色）/ dark（深色）/ system（跟随系统） */
   theme: 'light' | 'dark' | 'system';
+  /** 通知开关（toast 与音效独立保存，音效仅在 toast 开启时生效） */
+  notifications: {
+    /** toast 总开关（关闭后后端不再下发 toast 事件） */
+    enabled: boolean;
+    /** 提示音效开关 */
+    sound: boolean;
+  };
   /** 记忆系统配置 */
   memory: {
     /** 是否启用记忆功能 */
@@ -522,6 +529,15 @@ export const settingsApi = {
     request<{ success: boolean }>('/api/settings/theme', {
       method: 'PATCH',
       body: JSON.stringify({ theme }),
+    }),
+  /** 修改通知开关（enabled = toast 总开关，sound = 音效；只更新提供的字段） */
+  updateNotifications: (payload: { enabled?: boolean; sound?: boolean }) =>
+    request<{
+      success: boolean;
+      notifications: { enabled: boolean; sound: boolean };
+    }>('/api/settings/notifications', {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
     }),
   /** 修改沙箱配置（只更新提供的字段），保存并热重载生效 */
   updateSandbox: (payload: UpdateSandboxPayload) =>

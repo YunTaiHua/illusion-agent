@@ -134,6 +134,71 @@ def _goal_status_message(event: GoalStatusEvent) -> str:
     return _t("goal_status_disarmed")
 
 
+# toast 正文字段最大长度：透传到系统级通知时正文过长会被截断/撑爆气泡，
+# 服务端先做统一裁剪
+_TOAST_BODY_MAX_CHARS = 400
+
+
+def _toast_settings_effective() -> tuple[bool, bool]:
+    """读取通知开关的生效组合 ``(toast_enabled, play_sound)``。
+
+    settings.json 中 notifications.enabled / sound 两个开关独立保存，
+    但音效只在 toast 总开关开启时才处理（enabled=False 时 sound 恒不生效）。
+    联动判定统一走 ``Settings.toast_sound_enabled``，与设置页/CLI 同源无漂移。
+    配置读取失败时按默认全开处理（通知属于增益功能，不应因配置异常静音）。
+
+    Returns:
+        tuple[bool, bool]: (toast 是否启用, toast 是否附带提示音效)
+    """
+    try:
+        from illusion.config.settings import load_settings
+
+        settings = load_settings()
+    except Exception:
+        log.debug("读取通知设置失败，按默认开启处理", exc_info=True)
+        return True, True
+    enabled = bool(settings.notifications.enabled)
+    return enabled, enabled and settings.toast_sound_enabled
+
+
+def build_toast_event(
+    kind: str,
+    level: str,
+    title: str,
+    body: str = "",
+) -> BackendEvent | None:
+    """构建 toast 推送事件；notifications.enabled 关闭时返回 None。
+
+    文案已由调用方按 ui_language 本地化（与 goal_status 同一策略：
+    前端不再自行本地化，浏览器语言不影响显示）。前端据此决定呈现方式：
+    用户正在监管界面则丢弃；失焦时应用内 toast + 音效 + 系统级通知透传
+    （Electron 系统通知 / 浏览器 Notification）；页面完全不可见时不显示
+    应用内卡片（提醒由音效 + 系统级通知独自承担），避免回看二次打扰。
+
+    Args:
+        kind: 类别（task_complete / task_stopped / ask / permission）
+        level: 展示级别（success / error / info），决定 toast 颜色与音效样式
+        title: 已本地化的标题
+        body: 已本地化的正文（超长自动截断）
+
+    Returns:
+        BackendEvent | None: toast 事件，总开关关闭时返回 None（不下发）
+    """
+    enabled, play_sound = _toast_settings_effective()
+    if not enabled:
+        return None
+    return BackendEvent(
+        type="toast",
+        toast={
+            "kind": kind,
+            "level": level,
+            "title": title,
+            "body": (body or "").strip()[:_TOAST_BODY_MAX_CHARS],
+            "play_sound": play_sound,
+        },
+    )
+
+
 # 空闲工作区 bundle 的最短保留时长：刚构建的 bundle 在此期限内不被驱逐，
 # 避免用户在目录间快速切换时反复重建（MCP 连接等初始化开销大）
 _WORKSPACE_BUNDLE_GRACE_SECONDS = 60.0
@@ -251,10 +316,10 @@ class WebHostConfig:
 # 活跃主机的模块级注册表：REST 设置路由（如 /api/settings/model-params）只会把
 # settings.json 落盘，此处让路由能找到当前连接运行中的主机，把变更热应用到
 # 会话引擎与 app_state（右栏上下文窗口显示、实际请求参数立即生效）并推送刷新。
-_active_hosts: "set[WebBackendHost]" = set()
+_active_hosts: set[WebBackendHost] = set()
 
 
-def iter_active_hosts() -> "list[WebBackendHost]":
+def iter_active_hosts() -> list[WebBackendHost]:
     """返回当前活跃的 Web 后端主机列表（供 REST 路由应用运行时设置变更）。
 
     注意：这是进程内注册表，仅适用于单进程部署（REST 与 WS 同一事件循环）。
@@ -570,6 +635,17 @@ class WebBackendHost:
         if request.type == "select_command":
             session = self._resolve_session(request.session_id)
             if session is not None:
+                if session.busy:
+                    # 行任务进行中不接受列表拉取：本通道的错误反馈若补发
+                    # line_complete 会误清进行中回合的 busy（输入闸此前已拦）
+                    from illusion.config.i18n import t as _t
+
+                    await self._emit_command_error(
+                        _t("session_busy"),
+                        session_id=session.session_id,
+                        finish=False,
+                    )
+                    return True
                 await self._handle_select_command(request.command or "", session)
             return True
         # 应用选择命令（按会话隔离，fire-and-forget，不阻塞主循环）
@@ -633,6 +709,9 @@ class WebBackendHost:
             # （前端非指定命令如 /resume、/model 走此路径，不被当作命令执行）
             self._spawn_session_line(session, self._submit_line_as_text(session, line))
         else:
+            # 命令行可携带 request_id（如 /agent <id> 查摘要）：绑定到会话，
+            # 命令结果事件据此回传，前端精确匹配到预览面板而非即逝 toast
+            session.current_request_id = request.request_id or None
             self._spawn_session_line(session, self._process_line(session, line))
         return True
 
@@ -734,6 +813,21 @@ class WebBackendHost:
                     ),
                     session_id=session_id,
                 )
+                # 任务完成 toast：仅在最终答案回合（不跟随工具链）且有实际
+                # 内容时下发——中间步骤、空回复不打扰。后台 agent 恢复轮的
+                # 最终答案同样经过此路径，用户离开时也能看到任务结果。
+                if not event.message.tool_uses and cleaned:
+                    from illusion.config.i18n import t as _t
+
+                    self._create_background_task(
+                        self._emit_toast(
+                            "task_complete",
+                            "success",
+                            _t("toast_title_task_complete"),
+                            cleaned,
+                            session_id=session_id,
+                        )
+                    )
                 await self._emit(BackendEvent.tasks_snapshot(get_task_manager().list_tasks()))
                 # 透传最新累积用量与反推值到前端
                 if self._bundle is not None:
@@ -876,6 +970,13 @@ class WebBackendHost:
                 return
             # 错误事件
             if isinstance(event, ErrorEvent):
+                if session.current_line_is_command:
+                    # 斜杠命令的执行反馈属于即时告知信息，走 toast 通道，
+                    # 不把 error: 前缀的提示写进主会话持久记录
+                    await self._emit_command_error(
+                        event.message, session_id=session_id, finish=False
+                    )
+                    return
                 await self._emit(
                     BackendEvent(
                         type="transcript_item",
@@ -950,6 +1051,8 @@ class WebBackendHost:
             session.busy = False
 
     async def _process_bg_completions(self, session: SessionRuntime) -> None:
+        # 后台完成处理属对话流：同 _submit_line_as_text，清命令标志
+        session.current_line_is_command = False
         """处理积压的后台完成通知（自动进入 busy），不新增用户输入。
 
         Args:
@@ -1073,6 +1176,13 @@ class WebBackendHost:
         # /goal 创建命令走 submit_line 时 transcript_line 为 None，但命令原文需
         # 作为真实 user 消息渲染，故例外地发送转录）
         parsed_cmd = session.bundle.commands.lookup(line)
+        # 标记本行是否斜杠命令：行内 ErrorEvent 据此改走 toast 通道。
+        # goal 驱动行（创建/resume，drive_goal=True）除外——其行内错误属于
+        # 对话流故障，必须持久化到转录，而非 5 秒即逝的 toast
+        is_command_line = parsed_cmd is not None
+        if is_command_line and parsed_cmd[0].name == "goal":
+            is_command_line = False
+        session.current_line_is_command = is_command_line
         is_goal_create = False
         if parsed_cmd is not None and parsed_cmd[0].name == "goal":
             from illusion.commands.goal import is_goal_create_args
@@ -1354,6 +1464,9 @@ class WebBackendHost:
         await report_delegated_result(job_id, result)
 
     async def _submit_line_as_text(self, session: SessionRuntime, line: str) -> bool:
+        # 普通对话行：清命令标志——粘滞的 True 会把真实对话错误误导进 toast，
+        # 丢失转录中的持久错误记录
+        session.current_line_is_command = False
         """直接将用户输入当文本提交给 LLM，跳过命令注册表。
 
         用于前端 treat_as_text=True 的 submit_line 请求（非指定命令如
@@ -1521,11 +1634,9 @@ class WebBackendHost:
             return await self._restore_session(session, selected)
         line = self._build_select_command_line(command, selected)
         if line is None:
-            await self._emit(
-                BackendEvent(type="error", message=f"Unknown select command: {command_name}"),
-                session_id=session.session_id,
+            await self._emit_command_error(
+                f"Unknown select command: {command_name}", session_id=session.session_id
             )
-            await self._emit(BackendEvent(type="line_complete"), session_id=session.session_id)
             return True
         return await self._process_line(session, line, transcript_line=f"/{command}")
 
@@ -2196,6 +2307,8 @@ class WebBackendHost:
             self._spawn_session_line(session, self._drive_goal_after_resume(session))
 
     async def _drive_goal_after_resume(self, session: SessionRuntime) -> bool:
+        # 恢复驱动的 goal 轮次属对话流：清命令标志
+        session.current_line_is_command = False
         """GoalBar resume 后驱动 goal 轮次（fire-and-forget 行任务）。
 
         与 /goal resume 的 drive_goal 路径（runtime.handle_line）等价：
@@ -2377,10 +2490,18 @@ class WebBackendHost:
             raise
         except Exception:
             log.exception("会话 %s 行任务异常", session.session_id)
-            await self._emit(
-                BackendEvent(type="error", message="Internal error, please retry"),
-                session_id=session.session_id,
-            )
+            if session.current_line_is_command:
+                # 斜杠命令行的运行时异常：反馈走 toast，不写入转录
+                await self._emit_command_error(
+                    "Internal error, please retry",
+                    session_id=session.session_id,
+                    finish=False,
+                )
+            else:
+                await self._emit(
+                    BackendEvent(type="error", message="Internal error, please retry"),
+                    session_id=session.session_id,
+                )
             await self._emit(BackendEvent(type="line_complete"), session_id=session.session_id)
             await self._update_phase(session, "idle")
             await self._push_sessions()
@@ -2444,6 +2565,12 @@ class WebBackendHost:
         )
         zh = locale.lower().startswith("zh")
         sessions = list_session_snapshots(scope_bundle.cwd, limit=10)
+        if not sessions:
+            await self._emit_command_error(
+                ("没有已保存的会话。" if zh else "No saved sessions found."),
+                session_id=session.session_id if session is not None else None,
+            )
+            return
         options = []
         for s in sessions:
             ts = _time.strftime("%m/%d %H:%M", _time.localtime(s["created_at"]))
@@ -2757,10 +2884,10 @@ class WebBackendHost:
                     })
 
             if not task_options:
-                await self._emit(
-    BackendEvent(type="error", message=("没有已完成的 agent" if zh else "No completed agents"),
+                await self._emit_command_error(
+                    ("没有已完成的 agent" if zh else "No completed agents"),
                     session_id=session.session_id,
-                ))
+                )
                 return
             await self._emit(
                 BackendEvent(
@@ -2829,11 +2956,8 @@ class WebBackendHost:
                 and not is_goal_system_message(msg.text)
             ]
             if not user_msgs:
-                await self._emit(
-                    BackendEvent(
-                        type="error",
-                        message=("没有可回退的消息。" if zh else "No messages to rewind to."),
-                    ),
+                await self._emit_command_error(
+                    ("没有可回退的消息。" if zh else "No messages to rewind to."),
                     session_id=session.session_id,
                 )
                 return
@@ -2870,11 +2994,8 @@ class WebBackendHost:
 
             sessions = list_session_snapshots(session.bundle.cwd, limit=10)
             if not sessions:
-                await self._emit(
-                    BackendEvent(
-                        type="error",
-                        message=("没有已保存的会话。" if zh else "No saved sessions found."),
-                    ),
+                await self._emit_command_error(
+                    ("没有已保存的会话。" if zh else "No saved sessions found."),
                     session_id=session.session_id,
                 )
                 return
@@ -2924,11 +3045,8 @@ class WebBackendHost:
 
             # 检查是否禁用所有 rules
             if is_rules_disabled(project_permissions):
-                await self._emit(
-                    BackendEvent(
-                        type="error",
-                        message=("所有规则已被禁用" if zh else "All rules are disabled"),
-                    ),
+                await self._emit_command_error(
+                    ("所有规则已被禁用" if zh else "All rules are disabled"),
                     session_id=session.session_id,
                 )
                 return
@@ -2936,14 +3054,11 @@ class WebBackendHost:
             rules_dir = get_project_rules_dir(session.bundle.cwd)
             all_rule_files = sorted(rules_dir.glob("*.md"))
             if not all_rule_files:
-                await self._emit(
-                    BackendEvent(
-                        type="error",
-                        message=(
-                            f"没有找到规则文件：{rules_dir}"
-                            if zh
-                            else f"No rules found in {rules_dir}"
-                        ),
+                await self._emit_command_error(
+                    (
+                        f"没有找到规则文件：{rules_dir}"
+                        if zh
+                        else f"No rules found in {rules_dir}"
                     ),
                     session_id=session.session_id,
                 )
@@ -2966,11 +3081,8 @@ class WebBackendHost:
                     }
                 )
             if not options:
-                await self._emit(
-                    BackendEvent(
-                        type="error",
-                        message=("没有可用的规则文件" if zh else "No available rules files"),
-                    ),
+                await self._emit_command_error(
+                    ("没有可用的规则文件" if zh else "No available rules files"),
                     session_id=session.session_id,
                 )
                 return
@@ -3100,13 +3212,8 @@ class WebBackendHost:
             )
             return
 
-        await self._emit(
-            BackendEvent(
-                type="error",
-                message=(
-                    f"/{command} 暂无可选项" if zh else f"No selector available for /{command}"
-                ),
-            ),
+        await self._emit_command_error(
+            (f"/{command} 暂无可选项" if zh else f"No selector available for /{command}"),
             session_id=session.session_id,
         )
 
@@ -3214,6 +3321,17 @@ class WebBackendHost:
                 ),
                 session_id=session_id,
             )
+            # 权限 toast：用户切离界面时（前端按焦点/可见性判定）仍能感知
+            # 等待中的权限确认，避免任务静默卡在授权环节
+            from illusion.config.i18n import t as _t
+
+            await self._emit_toast(
+                "permission",
+                "info",
+                _t("toast_title_permission"),
+                reason.strip() or tool_name,
+                session_id=session_id,
+            )
             try:
                 # 等待用户响应：所有会话的权限请求统一 285s 超时（超时按
                 # "超时拒绝"处理，错误回流为工具结果且清理弹窗，防止
@@ -3282,6 +3400,17 @@ class WebBackendHost:
                     type="modal_request",
                     modal=modal_payload,
                 ),
+                session_id=session_id,
+            )
+            # 提问 toast：回答等待最长可达 15 分钟，用户不在界面时
+            # 需要系统级提醒兜底
+            from illusion.config.i18n import t as _t
+
+            await self._emit_toast(
+                "ask",
+                "info",
+                _t("toast_title_ask"),
+                question,
                 session_id=session_id,
             )
             try:
@@ -3378,6 +3507,15 @@ class WebBackendHost:
                     type="modal_request",
                     modal=modal_payload,
                 ),
+                session_id=session_id,
+            )
+            # 计划审批同样属于询问类 toast：审批是有界等待（285s 超时按
+            # 拒绝处理），离开界面的用户需要及时感知
+            await self._emit_toast(
+                "ask",
+                "info",
+                _t("toast_title_ask"),
+                _t("plan_approval"),
                 session_id=session_id,
             )
             try:
@@ -3483,6 +3621,15 @@ class WebBackendHost:
             ),
             session_id=session.session_id,
         )
+        # 任务终止 toast：终止也可能由终端/其他会话侧触发，用户未必盯着
+        # 当前界面；正文用会话摘要说明停掉的是哪件事
+        await self._emit_toast(
+            "task_stopped",
+            "info",
+            _t("toast_title_task_stopped"),
+            session.summary or stopped_message,
+            session_id=session.session_id,
+        )
         await self._emit(self._status_snapshot())
         await self._emit(BackendEvent.tasks_snapshot(get_task_manager().list_tasks()))
         await self._emit(BackendEvent(type="line_complete"), session_id=session.session_id)
@@ -3536,6 +3683,65 @@ class WebBackendHost:
             self._write_queue.put_nowait(event)
         except QueueShutDown:
             pass  # 正在关闭，丢弃事件
+
+    async def _emit_toast(
+        self,
+        kind: str,
+        level: str,
+        title: str,
+        body: str = "",
+        *,
+        session_id: str | None = None,
+    ) -> None:
+        """按通知开关下发 toast 事件（开关关闭时静默跳过）。
+
+        用户是否在场由前端判定（监管中不弹、页面隐藏时透传系统级通知），
+        后端只负责按 settings.json 开关过滤与文案本地化。
+
+        Args:
+            kind: 类别（task_complete / task_stopped / ask / permission）
+            level: 展示级别（success / error / info）
+            title: 已本地化的标题
+            body: 已本地化的正文
+            session_id: 可选：事件归属会话 ID
+        """
+        event = build_toast_event(kind, level, title, body)
+        if event is None:
+            return
+        await self._emit(event, session_id=session_id)
+
+    async def _emit_command_error(
+        self,
+        message: str,
+        *,
+        session_id: str | None = None,
+        finish: bool = True,
+    ) -> None:
+        """下发命令执行反馈（错误）：经 toast 通道，不写入会话转录。
+
+        斜杠命令的选择器空态、未知命令等"用户操作反馈型"错误属于
+        即时告知信息——主会话是任务对话的持久记录，不应混入这类
+        一次性提示；前端以红色 toast 呈现并自动消失。
+
+        默认随后补发 line_complete 解除前端 busy——多数调用点是选择器
+        的早退分支，历史上只发事件不解 busy，导致"跑一次指令会话就
+        卡在运行态"。若外层已有统一的行收尾（line_complete）则传
+        finish=False 防止双发。
+
+        Args:
+            message: 已本地化的错误描述
+            session_id: 事件归属会话 ID
+            finish: 是否随事件补发 line_complete（默认 True）
+        """
+        await self._emit(
+            BackendEvent(
+                type="command_result",
+                command_result_data={"message": message, "type": "error"},
+            ),
+            session_id=session_id,
+        )
+        if finish:
+            await self._emit(BackendEvent(type="line_complete"), session_id=session_id)
 
     async def _handle_agent_wizard_init(self, req: FrontendRequest) -> None:
         """处理 agent_wizard_init：返回可用工具/模型列表。"""

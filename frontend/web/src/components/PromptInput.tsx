@@ -12,7 +12,7 @@
  * @module PromptInput
  */
 
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, Fragment, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { t, type UiLanguage } from '../i18n';
 import type { FileMentionCandidate, WebWorkspaceItem } from '../types/protocol';
 import { highlightMentions } from '../utils/mention';
@@ -42,6 +42,9 @@ const MAX_TEXTAREA_HEIGHT = 240;
 
 /** @ 提及补全防抖间隔（ms）：连续输入时减少补全请求 */
 const MENTION_DEBOUNCE_MS = 120;
+
+/** @ 提及请求序号（模块级）：跨组件实例单调递增，避免重挂载后 m1 与旧实例在途响应撞号 */
+let mentionReqSeq = 0;
 
 /**
  * @ 提及 token（光标处正在输入的提及片段）
@@ -123,6 +126,17 @@ interface InlineOptions {
 }
 
 /**
+ * 本地规范化 @ 提及查询串：与后端 normalize_mention_query 一致，
+ * 避免 @./src、@\path 等原始串过滤候选时全部落空。
+ */
+function normalizeMentionQuery(query: string): string {
+  let q = (query ?? '').trim().replace(/\\/g, '/');
+  while (q.startsWith('./')) q = q.slice(2);
+  if (q.startsWith('/')) q = q.replace(/^\/+/, '');
+  return q.trim();
+}
+
+/**
  * PromptInput 组件属性接口
  */
 interface PromptInputProps {
@@ -166,8 +180,8 @@ interface PromptInputProps {
   initialDraft?: string;
   /** 消费初始草稿后的回调（父组件据此清空持久化草稿，避免残留影响下次会话） */
   onConsumeInitialDraft?: (draft: string) => void;
-  /** @ 提及补全最近一次结果（requestId 不匹配视为过期丢弃；null = 尚无结果） */
-  fileMentionResult?: { requestId: string; query: string; candidates: FileMentionCandidate[] } | null;
+  /** @ 提及补全候选订阅：响应由 PromptInput 本地持有（不进 App 状态，避免整页重渲染） */
+  subscribeFileMentions?: (cb: (result: { requestId: string; query: string; candidates: FileMentionCandidate[] }) => void) => () => void;
   /** 拉取 @ 提及补全候选（query 为 @ 后路径片段） */
   onRequestFileMentions?: (query: string, requestId: string) => void;
   /** 当前展开的唯一下拉标识（plus/ws 或 Toolbar 的 mode/model/effort），null 表示全部收起 */
@@ -189,7 +203,7 @@ export interface PromptInputHandle {
   setDraft: (text: string) => void;
 }
 
-const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function PromptInput({ lang, busy, stopping, hasActiveTasks, connected, commands, onSubmit, onStop, inlineOptions, onInlineSelect, onInlineClose, workspaces, activeCwd, welcomeVisible, onPickWorkspace, onAddWorkspace, onManageWorkspaces, children, initialDraft, onConsumeInitialDraft, fileMentionResult, onRequestFileMentions, activeMenu, onMenuOpen }, ref) {
+const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function PromptInput({ lang, busy, stopping, hasActiveTasks, connected, commands, onSubmit, onStop, inlineOptions, onInlineSelect, onInlineClose, workspaces, activeCwd, welcomeVisible, onPickWorkspace, onAddWorkspace, onManageWorkspaces, children, initialDraft, onConsumeInitialDraft, subscribeFileMentions, onRequestFileMentions, activeMenu, onMenuOpen }, ref) {
   const [value, setValue] = useState(initialDraft ?? '');
 
   // 挂载时若携带初始草稿（欢迎界面重挂载回填），通知父组件消费清空，避免残留
@@ -300,9 +314,11 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
   // === @ 提及补全（仅插入路径文本，不读内容） ===
   const [caret, setCaret] = useState(0);
   const [mentionIndex, setMentionIndex] = useState(0);
-  const [acceptedMentionReqId, setAcceptedMentionReqId] = useState<string | null>(null);
   const [mentionDismissed, setMentionDismissed] = useState(false);
-  const mentionReqIdRef = useRef(0);
+  // 最新已发出请求 id（仅更新 ref 不触发渲染，请求在途期间保留旧候选继续显示）
+  const latestMentionReqIdRef = useRef<string | null>(null);
+  // 最近一次采纳的候选缓存；新响应到达后整批替换，请求在途时旧缓存继续渲染
+  const [mentionCache, setMentionCache] = useState<FileMentionCandidate[] | null>(null);
   const mentionListRef = useRef<HTMLDivElement>(null);
   const mirrorRef = useRef<HTMLDivElement>(null);
 
@@ -315,22 +331,45 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
   useEffect(() => {
     if (!tokenKey || !onRequestFileMentions) return;
     const timer = setTimeout(() => {
-      const rid = `m${++mentionReqIdRef.current}`;
-      setAcceptedMentionReqId(rid);
+      const rid = `m${++mentionReqSeq}`;
+      latestMentionReqIdRef.current = rid;
       onRequestFileMentions(tokenKey.slice(tokenKey.indexOf(':') + 1), rid);
     }, MENTION_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [tokenKey, onRequestFileMentions]);
 
+  // 订阅会话层的提及响应：requestId 与最新已发出请求一致才采纳写入缓存
+  // （迟到响应天然丢弃）；结果不经 App 状态，避免每次响应整页重渲染造成卡顿
+  useEffect(() => {
+    if (!subscribeFileMentions) return;
+    return subscribeFileMentions((r) => {
+      if (latestMentionReqIdRef.current && r.requestId === latestMentionReqIdRef.current) {
+        setMentionCache(r.candidates);
+      }
+    });
+  }, [subscribeFileMentions]);
+
+  // 切换工作区（目录空间）时作废本地缓存与在途请求归属：
+  // 上一工作区的路径候选不应在新工作区串显，旧响应也不再采纳
+  useEffect(() => {
+    setMentionCache(null);
+    latestMentionReqIdRef.current = null;
+  }, [activeCwd]);
+
   useEffect(() => { if (!mentionToken) setMentionIndex(0); }, [mentionToken]);
 
-  // 仅采纳最新请求的响应，并按响应回显的规范化 query 二次过滤（防抖窗口内的旧结果避免闪烁；
-  // 用服务端规范化后的 query，避免 @./src、@\path 等原始串过滤全部落空）
+  // 候选基于缓存 + 当前 token 查询串实时过滤（新请求在途时旧候选按当前输入过滤，
+  // 菜单保持稳定不闪没；查询串本地规范化后再过滤，与后端 normalize 口径一致）
+  const normalizedTokenQuery = useMemo(
+    () => normalizeMentionQuery(mentionToken?.query ?? '').toLowerCase(),
+    [mentionToken?.query],
+  );
   const mentionCandidates = useMemo(() => {
-    if (!fileMentionResult || fileMentionResult.requestId !== acceptedMentionReqId) return [] as FileMentionCandidate[];
-    const q = fileMentionResult.query.toLowerCase();
-    return q ? fileMentionResult.candidates.filter((c) => c.path.toLowerCase().includes(q)) : fileMentionResult.candidates;
-  }, [fileMentionResult, acceptedMentionReqId]);
+    if (!mentionCache || !mentionToken) return [] as FileMentionCandidate[];
+    return normalizedTokenQuery
+      ? mentionCache.filter((c) => c.path.toLowerCase().includes(normalizedTokenQuery))
+      : mentionCache;
+  }, [mentionCache, mentionToken, normalizedTokenQuery]);
   const showMentionMenu = mentionToken !== null && !mentionDismissed && mentionCandidates.length > 0 && !inlineOptions;
 
   // 菜单分区：技能在前、文件在后（候选顺序即导航顺序）；行元素带 data-mention-row 供滚动定位
@@ -582,29 +621,26 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
             <div className="px-3 py-1.5 text-[10px] text-content-disabled font-semibold uppercase tracking-widest text-center border-b border-border-light mb-1">Skills</div>
           )}
           {mentionCandidates.map((c, idx) => {
-            // 文件区标题在首个文件行处渲染（有技能区时在其后，无技能区时在列表头）
-            if (c.kind !== 'skill' && idx === (mentionSkillCount > 0 ? mentionSkillCount : 0)) {
-              return (
-                <div key="section-files" className={`px-3 pt-2 pb-1 text-[10px] text-content-disabled font-semibold uppercase tracking-widest text-center ${mentionSkillCount > 0 ? 'border-t border-border-light mt-1' : ''} border-b border-border-light mb-1`}>Files</div>
-              );
-            }
-            // 行索引与渲染 idx 解耦：分区标题占掉 idx 但不算行，否则标题后所有行
-            // 的 idx !== mentionIndex，高亮/滚动定位全部失效（对应"上移异常"）
-            const rowIdx = c.kind === 'skill' ? idx : idx - (mentionSkillCount > 0 ? 1 : 0);
             const name = c.path.split('/').pop() || c.path;
             const dir = c.kind === 'dir';
             const skill = c.kind === 'skill';
             return (
-              <button
-                key={`${c.kind}:${c.path}`}
-                data-mention-row
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => applyMention(c)}
-                title={c.path}
-                className={`w-full flex items-center gap-2 px-3 py-2 border border-transparent hover:border-border-light text-sm transition-colors cursor-pointer animate-fade ${
-                  rowIdx === mentionIndex ? 'glass-option-active text-content-primary glass-option-hover' : 'text-content-secondary glass-option-hover'
-                }`}
-              >
+              <Fragment key={`${c.kind}:${c.path}`}>
+                {/* 文件区标题在首个文件行前渲染（有技能区时在其后，无技能区时在列表头）。
+                    标题与行同级共存，data-mention-row 的 DOM 序号才与候选/选中序号一致，
+                    高亮、Enter 采纳与滚动定位才不会错位（对应纯文件模式"上移越界一行"） */}
+                {!skill && idx === (mentionSkillCount > 0 ? mentionSkillCount : 0) && (
+                  <div className={`px-3 pt-2 pb-1 text-[10px] text-content-disabled font-semibold uppercase tracking-widest text-center ${mentionSkillCount > 0 ? 'border-t border-border-light mt-1' : ''} border-b border-border-light mb-1`}>Files</div>
+                )}
+                <button
+                  data-mention-row
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => applyMention(c)}
+                  title={c.path}
+                  className={`w-full flex items-center gap-2 px-3 py-2 border border-transparent hover:border-border-light text-sm transition-colors cursor-pointer animate-fade ${
+                    idx === mentionIndex ? 'glass-option-active text-content-primary glass-option-hover' : 'text-content-secondary glass-option-hover'
+                  }`}
+                >
                 {dir ? (
                   <svg className="w-3.5 h-3.5 shrink-0 text-primary/70" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M1.5 4.5v7a1.5 1.5 0 001.5 1.5h10a1.5 1.5 0 001.5-1.5V6.5a1.5 1.5 0 00-1.5-1.5H8L6.4 3.1a1.5 1.5 0 00-1.1-.6H3a1.5 1.5 0 00-1.5 1.5v.5z" />
@@ -627,7 +663,8 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
                 {skill
                   ? c.description && <span className="text-xs text-content-disabled shrink-0 max-w-[45%] truncate">{c.description}</span>
                   : <span className="text-xs text-content-disabled shrink-0">{name}</span>}
-              </button>
+                </button>
+              </Fragment>
             );
           })}
         </div>

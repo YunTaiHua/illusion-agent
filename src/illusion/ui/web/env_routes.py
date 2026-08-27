@@ -154,6 +154,20 @@ class UpdateThemeRequest(BaseModel):
     theme: str = Field(..., pattern="^(light|dark|system)$")
 
 
+class UpdateNotificationsRequest(BaseModel):
+    """修改通知开关请求体。
+
+    字段均可选，只更新提供的字段：
+        - enabled: toast 总开关（关闭后后端不再下发 toast 事件，
+          也不再透传系统级通知）
+        - sound: 提示音效开关。两个开关独立保存，但音效仅在
+          enabled=True 时生效
+    """
+
+    enabled: bool | None = None
+    sound: bool | None = None
+
+
 class UpdateSandboxRequest(BaseModel):
     """修改沙箱配置请求体。
 
@@ -444,6 +458,10 @@ def register_env_routes(app: FastAPI, host_config: Any | None = None) -> None:
             "max_turns": settings.max_turns,
             "model": settings.model,
             "theme": settings.theme,
+            "notifications": {
+                "enabled": settings.notifications.enabled,
+                "sound": settings.notifications.sound,
+            },
             "memory": {
                 "enabled": settings.memory.enabled,
                 "auto_extract": settings.memory.auto_extract,
@@ -641,6 +659,30 @@ def register_env_routes(app: FastAPI, host_config: Any | None = None) -> None:
         new_settings = settings.model_copy(update={"theme": req.theme})
         save_settings(new_settings)
         return {"success": True}
+
+    @app.patch("/api/settings/notifications")
+    async def update_notifications(req: UpdateNotificationsRequest) -> dict[str, Any]:
+        """修改通知开关（toast 总开关 / 音效）。
+
+        仅更新请求体提供的字段，其余保持不变。两个开关独立保存，
+        但音效仅在 toast 总开关开启时生效——后端在每次下发 toast
+        事件时按该联动规则计算 play_sound。
+        保存后立即生效：后续 toast 事件按新开关过滤/标注音效。
+        """
+        updates = {k: v for k, v in req.model_dump().items() if v is not None}
+        settings = load_settings()
+        if updates:
+            new_notifications = settings.notifications.model_copy(update=updates)
+            new_settings = settings.model_copy(update={"notifications": new_notifications})
+            save_settings(new_settings)
+            settings = new_settings
+        return {
+            "success": True,
+            "notifications": {
+                "enabled": settings.notifications.enabled,
+                "sound": settings.notifications.sound,
+            },
+        }
 
     @app.patch("/api/settings/working_directory")
     async def update_working_directory(req: UpdateWorkingDirectoryRequest) -> dict[str, Any]:

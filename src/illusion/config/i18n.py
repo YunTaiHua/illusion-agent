@@ -87,6 +87,12 @@ MESSAGES: dict[str, dict[str, str]] = {
     "bg_agent_waiting": {"zh-CN": "等待后台代理完成", "en-US": "Waiting for background agent"},
     "bg_agent_resuming": {"zh-CN": "后台代理已完成，继续执行", "en-US": "Background agent completed, resuming"},
     "default_endpoint": {"zh-CN": "默认", "en-US": "default"},
+    # --- toast 通知标题（web/desktop 监管外提醒，正文由事件各自携带）---
+    "toast_title_task_complete": {"zh-CN": "任务已完成", "en-US": "Task completed"},
+    "toast_title_task_stopped": {"zh-CN": "任务已终止", "en-US": "Task stopped"},
+    "toast_title_ask": {"zh-CN": "等待你的回答", "en-US": "Waiting for your answer"},
+    "toast_title_permission": {"zh-CN": "权限确认请求", "en-US": "Permission required"},
+    "session_busy": {"zh-CN": "会话正忙，请稍后再试", "en-US": "Session is busy, please try again later"},
     # --- memory / title 开关 ---
     "memory_usage": {
         "zh-CN": "用法: /memory [on|off|toggle|status|auto on|auto off]",
@@ -733,6 +739,35 @@ _COMMAND_EXACT: dict[str, str] = {
     "Usage: /skills [name|number]": "用法：/skills [名称|序号]",
     "Usage: /max-tokens [show|set N]": "用法：/max-tokens [show|set N]",
     "Usage: /delete [session_id|#N|all]": "用法：/delete [session_id|#N|all]",
+    # 用法提示补充（覆盖其余命令的 Usage 行，terminal 与 web 同源翻译）
+    "Usage:": "用法：",
+    "Usage: /mcp auth SERVER TOKEN | /mcp auth SERVER [bearer|env] VALUE | /mcp auth SERVER header KEY VALUE":
+        "用法：/mcp auth 服务器 TOKEN | /mcp auth 服务器 [bearer|env] 值 | /mcp auth 服务器 header 键 值",
+    "Usage: /rules <name|number>  — view a specific rule": "用法：/rules <名称|序号>  — 查看指定规则",
+    "Usage: /memory add [user|feedback|project|reference] TITLE :: CONTENT":
+        "用法：/memory add [user|feedback|project|reference] 标题 :: 内容",
+    "Usage: /memory [list|show NAME|add [user|feedback|project|reference] TITLE :: CONTENT|remove NAME]":
+        "用法：/memory [list|show 名称|add [user|feedback|project|reference] 标题 :: 内容|remove 名称]",
+    "Usage: /goal [<objective>|clear|edit <objective>|pause|resume]": "用法：/goal [<目标>|clear|edit <目标>|pause|resume]",
+    "Usage: /sandbox exclude <command pattern>": "用法：/sandbox exclude <命令模式>",
+    "Example: /sandbox exclude npm test": "示例：/sandbox exclude npm test",
+    "Usage: /sandbox remove <command pattern>": "用法：/sandbox remove <命令模式>",
+    # 注意：_translate_single_line 查表前会 lstrip，键一律不带前导缩进
+    "/sandbox              — Show sandbox status": "/sandbox              — 查看沙箱状态",
+    "/sandbox status       — Show sandbox status": "/sandbox status       — 查看沙箱状态",
+    "/sandbox exclude <pattern> — Add excluded command": "/sandbox exclude <模式> — 添加排除命令",
+    "/sandbox remove <pattern>  — Remove excluded command": "/sandbox remove <模式>  — 移除排除命令",
+    "/login API_KEY          (standard x-api-key auth)": "/login API_KEY          （标准 x-api-key 认证）",
+    "/login auth_token TOKEN (Bearer Token auth)": "/login auth_token TOKEN （Bearer Token 认证）",
+    # 处理器内自带的变体形式（session/agent/rename 等）
+    "Usage: /agent [list|create|<task_id>]": "用法：/agent [list|create|<任务ID>]",
+    "Usage: /rename [name|#N name|session_id name|--clear]": "用法：/rename [名称|#N 名称|会话ID 名称|--清除]",
+    "Usage: /resume #1 or /resume <session_id>": "用法：/resume #1 或 /resume <会话ID>",
+    "Usage: /delete #1 or /delete <session_id>  — delete a specific session":
+        "用法：/delete #1 或 /delete <会话ID>  — 删除指定会话",
+    # goal 注册时 usage 不含 /goal 前缀 → registry 追加后是此形态
+    "Usage: [<objective>|clear|edit <objective>|pause|resume]":
+        "用法：[<目标>|clear|edit <目标>|pause|resume]",
     # Doctor
     "- backend host: available": "- 后端宿主：可用",
     "- network: enabled only for API endpoint and explicit web/MCP calls": "- 网络：仅用于 API 端点和显式 web/MCP 调用",

@@ -12,7 +12,7 @@
  *
  * 生命周期对应 docs/zh-CN/desktop.md "托盘行为" 与 "守护进程生命周期"。
  */
-import { app, BrowserWindow, shell, dialog, Menu, ipcMain } from 'electron';
+import { app, BrowserWindow, shell, dialog, Menu, ipcMain, Notification } from 'electron';
 import { spawn } from 'node:child_process';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
@@ -129,6 +129,12 @@ app.whenReady().then(async () => {
     Menu.setApplicationMenu(null);
   }
 
+  // Windows：Toast 透传的系统级通知依赖 AppUserModelID，须与
+  // electron-builder.yml 的 appId 一致，打包后通知才能正常归属到应用。
+  if (process.platform === 'win32') {
+    app.setAppUserModelId('com.illusionagent.desktop');
+  }
+
   // --- 单实例锁：重复启动聚焦现有窗口 ---
   if (!app.requestSingleInstanceLock()) {
     app.quit();
@@ -152,13 +158,39 @@ app.whenReady().then(async () => {
   // 消除粒子球旋转 + 切白底之间的间隙卡顿感。web 端遮罩层淡入接管，
   // 1s opacity 过渡柔化切换。
   mainWindow = createWindow();
+  // 启动页：白底延续（与 web 端 ConnectingOverlay 的 bg-white 无缝同框），
+  // 中央嵌入圆角应用图标作品牌锚点。图标文件经 base64 内嵌——data-url 页
+  // 无法再发起相对资源请求。收到后端就绪信号（backend.start() resolve）
+  // 后由 executeJavaScript 触发 __splashFadeOut() 淡出图标，短暂停留于
+  // 纯白再整页交接 web——衔接链：Desktop 白底+图标 → 淡出 → web 白底
+  // → ConnectingOverlay 淡入（1s opacity，App.tsx 事件驱动卸载）。
+  const splashIconPath = resolveWindowIcon();
+  let splashLogo = '';
+  if (splashIconPath) {
+    try {
+      const b64 = fs.readFileSync(splashIconPath).toString('base64');
+      splashLogo = `<img id="splash-logo" alt="" src="data:image/png;base64,${b64}" />`;
+    } catch {
+      splashLogo = ''; // 图标读取失败降级为纯白启动页，不阻塞启动
+    }
+  }
   mainWindow.loadURL(
     'data:text/html;charset=utf-8,' +
       encodeURIComponent(
         `<!DOCTYPE html><html><head><style>
-          html,body{margin:0;height:100%}
-          body{background:#ffffff}
-        </style></head><body></body></html>`,
+          html,body{margin:0;height:100%;background:#ffffff}
+          body{display:flex;align-items:center;justify-content:center}
+          #splash-logo{
+            width:clamp(84px,16vmin,120px);height:auto;display:block;
+            filter:drop-shadow(0 3px 10px rgba(0,0,0,0.19)) drop-shadow(0 14px 40px rgba(0,0,0,0.36));
+            transition:opacity .5s ease;
+          }
+        </style></head><body>${splashLogo}<script>
+          window.__splashFadeOut = function(){
+            var el = document.getElementById('splash-logo');
+            if (el) el.style.opacity = '0';
+          };
+        </script></body></html>`,
       ),
   );
   mainWindow.show();
@@ -221,7 +253,23 @@ app.whenReady().then(async () => {
   });
 
   // --- 后端就绪后加载应用并显示（窗口已在启动时创建并展示加载页） ---
-  await mainWindow.loadURL(url);
+  // 先淡出启动页图标（0.5s 过渡）并停留半拍，让画面交接时是"纯白 →
+  // web 白底"的同色衔接，再由 web 端 ConnectingOverlay 接管视觉焦点
+  await mainWindow.webContents
+    .executeJavaScript('window.__splashFadeOut && window.__splashFadeOut()')
+    .catch(() => undefined);
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  try {
+    await mainWindow.loadURL(url);
+  } catch (e) {
+    // 后端在 start() 与导航之间意外退出：给出对话框而非永久白窗
+    dialog.showErrorBox(
+      t(lang, 'app_name'),
+      t(lang, 'err_backend_failed', { message: (e as Error).message }),
+    );
+    quitApp();
+    return;
+  }
   mainWindow.show();
 
   // --- 首次启动自动创建桌面快捷方式（仅 Windows 打包后，已存在则跳过） ---
@@ -269,5 +317,33 @@ ipcMain.on('window-close', () => mainWindow?.close());
 ipcMain.on('open-external', (_event, url: string) => {
   if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
     shell.openExternal(url).catch(() => {});
+  }
+});
+
+// ========== Toast 透传 IPC：系统级通知（渲染进程不可见时转发任务结果/询问/权限提醒） ==========
+// 音效由渲染进程统一播放（Web Audio，受 settings.json notifications.sound 控制），
+// 此处 silent 关闭系统默认提示音，避免双重声音。
+ipcMain.on('show-notification', (_event, payload: { title?: unknown; body?: unknown }) => {
+  if (!Notification.isSupported()) return;
+  const title = typeof payload?.title === 'string' ? payload.title : '';
+  const body = typeof payload?.body === 'string' ? payload.body : '';
+  if (!title && !body) return;
+  try {
+    const notification = new Notification({
+      title: title || 'Illusion Agent',
+      body,
+      icon: resolveWindowIcon(),
+      silent: true,
+    });
+    // 点击通知回到应用（窗口隐藏在托盘时先恢复显示）
+    notification.on('click', () => {
+      if (!mainWindow) return;
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      if (!mainWindow.isVisible()) mainWindow.show();
+      mainWindow.focus();
+    });
+    notification.show();
+  } catch {
+    // 通知创建失败（如系统禁用通知）不影响主流程
   }
 });

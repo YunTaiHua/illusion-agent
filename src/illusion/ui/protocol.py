@@ -300,6 +300,8 @@ class BackendEvent(BaseModel):
         "goal_status",
         # === 版本更新提醒 ===
         "update_available",
+        # === Toast 通知推送（web/desktop 监管外提醒，前端可透传系统级通知）===
+        "toast",
     ]
     select_options: list[dict[str, Any]] | None = None
     message: str | None = None
@@ -381,6 +383,11 @@ class BackendEvent(BaseModel):
     goal_error: dict[str, Any] | None = None  # 失败时的 {code, message}
     # === goal_status 专属字段（结构化轮次生命周期，前端本地化）===
     goal_status: dict[str, Any] | None = None  # {kind: round|wrapup|limit|disarmed, round?, max_rounds?, phase?}
+    # === toast 事件载荷（标题/正文由后端按 ui_language 本地化）===
+    # {kind: task_complete|task_stopped|ask|permission,
+    #  level: success|error|info, title: str, body: str,
+    #  play_sound: bool}  play_sound 已联动 notifications.enabled/sound
+    toast: dict[str, Any] | None = None
 
     @classmethod
     def ready(

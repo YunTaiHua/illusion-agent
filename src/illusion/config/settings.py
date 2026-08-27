@@ -309,6 +309,20 @@ class EnvConfig(BaseModel):
         return result
 
 
+class NotificationSettings(BaseModel):
+    """通知设置。
+
+    Attributes:
+        enabled: toast 总开关（web 桌面提醒 + 透传系统级通知），
+            关闭后后端不再下发任何 toast 事件
+        sound: 提示音效开关。两个开关相互独立写入，但音效仅在
+            toast 总开关开启时生效（Settings.toast_sound_enabled 联动判定）
+    """
+
+    enabled: bool = True
+    sound: bool = True
+
+
 class Settings(BaseModel):
     """IllusionAgent 主设置模型（env_N 分组格式）"""
 
@@ -329,6 +343,7 @@ class Settings(BaseModel):
     title: TitleSettings = Field(default_factory=TitleSettings)
     goal: GoalSettings = Field(default_factory=GoalSettings)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
+    notifications: NotificationSettings = Field(default_factory=NotificationSettings)
     enabled_plugins: dict[str, bool] = Field(default_factory=dict)
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)
     ui_language: str = ""  # 空字符串表示未设置，由 _ensure_language 引导选择
@@ -336,6 +351,15 @@ class Settings(BaseModel):
     effort: str = "medium"
     working_directory: str | None = None  # 固定工作目录
     theme: str = "light"
+
+    @property
+    def toast_sound_enabled(self) -> bool:
+        """音效开关的实际生效值。
+
+        音效与 toast 是两个独立配置项，但音效只在 toast 总开关有效时
+        才处理：toast 关闭时无论 sound 取值如何都不发声。
+        """
+        return self.notifications.enabled and self.notifications.sound
 
     @field_validator("mcp_servers", mode="before")
     @classmethod
@@ -650,6 +674,15 @@ class Settings(BaseModel):
         return new_settings
 
 
+def _default_notification_config() -> dict[str, Any]:
+    """返回默认通知配置。
+
+    作为显式默认配置写入 settings.json，使用户可直接查看/修改，
+    而非仅在内存中按默认值加载运行（与 _default_sandbox_config 同一策略）。
+    """
+    return NotificationSettings().model_dump()
+
+
 def _default_sandbox_config() -> dict[str, Any]:
     """返回默认沙箱配置。
 
@@ -711,6 +744,16 @@ def load_settings(config_path: Path | None = None) -> Settings:
                 save_settings(Settings.model_validate(raw), config_path)
             except (OSError, ValueError):
                 # 写入失败不阻塞加载（如只读配置目录）
+                pass
+
+        # 将默认通知配置（toast 总开关 / 音效）显式写入 settings.json。
+        # 与 sandbox 同一策略：缺失时一次性落盘，让字段在文件中可见可改；
+        # 用户手动加过该键后不再触碰。
+        if "notifications" not in raw:
+            raw["notifications"] = _default_notification_config()
+            try:
+                save_settings(Settings.model_validate(raw), config_path)
+            except (OSError, ValueError):
                 pass
 
         # 清理 env_N 中不该存在的 model 字段

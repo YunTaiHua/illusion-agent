@@ -1079,3 +1079,40 @@ pre code.hljs,
 .scrollbar-hidden::-webkit-scrollbar {
   display: none;                  /* Chrome / Safari / Edge */
 }
+
+/* ============ Toast 卡片内的紧凑 Markdown（.prose 复用 + 收紧间距） ============ */
+.toast-md > :first-child {
+  margin-top: 0;
+}
+.toast-md > :last-child {
+  margin-bottom: 0;
+}
+.toast-md p,
+.toast-md ul,
+.toast-md ol,
+.toast-md blockquote,
+.toast-md table {
+  margin: 0.3em 0;
+}
+.toast-md h1,
+.toast-md h2,
+.toast-md h3,
+.toast-md h4 {
+  font-size: 1em;
+  font-weight: 600;
+  margin: 0.5em 0 0.25em;
+}
+.toast-md ul,
+.toast-md ol {
+  padding-left: 1.3em;
+}
+.toast-md li {
+  margin: 0.15em 0;
+}
+.toast-md pre {
+  margin: 0.4em 0;
+  padding: 0.6em 0.75em;
+}
+.toast-md hr {
+  margin: 0.6em 0;
+}

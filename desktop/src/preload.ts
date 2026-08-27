@@ -8,6 +8,7 @@
  *   - version：Electron 版本，渲染进程可据此判断是否在桌面壳内
  *   - platform：运行平台，用于顶部栏交通灯/自定义按钮的差异处理
  *   - minimize / toggleMaximize / close：窗口控制，通过 IPC 转发主进程
+ *   - showNotification：系统级通知（toast 透传），主进程创建并处理点击聚焦
  *
  * 浏览器直接访问 Web 端时本脚本不执行，window.illusionDesktop 为 undefined。
  */
@@ -27,6 +28,12 @@ contextBridge.exposeInMainWorld('illusionDesktop', {
   maximize: () => ipcRenderer.send('window-maximize'),
   /** 关闭窗口（主进程 close 事件 → 最小化到托盘） */
   close: () => ipcRenderer.send('window-close'),
+  /** 系统级通知（toast 透传）：主进程创建 Notification，点击聚焦应用窗口 */
+  showNotification: (title: string, body: string) =>
+    ipcRenderer.send('show-notification', {
+      title: typeof title === 'string' ? title : '',
+      body: typeof body === 'string' ? body : '',
+    }),
 });
 
 /**

@@ -64,6 +64,9 @@ class SessionRuntime:
     current_request_id: str | None = None
     last_tool_inputs: dict[str, dict[str, Any]] = field(default_factory=dict)
     emitted_tool_started_ids: set[str] = field(default_factory=set)
+    # 当前行是否为斜杠命令（_process_line 按 commands.lookup 判定）：
+    # True 时行内产生的 ErrorEvent 视为命令反馈，改经 toast 通道下发
+    current_line_is_command: bool = False
     created_at: float = field(default_factory=time.time)
     label: str = ""
     summary: str = ""

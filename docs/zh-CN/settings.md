@@ -12,6 +12,7 @@
   - [环境变量](#环境变量)
   - [记忆系统配置](#记忆系统配置)
   - [会话自动标题配置](#会话自动标题配置)
+  - [通知开关（Toast 与音效）](#通知开关toast-与音效)
   - [沙箱配置](#沙箱配置)
 
 ---
@@ -117,6 +118,10 @@
     "enabled": false,
     "model": "env_1.model_1"
   },
+  "notifications": {
+    "enabled": true,
+    "sound": true
+  },
   "sandbox": {
     "enabled_platforms": [],
     "excluded_commands": [],
@@ -161,6 +166,8 @@
 | `max_turns` | int | 200 | 最大对话轮数 |
 | `ui_language` | string | "" | 界面语言（空时首次登录引导选择，兜底中文） |
 | `effort` | string | "medium" | 推理强度：low/medium/high/xhigh/max |
+| `notifications.enabled` | bool | true | Toast 通知总开关（任务完成/终止、询问、权限提醒；关闭后后端不再下发 toast 事件） |
+| `notifications.sound` | bool | true | Toast 提示音效开关（仅在 `notifications.enabled` 开启时生效） |
 | `working_directory` | string | - | 固定工作目录（可选） |
 
 ---
@@ -458,6 +465,38 @@ LongCat 使用 `Authorization: Bearer` 认证方式，需要通过 `auth_token` 
 - 仅首回合触发，且只取用户首条真实消息；若首条为 `/goal` 命令，回退使用当前 goal 的 objective。
 - 若会话已手动重命名（meta 已有 title），自动标题不会覆盖用户命名。
 - 标题生成为后台任务，偶发为空时自动重试；活动记录于 `~/.illusion/logs/title.log`。
+
+---
+
+### 通知开关（Toast 与音效）
+
+控制 Web 端 / 桌面端的 toast 通知行为。后端在**任务完成、任务终止、询问等待回答、权限请求确认**四类事件时下发 toast；前端按用户是否在场决定呈现方式：
+
+| 用户状态 | 行为 |
+|----------|------|
+| 正在应用界面监管（页面可见且聚焦） | 全部静默：不弹 toast、不响音效、不发系统通知（界面内的运行状态与待确认弹窗直接可见） |
+| 页面可见但失焦 | 应用内 toast + 提示音效 + **透传系统级通知** |
+| 页面不可见（切走标签页 / 最小化到托盘） | 提示音效 + 系统级通知。应用内 toast 卡片**不显示也不补显**——任务结果已由系统通知告知，回到应用后不再重看 |
+
+系统级通知在桌面壳内为 Electron 系统通知（点击可回到应用），纯浏览器为 Web Notification。两类通知均为**极简两段式**——固定短标题（按事件类型本地化）+ 一行纯文本摘要（正文 Markdown 自动降为单行，不与横幅原生排版冲突），完整结果仍以应用内卡片呈现。**浏览器需授权一次**：首次点击或按键时自动弹出授权请求（后台标签页中申请会被浏览器拦截，故提前到用户手势时机）；拒绝后仅保留应用内提醒，可在浏览器站点设置中重新开启。
+
+```json
+{
+  "notifications": {
+    "enabled": true,
+    "sound": true
+  }
+}
+```
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `enabled` | true | Toast 总开关。关闭后后端不再下发任何 toast 事件（含系统级透传） |
+| `sound` | true | 提示音效开关 |
+
+除直接编辑 settings.json 外，也可在 **Web 端设置弹窗 → 设置 → 通知开关** 中切换，保存后即时生效。
+
+> **联动规则**：两个开关独立保存，但**音效只在 toast 总开关开启时才处理**——`enabled=false` 时无论 `sound` 取值如何都静默。
 
 ---
 

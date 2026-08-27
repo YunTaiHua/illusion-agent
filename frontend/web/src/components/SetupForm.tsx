@@ -208,6 +208,10 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
   const [titleEnabled, setTitleEnabled] = useState(false);
   /** 标题生成模型（空 = 继承当前） */
   const [titleModel, setTitleModel] = useState('');
+  /** Toast 通知总开关（任务完成/终止、询问、权限提醒） */
+  const [toastEnabled, setToastEnabled] = useState(true);
+  /** 提示音效开关（仅在 toast 总开关开启时生效） */
+  const [toastSound, setToastSound] = useState(true);
   /** 模型参数（上下文窗口大小 / 最大输出 tokens / 最大轮次，字符串态便于自由编辑） */
   const [contextWindow, setContextWindow] = useState<string>('200000');
   const [maxTokens, setMaxTokens] = useState<string>('16384');
@@ -255,6 +259,9 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
         setMemDir(s.memory?.directory ?? '');
         setTitleEnabled(s.title?.enabled ?? false);
         setTitleModel(s.title?.model ?? '');
+        // 通知开关（旧后端响应缺省时按全开兜底）
+        setToastEnabled(s.notifications?.enabled ?? true);
+        setToastSound(s.notifications?.sound ?? true);
         // 模型参数（默认值与后端 Settings 模型对齐）
         setContextWindow(String(s.context_window ?? 200000));
         setMaxTokens(String(s.max_tokens ?? 16384));
@@ -451,6 +458,17 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
           review_model: reviewModel.trim(),
         });
       }
+      // 3.8 通知开关改动（toast 总开关 / 音效任一变化即提交；后端按
+      //     enabled && sound 计算实际发声）
+      if (settings && (
+        toastEnabled !== settings.notifications?.enabled ||
+        toastSound !== settings.notifications?.sound
+      )) {
+        await settingsApi.updateNotifications({
+          enabled: toastEnabled,
+          sound: toastSound,
+        });
+      }
       // 4. 渠道配置（兼容旧配置：enabled 但无运行目录的渠道自动填充默认工作区，
       //    避免后端启用校验（enabled 必填目录）拒绝整个保存；其余清空为 null）
       const defaultWs = workspaces.find((w) => w.is_default)?.path;
@@ -486,7 +504,7 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
       setSaving(false);
       setSaveError(err instanceof Error ? err.message : String(err));
     }
-  }, [settings, uiLang, workDir, contextWindow, maxTokens, maxTurns, memEnabled, memAutoExtract, memExtractModel, memDreamModel, memDir, titleEnabled, titleModel, reviewAuto, reviewModel, channels, firstLogin, showAddEnv, draft, draftValid, createEnvFromDraft, onSetUiLanguage, onSaved, sandbox, lang]);
+  }, [settings, uiLang, workDir, contextWindow, maxTokens, maxTurns, memEnabled, memAutoExtract, memExtractModel, memDreamModel, memDir, titleEnabled, titleModel, toastEnabled, toastSound, reviewAuto, reviewModel, channels, workspaces, firstLogin, showAddEnv, draft, draftValid, createEnvFromDraft, onSetUiLanguage, onSaved, sandbox, lang]);
 
   /** 删除环境（即时 API） */
   const handleDeleteEnv = useCallback(async (envKey: string) => {
@@ -644,6 +662,10 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
               onTitleEnabledChange={setTitleEnabled}
               titleModel={titleModel}
               onTitleModelChange={setTitleModel}
+              toastEnabled={toastEnabled}
+              onToastEnabledChange={setToastEnabled}
+              toastSound={toastSound}
+              onToastSoundChange={setToastSound}
               contextWindow={contextWindow}
               onContextWindowChange={setContextWindow}
               maxTokens={maxTokens}
@@ -894,6 +916,12 @@ interface SettingsTabProps {
   /** 标题生成模型（空 = 继承当前） */
   titleModel: string;
   onTitleModelChange: (v: string) => void;
+  /** Toast 通知总开关 */
+  toastEnabled: boolean;
+  onToastEnabledChange: (v: boolean) => void;
+  /** 提示音效开关（toast 关闭时置灰不可操作） */
+  toastSound: boolean;
+  onToastSoundChange: (v: boolean) => void;
   /** 上下文窗口大小（token，字符串态：保存时校验为正整数） */
   contextWindow: string;
   onContextWindowChange: (v: string) => void;
@@ -1188,10 +1216,16 @@ function SettingsTab(p: SettingsTabProps) {
           <span className="text-sm text-content-primary">{t(lang, 'setupFieldMemoryEnabled')}</span>
           <ToggleSwitch checked={p.memEnabled} onChange={p.onMemEnabledChange} label={t(lang, 'setupFieldMemoryEnabled')} />
         </div>
-        {/* 后台自动提取开关 */}
-        <div className="flex items-center justify-between">
+        {/* 后台自动提取开关：记忆功能关闭时置灰（与后端判定链一致——
+            auto_extract 仅在 memory.enabled 时才被处理） */}
+        <div className={`flex items-center justify-between ${p.memEnabled ? '' : 'opacity-50'}`}>
           <span className="text-sm text-content-primary">{t(lang, 'setupFieldMemoryAutoExtract')}</span>
-          <ToggleSwitch checked={p.memAutoExtract} onChange={p.onMemAutoExtractChange} label={t(lang, 'setupFieldMemoryAutoExtract')} />
+          <ToggleSwitch
+            checked={p.memAutoExtract}
+            onChange={p.onMemAutoExtractChange}
+            label={t(lang, 'setupFieldMemoryAutoExtract')}
+            disabled={!p.memEnabled}
+          />
         </div>
         {/* 记忆目录输入 */}
         <div>
@@ -1234,7 +1268,6 @@ function SettingsTab(p: SettingsTabProps) {
           <span className="text-sm text-content-primary">{t(lang, 'setupFieldTitleEnabled')}</span>
           <ToggleSwitch checked={p.titleEnabled} onChange={p.onTitleEnabledChange} label={t(lang, 'setupFieldTitleEnabled')} />
         </div>
-        <div className="text-[11px] text-content-disabled">{t(lang, 'setupFieldTitleEnabledHint')}</div>
         {/* 标题生成模型 */}
         <div>
           <div className={labelClass}>{t(lang, 'setupFieldTitleModel')}</div>
@@ -1247,6 +1280,26 @@ function SettingsTab(p: SettingsTabProps) {
         </div>
       </div>
 
+      {/* 通知开关（Toast 与音效，settings.json notifications 节） */}
+      <div className="space-y-3 rounded-lg border border-border-light p-4 bg-surface-card-alt/50">
+        <div className={labelClass}>{t(lang, 'setupFieldNotifications')}</div>
+        {/* Toast 总开关 */}
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-content-primary">{t(lang, 'setupFieldToastEnabled')}</span>
+          <ToggleSwitch checked={p.toastEnabled} onChange={p.onToastEnabledChange} label={t(lang, 'setupFieldToastEnabled')} />
+        </div>
+        {/* 音效开关：toast 关闭时置灰（联动规则——音效只在 toast 开启时生效） */}
+        <div className={`flex items-center justify-between ${p.toastEnabled ? '' : 'opacity-50'}`}>
+          <span className="text-sm text-content-primary">{t(lang, 'setupFieldSoundEnabled')}</span>
+          <ToggleSwitch
+            checked={p.toastSound}
+            onChange={p.onToastSoundChange}
+            label={t(lang, 'setupFieldSoundEnabled')}
+            disabled={!p.toastEnabled}
+          />
+        </div>
+      </div>
+
       {/* 权限 LLM 自动审核配置（auto 模式高危操作与沙箱拦截由 LLM 审核放行） */}
       <div className="space-y-3 rounded-lg border border-border-light p-4 bg-surface-card-alt/50">
         <div className={labelClass}>{t(lang, 'setupFieldPermissionReview')}</div>
@@ -1255,7 +1308,6 @@ function SettingsTab(p: SettingsTabProps) {
           <span className="text-sm text-content-primary">{t(lang, 'setupFieldPermissionReviewEnabled')}</span>
           <ToggleSwitch checked={p.reviewAuto} onChange={p.onReviewAutoChange} label={t(lang, 'setupFieldPermissionReviewEnabled')} />
         </div>
-        <div className="text-[11px] text-content-disabled">{t(lang, 'setupFieldPermissionReviewHint')}</div>
         {/* 审核模型 */}
         <div>
           <div className={labelClass}>{t(lang, 'setupFieldPermissionReviewModel')}</div>
