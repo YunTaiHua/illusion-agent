@@ -87,7 +87,7 @@ pip install .
 |------|----------|
 | Windows | `IllusionAgent-Setup-<版本>.exe`（NSIS 安装器） |
 | macOS | `IllusionAgent-<版本>-arm64.dmg` |
-| Linux | `illusionagent_<版本>_amd64.deb` 或 `IllusionAgent-<版本>.AppImage` |
+| Linux | `IllusionAgent-<版本>-amd64.deb` 或 `IllusionAgent-<版本>-x86_64.AppImage` |
 
 👉 [从 GitHub Release 下载](https://github.com/YunTaiHua/illusion-agent/releases/latest)
 

@@ -14,7 +14,7 @@ The installer registers the application identity (AppUserModelID) as part of the
 
 ### macOS
 
-1. Download `IllusionAgent-<version>-mac-arm64.dmg` (Apple Silicon; Intel Mac not provided).
+1. Download `IllusionAgent-<version>-arm64.dmg` (Apple Silicon; Intel Mac not provided).
 2. Open the dmg and drag `IllusionAgent.app` to Applications.
 3. First launch requires bypassing Gatekeeper (see below).
 
@@ -22,8 +22,8 @@ Config is written to `~/.illusion/`.
 
 ### Linux
 
-1. Download `IllusionAgent-<version>-linux-x64.AppImage` (x64; arm64 not provided).
-2. Make it executable: `chmod +x IllusionAgent-<version>-linux<arch>.AppImage`.
+1. Download `IllusionAgent-<version>-x86_64.AppImage` (x64; arm64 not provided).
+2. Make it executable: `chmod +x IllusionAgent-<version>-x86_64.AppImage`.
 3. Double-click or run from a terminal.
 
 Config is written to `~/.illusion/`.
@@ -59,7 +59,7 @@ After running, Gatekeeper no longer blocks this app. Applies to the current user
 
 ## 🐧 Linux Notes
 
-- **Install**: both `.deb` (Debian/Ubuntu: `sudo apt install ./IllusionAgent-<version>.deb`) and `.AppImage` (add executable bit to run) are provided.
+- **Install**: both `.deb` (Debian/Ubuntu: `sudo apt install ./IllusionAgent-<version>-amd64.deb`) and `.AppImage` (add executable bit to run) are provided.
 - **AppImage desktop integration**: to show in the app menu, use [AppImageLauncher](https://github.com/TheAssassin/AppImageLauncher) or create a `.desktop` file manually.
 - **FUSE dependency**: AppImage requires FUSE. On minimal systems you may need:
   - Ubuntu/Debian: `sudo apt install libfuse2`

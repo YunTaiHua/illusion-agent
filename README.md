@@ -91,7 +91,7 @@ for your platform — it bundles everything, zero environment setup:
 |----------|----------|
 | Windows | `IllusionAgent-Setup-<version>.exe` (NSIS installer) |
 | macOS | `IllusionAgent-<version>-arm64.dmg` |
-| Linux | `illusionagent_<version>_amd64.deb` or `IllusionAgent-<version>.AppImage` |
+| Linux | `IllusionAgent-<version>-amd64.deb` or `IllusionAgent-<version>-x86_64.AppImage` |
 
 👉 [Download from GitHub Release](https://github.com/YunTaiHua/illusion-agent/releases/latest)
 

@@ -14,7 +14,7 @@ IllusionAgent 桌面版基于 Electron 封装 Web 端，内置 Python 与 Node.j
 
 ### macOS
 
-1. 下载 `IllusionAgent-<版本>-mac-arm64.dmg`（Apple Silicon，Intel Mac 暂未提供）。
+1. 下载 `IllusionAgent-<版本>-arm64.dmg`（Apple Silicon，Intel Mac 暂未提供）。
 2. 打开 dmg，将 `IllusionAgent.app` 拖到"应用程序"。
 3. 首次运行需绕过 Gatekeeper（见下节）。
 
@@ -22,8 +22,8 @@ IllusionAgent 桌面版基于 Electron 封装 Web 端，内置 Python 与 Node.j
 
 ### Linux
 
-1. 下载 `IllusionAgent-<版本>-linux-x64.AppImage`（x64，arm64 暂未提供）。
-2. 添加可执行权限：`chmod +x IllusionAgent-<版本>-linux<arch>.AppImage`。
+1. 下载 `IllusionAgent-<版本>-x86_64.AppImage`（x64，arm64 暂未提供）。
+2. 添加可执行权限：`chmod +x IllusionAgent-<版本>-x86_64.AppImage`。
 3. 双击或命令行运行。
 
 配置写入 `~/.illusion/`。
@@ -56,7 +56,7 @@ xattr -dr com.apple.quarantine /Applications/IllusionAgent.app
 
 ## 🐧 Linux 说明
 
-- **安装**：提供 `.deb`（Debian/Ubuntu 系 `sudo apt install ./IllusionAgent-<版本>.deb`）与 `.AppImage`（加可执行权限即可运行）两种产物。
+- **安装**：提供 `.deb`（Debian/Ubuntu 系 `sudo apt install ./IllusionAgent-<版本>-amd64.deb`）与 `.AppImage`（加可执行权限即可运行）两种产物。
 - **AppImage 桌面集成**：如需在应用菜单显示，可使用 [AppImageLauncher](https://github.com/TheAssassin/AppImageLauncher) 或手动创建 `.desktop` 文件。
 - **FUSE 依赖**：AppImage 运行需要 FUSE 支持。极少数最小化系统可能需安装：
   - Ubuntu/Debian：`sudo apt install libfuse2`
