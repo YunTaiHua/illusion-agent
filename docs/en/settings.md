@@ -474,10 +474,10 @@ Controls toast notifications on the Web / Desktop clients. The backend emits toa
 | User state | Behavior |
 |------------|----------|
 | Supervising the app UI (page visible and focused) | Fully silent — no toast, no sound, no system notification (the running state and pending confirmation dialogs are directly visible) |
-| Page visible but unfocused | In-app toast + sound effect + **system-level notification** |
-| Page hidden (switched tab / minimized to tray) | Sound effect + system-level notification. No in-app toast card is shown or replayed — the task result has already been delivered via the system notification, so returning to the app shows nothing twice |
+| Page visible but unfocused | System-level notification + sound effect (no duplicate in-app card) |
+| Page hidden (switched tab / minimized to tray) | System-level notification + sound effect; no in-app card on return |
 
-System-level notifications are Electron notifications in the desktop shell (click one to return to the app), or Web Notifications in plain browsers. Both are **minimal two-part** banners — a fixed short title localized per event type plus a one-line plain-text summary (Markdown in the body is flattened automatically so it never clashes with native banner typography); the full result stays in the in-app card. **Browsers require a one-time grant**: the permission request is triggered by your first click/keypress (background-tab requests are blocked by browsers); if denied, only in-app reminders remain, re-enableable in the site settings of your browser.
+System-level notifications are Electron notifications in the desktop shell (click one to return to the app), or Web Notifications in plain browsers. Both are **minimal two-part** banners — a fixed short title localized per event type plus a one-line plain-text summary (Markdown in the body is flattened automatically so it never clashes with native banner typography); **Browsers require a one-time grant**: the permission request is triggered by your first click/keypress (background-tab requests are blocked by browsers); if denied, only the sound cue remains; re-allow notifications in your browser's site settings.
 
 ```json
 {

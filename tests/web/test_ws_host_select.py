@@ -2,8 +2,7 @@
 
 （原 max-tokens 委托测试已随 ws_web_api 内联化重构删除）
 覆盖 Task 3.1：
-    - max-tokens 命令经 WebApiDispatcher.handle_web_query 委托给 _handle_select_command
-    - context-window __custom__ 不再发射 error 事件，静默返回 line_complete
+        - context-window __custom__ 不再发射 error 事件，静默返回 line_complete
 """
 
 from __future__ import annotations

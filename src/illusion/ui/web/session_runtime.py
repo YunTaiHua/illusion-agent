@@ -61,6 +61,8 @@ class SessionRuntime:
     phase: str = "idle"
     awaiting_input: bool = False
     rewind_target_idx: int | None = None
+    # 当前请求 ID：apply_select_command 与 submit_line 命令行均会绑定，
+    # 命令结果事件据此回传，前端精确匹配到预览面板
     current_request_id: str | None = None
     last_tool_inputs: dict[str, dict[str, Any]] = field(default_factory=dict)
     emitted_tool_started_ids: set[str] = field(default_factory=set)

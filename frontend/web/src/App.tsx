@@ -34,7 +34,7 @@ import { SetupForm } from './components/SetupForm';
 import { GoalBar } from './components/GoalBar';
 import { ToastMarkdown } from './components/ToastMarkdown';
 import type { GoalStatus } from './types/protocol';
-import { isAppSupervised, isPageHidden, notificationNeedsPriming, notifyDesktop, playToastSound, primeNotificationPermission, type NotifyLevel } from './utils/notify';
+import { isAppSupervised, notificationNeedsPriming, notifyDesktop, playToastSound, primeNotificationPermission, type NotifyLevel } from './utils/notify';
 import { FolderClosedIcon, FolderOpenIcon } from './components/icons';
 
 /** WebSocket 连接地址 */
@@ -274,20 +274,14 @@ export default function App() {
     // toast 通知（任务完成/终止、询问、权限）：后端已按 settings.json 的
     // notifications 开关过滤并本地化文案，这里只做呈现决策——
     //   1. 用户正在监管界面（可见且聚焦）时静默丢弃：界面内的运行状态与
-    //      待确认模态框用户直接可见，toast / 系统通知都属于重复打扰；
-    //   2. 所有非监管状态一律透传系统级通知（桌面壳为 Electron 系统通知，
-    //      浏览器为 Web Notification）——离场期间的任务结果由它独自承担
-    //      提醒职责，用户从系统通知即知完成与否；
-    //   3. 页面不可见时不显示也不暂存应用内 toast（回到应用后不再重看），
-    //      仅播放提示音；可见但失焦时正常显示应用内 toast + 提示音。
+    //      待确认模态框用户直接可见；
+    //   2. 其余状态一律只走系统级通知（桌面壳为 Electron 系统通知，浏览器
+    //      为 Web Notification）+ 提示音，应用内不再有对应卡片——避免同
+    //      一事件"系统横幅 + 应用内 toast"双重打扰。
     session.setOnToast((payload) => {
       if (isAppSupervised()) return;
       notifyDesktop(payload.title || 'Illusion Agent', payload.body);
-      if (isPageHidden()) {
-        if (payload.play_sound) playToastSound(payload.level);
-        return;
-      }
-      showToast([payload.title, payload.body].filter(Boolean).join('\n'), payload.level, payload.play_sound);
+      if (payload.play_sound) playToastSound(payload.level);
     });
     return () => {
       session.setOnSelectRequest(null);

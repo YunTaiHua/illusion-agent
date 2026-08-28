@@ -28,16 +28,6 @@ export function isAppSupervised(): boolean {
   return document.visibilityState === 'visible' && document.hasFocus();
 }
 
-/**
- * 页面是否完全不可见（最小化 / 切到其他标签页）
- *
- * 该状态下应用内 toast 卡片无法被看见也不再显示（提醒职责由
- * 提示音 + 系统级通知独自承担，回看不再二次打扰）。
- */
-export function isPageHidden(): boolean {
-  return typeof document !== 'undefined' && document.visibilityState === 'hidden';
-}
-
 // === 系统级通知透传 ===
 
 let notificationPermissionPrimed = false;
@@ -141,7 +131,7 @@ export function playToastSound(level: NotifyLevel): void {
  *   - 剥离代码围栏/行内标记/链接语法，取链接文字
  *   - 扔掉标题记号、引用符、列表与表格装饰符号
  *   - 压缩空白后按句读截到 maxChars 内
- * 应用内卡片仍渲染完整 Markdown，两通道从此各司其职。
+ * 系统横幅与应用内 toast 两通道各司其职：横幅读摘要，完整 Markdown 仅出现在命令反馈等应用内卡片。
  */
 export function plainTextSummary(markdown: string, maxChars = 120): string {
   if (!markdown) return '';
@@ -202,7 +192,7 @@ export function notifyDesktop(title: string, body: string): void {
     return;
   }
   if (typeof Notification === 'undefined') {
-    console.warn('[notify] Notification API unavailable — 仅应用内提醒可用');
+    console.warn('[notify] Notification API unavailable — 仅提示音可用，系统通知不可达');
     return;
   }
   try {

@@ -171,9 +171,9 @@ def build_toast_event(
 
     文案已由调用方按 ui_language 本地化（与 goal_status 同一策略：
     前端不再自行本地化，浏览器语言不影响显示）。前端据此决定呈现方式：
-    用户正在监管界面则丢弃；失焦时应用内 toast + 音效 + 系统级通知透传
-    （Electron 系统通知 / 浏览器 Notification）；页面完全不可见时不显示
-    应用内卡片（提醒由音效 + 系统级通知独自承担），避免回看二次打扰。
+    用户正在监管界面则丢弃；其余状态一律仅走系统级通知透传（Electron
+    系统通知 / 浏览器 Notification）+ 提示音——生命周期四类事件不再有
+    应用内卡片，杜绝"系统横幅 + 应用内 toast"双重打扰。
 
     Args:
         kind: 类别（task_complete / task_stopped / ask / permission）
@@ -631,15 +631,15 @@ class WebBackendHost:
         if request.type == "list_sessions":
             await self._handle_list_sessions()
             return True
+        from illusion.config.i18n import t as _t
+
         # 选择命令
         if request.type == "select_command":
             session = self._resolve_session(request.session_id)
             if session is not None:
                 if session.busy:
-                    # 行任务进行中不接受列表拉取：本通道的错误反馈若补发
+                    # 行任务进行中不接受选择器拉取：本通道的错误反馈若补发
                     # line_complete 会误清进行中回合的 busy（输入闸此前已拦）
-                    from illusion.config.i18n import t as _t
-
                     await self._emit_command_error(
                         _t("session_busy"),
                         session_id=session.session_id,
@@ -654,9 +654,11 @@ class WebBackendHost:
             if session is None:
                 return True
             if session.busy:
-                await self._emit(
-                    BackendEvent(type="error", message="Session is busy"),
+                # 与 select_command 同口：busy 反馈走 toast，不写入转录
+                await self._emit_command_error(
+                    _t("session_busy"),
                     session_id=session.session_id,
+                    finish=False,
                 )
                 return True
             session.busy = True
@@ -1052,6 +1054,7 @@ class WebBackendHost:
 
     async def _process_bg_completions(self, session: SessionRuntime) -> None:
         # 后台完成处理属对话流：同 _submit_line_as_text，清命令标志
+        # （置于函数体首行；本函数无 docstring，直接以注释说明）
         session.current_line_is_command = False
         """处理积压的后台完成通知（自动进入 busy），不新增用户输入。
 
@@ -1464,14 +1467,14 @@ class WebBackendHost:
         await report_delegated_result(job_id, result)
 
     async def _submit_line_as_text(self, session: SessionRuntime, line: str) -> bool:
-        # 普通对话行：清命令标志——粘滞的 True 会把真实对话错误误导进 toast，
-        # 丢失转录中的持久错误记录
-        session.current_line_is_command = False
         """直接将用户输入当文本提交给 LLM，跳过命令注册表。
 
         用于前端 treat_as_text=True 的 submit_line 请求（非指定命令如
         /resume、/model 等），确保输入不被 commands.lookup 匹配为命令执行，
         而是作为普通 user 消息发给 LLM。
+
+        普通对话行：清命令标志——粘滞的 True 会把真实对话错误误导进
+        toast，丢失转录中的持久错误记录。
 
         Args:
             session: 目标会话运行时
@@ -1480,6 +1483,7 @@ class WebBackendHost:
         Returns:
             bool: 是否继续会话（始终返回 True）
         """
+        session.current_line_is_command = False
         assert session.bundle is not None
         session.emitted_tool_started_ids.clear()
         await self._update_phase(session, "thinking")
@@ -2307,7 +2311,7 @@ class WebBackendHost:
             self._spawn_session_line(session, self._drive_goal_after_resume(session))
 
     async def _drive_goal_after_resume(self, session: SessionRuntime) -> bool:
-        # 恢复驱动的 goal 轮次属对话流：清命令标志
+        # 恢复驱动的 goal 轮次属对话流：清命令标志（本函数体首注释）
         session.current_line_is_command = False
         """GoalBar resume 后驱动 goal 轮次（fire-and-forget 行任务）。
 
@@ -3611,13 +3615,6 @@ class WebBackendHost:
             BackendEvent(
                 type="transcript_item",
                 item=TranscriptItem(role="system", text=stopped_message),
-            ),
-            session_id=session.session_id,
-        )
-        await self._emit(
-            BackendEvent(
-                type="command_result",
-                command_result_data={"message": stopped_message, "type": "info"},
             ),
             session_id=session.session_id,
         )

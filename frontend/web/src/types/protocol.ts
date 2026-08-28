@@ -401,13 +401,13 @@ export interface FileContentPayload {
  * submit_line/apply_select_command 等类型隔离。
  */
 export type FrontendRequest =
-  | { type: 'submit_line'; line: string; treat_as_text?: boolean; session_id?: string }
+  | { type: 'submit_line'; line: string; treat_as_text?: boolean; request_id?: string; session_id?: string }
   | { type: 'stop'; session_id?: string }
   | { type: 'permission_response'; request_id: string; allowed: boolean; session_allow?: boolean; tool_name?: string; session_id?: string }
   | { type: 'question_response'; request_id: string; answer: string; session_id?: string }
   | { type: 'list_sessions' }
   | { type: 'select_command'; command: string; session_id?: string }
-  | { type: 'apply_select_command'; command: string; value: string; session_id?: string }
+  | { type: 'apply_select_command'; command: string; value: string; request_id?: string; session_id?: string }
   | { type: 'shutdown' }
   // === Web 前端专属通道（web_* 命名空间）===
   | { type: 'web_new_session'; cwd?: string }
@@ -445,8 +445,8 @@ export type FrontendRequest =
  *
  * 后端在任务完成/终止、询问、权限等待时按 settings.json 的
  * notifications 开关过滤后下发；标题与正文已按 ui_language 本地化。
- * 前端据此决定呈现方式：监管中丢弃，否则应用内 toast + 音效，
- * 页面不可见时透传系统级通知。
+ * 前端据此决定呈现方式：监管中丢弃，其余状态一律仅走系统级通知
+ * + 提示音——生命周期事件不再有应用内卡片。
  */
 export interface ToastPayload {
   /** 通知类别：任务完成 / 任务终止 / 询问 / 权限 */

@@ -1537,7 +1537,12 @@ async def _render_command_result(
 	elif result.clear_screen:
 		await clear_output()
 	if result.message and not result.replay_messages:
-		if command_result_emitter is not None:
+		if result.drive_goal and command_result_emitter is not None:
+			# goal 驱动行（创建/resume）：轮次提示（goal_status → 第x轮）随即
+			# 到达并顶掉本回执，web 端再弹一次只会产生"看不清的闪烁"——
+			# 跳过 emitter；终端无 emitter，仍经 print_system 保留回执
+			pass
+		elif command_result_emitter is not None:
 			await command_result_emitter(result.message, "info")
 		else:
 			await print_system(result.message)
