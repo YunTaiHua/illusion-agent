@@ -64,6 +64,9 @@ linux:
   target:
     - AppImage
     - deb
+  # 显式产物名：package.json name 为 @illusion/desktop，默认 deb 文件名会
+  # 生成 release/@illusion/... 的不存在父目录导致 fpm 失败；统一用 productName
+  artifactName: IllusionAgent-${version}-${arch}.${ext}
   icon: build/icon.png
   category: Development
   # deb 包 Control 字段所需维护者信息（与仓库作者一致）
