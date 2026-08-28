@@ -1,36 +1,15 @@
-# electron-builder 配置
-# ======================
-# 三端打包配置。Windows 用标准 NSIS 安装器：
-#   - Windows: nsis target（安装器自动创建带 AppUserModelID 的开始菜单/
-#     桌面快捷方式并注入 exe 图标——应用运行时不再自建快捷方式/写注册表，
-#     toast 应用名与任务栏/toast 图标由安装注册的快捷方式身份决定）
-#   - macOS:   dmg target（未签名，用户需绕过 Gatekeeper，见 docs/zh-CN/desktop.md）
-#   - Linux:   AppImage + deb（Debian/Ubuntu 系标准安装）
-#
-# 内置 Python / Node 通过 extraResources 放到 Resources/ 下（asar 外，可 spawn）。
-
 appId: com.illusionagent.desktop
 productName: IllusionAgent
-# executableName 显式指定，避免从 package.json name(@illusion/desktop) 派生出含 @ 的可执行名（AppImage 不接受）
 executableName: IllusionAgent
-# NSIS 安装器：标准安装流程，安装/卸载时由安装器维护快捷方式
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
-  runAfterFinish: false
-  # 不要在安装完成后自动启动应用：首次启动需初始化内置运行时，
-  # 无窗口反馈会让用户误以为安装“卡死”；改由用户手动启动
-  # 开始菜单/桌面快捷方式名称取 productName（IllusionAgent），toast 显示名一致
+  runAfterFinish: true
+  useZip: true
+  differentialPackage: false
   shortcutName: IllusionAgent
   createDesktopShortcut: true
 
-# 不设 artifactName：用 electron-builder 默认命名，避免 macOS dmg 构建时内部中间产物路径不匹配（ENOENT）
-# upload 步骤用 *.exe/*.deb/*.dmg/*.AppImage 通配符，不依赖具体产物名
-
-# publish 配置：仅用于计算 channel name 生成 latest-*.yml（auto-update 元数据）。
-# 实际上传由 --publish never 禁用，改由单独的 action-gh-release 步骤上传产物。
-# 不加此配置时，dmg/AppImage 生成 update info 会因 publish 为 null 报
-# 'Cannot read properties of null (reading channel')。
 publish:
   provider: github
   owner: YunTaiHua
@@ -39,14 +18,12 @@ directories:
   output: release
   buildResources: build
 
-# 打进 asar 的文件（主进程编译产物）
 files:
   - dist/**/*
   - package.json
 
 asar: true
 
-# 内置运行时复制到 Resources/（asar 外，运行时 process.resourcesPath 访问）
 extraResources:
   - from: resources/
     to: .
@@ -66,11 +43,8 @@ linux:
   target:
     - AppImage
     - deb
-  # 显式产物名：package.json name 为 @illusion/desktop，默认 deb 文件名会
-  # 生成 release/@illusion/... 的不存在父目录导致 fpm 失败；统一用 productName
   artifactName: IllusionAgent-${version}-${arch}.${ext}
   icon: build/icon.png
   category: Development
-  # deb 包 Control 字段所需维护者信息（与仓库作者一致）
   maintainer: YunTaiHua <3597489498@qq.com>
   synopsis: IllusionAgent 桌面版 - Electron 壳，内置 Python / Node.js 运行时
