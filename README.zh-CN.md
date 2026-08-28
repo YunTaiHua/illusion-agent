@@ -81,13 +81,13 @@ pip install .
 
 ### 桌面版
 
-不想安装 Python 或 Node.js？直接下载对应平台的便携版，解压即用，零环境配置：
+不想安装 Python 或 Node.js？直接下载对应平台的安装包，内置运行时，零环境配置：
 
 | 平台 | 下载文件 |
 |------|----------|
-| Windows | `IllusionAgent-<版本>-win-x64.zip` |
+| Windows | `IllusionAgent-Setup-<版本>.exe`（NSIS 安装器） |
 | macOS | `IllusionAgent-<版本>-arm64.dmg` |
-| Linux | `IllusionAgent-<版本>.AppImage` |
+| Linux | `illusionagent_<版本>_amd64.deb` 或 `IllusionAgent-<版本>.AppImage` |
 
 👉 [从 GitHub Release 下载](https://github.com/YunTaiHua/illusion-agent/releases/latest)
 

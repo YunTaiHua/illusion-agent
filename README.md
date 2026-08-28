@@ -84,14 +84,14 @@ pip install .
 
 ### Desktop Edition
 
-Prefer a desktop app without installing Python or Node.js? Download the portable
-build for your platform — extract and run, zero environment setup:
+Prefer a desktop app without installing Python or Node.js? Download the installer
+for your platform — it bundles everything, zero environment setup:
 
 | Platform | Download |
 |----------|----------|
-| Windows | `IllusionAgent-<version>-win-x64.zip` |
+| Windows | `IllusionAgent-Setup-<version>.exe` (NSIS installer) |
 | macOS | `IllusionAgent-<version>-arm64.dmg` |
-| Linux | `IllusionAgent-<version>.AppImage` |
+| Linux | `illusionagent_<version>_amd64.deb` or `IllusionAgent-<version>.AppImage` |
 
 👉 [Download from GitHub Release](https://github.com/YunTaiHua/illusion-agent/releases/latest)
 

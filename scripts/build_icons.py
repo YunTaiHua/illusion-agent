@@ -81,7 +81,15 @@ def build_menu_bar_template() -> bool:
     时与 22pt 物理像素一一对应，放大不糊。源图标为"黑底白形"，此处把
     白色形状提取为纯黑、黑色背景置为透明。
     """
-    from PIL import Image
+    try:
+        from PIL import Image
+    except ImportError:
+        print(
+            "错误: 生成菜单栏模板图标需要 Pillow，请安装 dev 依赖后重试"
+            "（pip install -e .[dev] 或 pip install Pillow）",
+            file=sys.stderr,
+        )
+        return False
 
     src = ASSETS / "icon_1024x1024.png"
     if not src.exists():

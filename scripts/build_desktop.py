@@ -57,6 +57,9 @@ def fetch_runtimes() -> None:
 def build_icons() -> None:
     """生成桌面壳图标"""
     print("\n=== Building icons ===")
+    # build_icons.py 依赖 Pillow（合成标准 ICO / macOS 模板图标），
+    # 构建环境不保证预装（CI 为裸 setup-python），此处幂等安装
+    _run([sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check", "Pillow"])
     _run([sys.executable, str(SCRIPTS_DIR / "build_icons.py")])
 
 

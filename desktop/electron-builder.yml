@@ -5,7 +5,7 @@
 #     桌面快捷方式并注入 exe 图标——应用运行时不再自建快捷方式/写注册表，
 #     toast 应用名与任务栏/toast 图标由安装注册的快捷方式身份决定）
 #   - macOS:   dmg target（未签名，用户需绕过 Gatekeeper，见 docs/zh-CN/desktop.md）
-#   - Linux:   AppImage（单文件便携）
+#   - Linux:   AppImage + deb（Debian/Ubuntu 系标准安装）
 #
 # 内置 Python / Node 通过 extraResources 放到 Resources/ 下（asar 外，可 spawn）。
 
@@ -23,7 +23,7 @@ nsis:
   createDesktopShortcut: true
 
 # 不设 artifactName：用 electron-builder 默认命名，避免 macOS dmg 构建时内部中间产物路径不匹配（ENOENT）
-# upload 步骤用 *.zip/*.dmg/*.AppImage 通配符，不依赖具体产物名
+# upload 步骤用 *.exe/*.deb/*.dmg/*.AppImage 通配符，不依赖具体产物名
 
 # publish 配置：仅用于计算 channel name 生成 latest-*.yml（auto-update 元数据）。
 # 实际上传由 --publish never 禁用，改由单独的 action-gh-release 步骤上传产物。
