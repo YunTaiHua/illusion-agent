@@ -21,7 +21,7 @@ import type { UiLanguage } from './settings';
 import { resolveRuntime } from './runtime';
 import { Backend } from './backend';
 import { createTray } from './tray';
-import { createDesktopShortcutIfAbsent } from './shortcut';
+import { createDesktopShortcutIfAbsent, ensureWindowsAumidShortcut } from './shortcut';
 import { t } from './i18n';
 
 // 全局引用，防止被 GC 回收导致窗口/托盘消失
@@ -156,14 +156,14 @@ app.whenReady().then(async () => {
   // 亮出来并展示本地加载页，后端就绪后再切换到应用 URL。
   // 加载页为纯白底：与 web 端 ConnectingOverlay 的 bg-white 同框一致，
   // 消除粒子球旋转 + 切白底之间的间隙卡顿感。web 端遮罩层淡入接管，
-  // 1s opacity 过渡柔化切换。
+  // 700ms ease-out 过渡柔化（两段式启动）切换。
   mainWindow = createWindow();
   // 启动页：白底延续（与 web 端 ConnectingOverlay 的 bg-white 无缝同框），
   // 中央嵌入圆角应用图标作品牌锚点。图标文件经 base64 内嵌——data-url 页
   // 无法再发起相对资源请求。收到后端就绪信号（backend.start() resolve）
   // 后由 executeJavaScript 触发 __splashFadeOut() 淡出图标，短暂停留于
   // 纯白再整页交接 web——衔接链：Desktop 白底+图标 → 淡出 → web 白底
-  // → ConnectingOverlay 淡入（1s opacity，App.tsx 事件驱动卸载）。
+  // → ConnectingOverlay 淡入（700ms ease-out，App.tsx 事件驱动卸载）。
   const splashIconPath = resolveWindowIcon();
   let splashLogo = '';
   if (splashIconPath) {
@@ -274,6 +274,9 @@ app.whenReady().then(async () => {
 
   // --- 首次启动自动创建桌面快捷方式（仅 Windows 打包后，已存在则跳过） ---
   createDesktopShortcutIfAbsent();
+  // --- 注册携带 AUMID 的开始菜单快捷方式（Windows）：任务栏归属与系统
+  // 通知的来源名称/图标按 AUMID 反查此 lnk，缺失则回退 electron 占位 ---
+  ensureWindowsAumidShortcut();
 
   // --- 托盘 ---
   tray = createTray(mainWindow, lang, {
