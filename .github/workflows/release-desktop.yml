@@ -65,18 +65,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python scripts/build_desktop.py --all
 
-      - name: Compress Windows portable to zip
-        if: matrix.plat == 'win'
-        shell: pwsh
-        run: |
-          cd desktop/release
-          Rename-Item win-unpacked illusion-agent
-          7z a -tzip "IllusionAgent-${{ steps.ver.outputs.version }}-win-x64.zip" illusion-agent
+      # Windows 由 electron-builder 产出 NSIS 安装器（安装时注册 AUMID 快捷方式、
+      # 注入 exe 图标并生成 latest.yml 更新元数据），无需再手动压缩 zip；
+      # Linux 同时产出 AppImage 与 deb，一并上传
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            desktop/release/*.zip
+            desktop/release/*.exe
             desktop/release/*.dmg
             desktop/release/*.AppImage
+            desktop/release/*.deb
+            desktop/release/latest*.yml
+            desktop/release/*.blockmap
