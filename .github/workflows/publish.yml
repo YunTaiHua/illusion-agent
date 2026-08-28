@@ -48,6 +48,4 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          # 版本号已在 PyPI 上存在时跳过上传（视为成功），
-          # 支持同一 tag 重新触发 CI 修复产物而不重复发布
           skip-existing: true

@@ -1,8 +1,5 @@
 name: Release Desktop
 
-# 打 v* tag 触发：三平台并行打包，上传到 GitHub Release
-# 与 publish.yml（PyPI 发布）并行触发，互不干扰
-
 on:
   push:
     tags:
@@ -59,15 +56,9 @@ jobs:
 
       - name: Build desktop (fetch runtimes + install backend + icons + dist)
         env:
-          # Windows CI 控制台默认 cp1252 无法编码中文 print，强制 UTF-8 避免 UnicodeEncodeError
           PYTHONIOENCODING: utf-8
-          # 传 GITHUB_TOKEN 给 fetch_python.py 认证 GitHub API，避免限流（403 rate limit exceeded）
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python scripts/build_desktop.py --all
-
-      # Windows 由 electron-builder 产出 NSIS 安装器（安装时注册 AUMID 快捷方式、
-      # 注入 exe 图标并生成 latest.yml 更新元数据），无需再手动压缩 zip；
-      # Linux 同时产出 AppImage 与 deb，一并上传
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
