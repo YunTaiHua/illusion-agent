@@ -6,7 +6,7 @@
 从 nodejs.org 官方下载 tarball / zip，解压到 desktop/resources/node/<plat-arch>/。
 
 用法：
-    python scripts/fetch_node.py                   # 默认 20.18.0
+    python scripts/fetch_node.py                   # 默认 24.20.0
     python scripts/fetch_node.py --version 22.13.1
 
 解压使用 Python 标准库 tarfile + zipfile（跨平台兼容）。
@@ -29,7 +29,7 @@ from pathlib import Path
 DESKTOP_ROOT = Path(__file__).resolve().parent.parent / "desktop"
 RESOURCES = DESKTOP_ROOT / "resources"
 
-DEFAULT_VERSION = "20.18.0"
+DEFAULT_VERSION = "24.20.0"
 
 # node 官方 tarball 三元组
 NODE_TRIPLE_MAP = {

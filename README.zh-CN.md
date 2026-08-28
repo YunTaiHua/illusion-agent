@@ -91,7 +91,7 @@ pip install .
 
 👉 [从 GitHub Release 下载](https://github.com/YunTaiHua/illusion-agent/releases/latest)
 
-桌面版内置 Python 3.12 和 Node.js 20 运行时，详见[桌面版文档](docs/zh-CN/desktop.md)。
+桌面版内置 Python 3.12 和 Node.js 24 运行时，详见[桌面版文档](docs/zh-CN/desktop.md)。
 
 ### 基本使用
 

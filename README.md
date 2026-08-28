@@ -95,7 +95,7 @@ for your platform — it bundles everything, zero environment setup:
 
 👉 [Download from GitHub Release](https://github.com/YunTaiHua/illusion-agent/releases/latest)
 
-The desktop edition bundles Python 3.12 and Node.js 20 runtimes internally.
+The desktop edition bundles Python 3.12 and Node.js 24 runtimes internally.
 See [Desktop Edition docs](docs/en/desktop.md) for details.
 
 ### Basic Usage
