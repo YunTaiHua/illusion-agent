@@ -309,12 +309,14 @@ function tokensToElements(
 
 						let color = theme.colors.subtle;
 						if (isDiff) {
-							const trimmed = line.trimStart();
-							if (trimmed.startsWith('+') && !trimmed.startsWith('+++')) {
+							// unified diff 的格式标记是行首第一个字符（+ / - / 空格），
+							// 不能 trimStart 后再判断，否则上下文行内容以 - / + 开头时
+							// （如无序列表 "- item"）会被误染成红/绿色
+							if (line.startsWith('+') && !line.startsWith('+++')) {
 								color = theme.colors.success;
-							} else if (trimmed.startsWith('-') && !trimmed.startsWith('---')) {
+							} else if (line.startsWith('-') && !line.startsWith('---')) {
 								color = theme.colors.error;
-							} else if (trimmed.startsWith('@@')) {
+							} else if (line.startsWith('@@')) {
 								color = theme.colors.info;
 							}
 						}

@@ -430,13 +430,15 @@ function DiffLines({ text }: { text: string }) {
   return (
     <>
       {text.split(/\r?\n/).map((line, i) => {
-        const trimmed = line.trimStart();
+        // unified diff 的格式标记是行首第一个字符：+ 新增 / - 删除 / 空格 上下文。
+        // 不能 trimStart 后再判断，否则上下文行内容本身以 - / + 开头时
+        // （如无序列表 "- item"）会被误染成红/绿色
         let color = '';
-        if (trimmed.startsWith('+') && !trimmed.startsWith('+++')) {
+        if (line.startsWith('+') && !line.startsWith('+++')) {
           color = 'text-diff-add';
-        } else if (trimmed.startsWith('-') && !trimmed.startsWith('---')) {
+        } else if (line.startsWith('-') && !line.startsWith('---')) {
           color = 'text-diff-del';
-        } else if (trimmed.startsWith('@@')) {
+        } else if (line.startsWith('@@')) {
           color = 'text-diff-hunk';
         }
         return (

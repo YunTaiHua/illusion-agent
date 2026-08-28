@@ -457,14 +457,16 @@ function ToolResultBlock({
 				let lineColor: string | undefined = undefined;
 				let lineDim = !isError;
 				if (isDiff) {
-					const trimmedLine = line.trimStart();
-					if (trimmedLine.startsWith('+') && !trimmedLine.startsWith('+++')) {
+					// unified diff 的格式标记是行首第一个字符（+ 新增 / - 删除 / 空格 上下文），
+					// 不能 trimStart 后再判断，否则上下文行内容以 - / + 开头时
+					// （如无序列表 "- item"）会被误染成红/绿色
+					if (line.startsWith('+') && !line.startsWith('+++')) {
 						lineColor = theme.colors.success;
 						lineDim = false;
-					} else if (trimmedLine.startsWith('-') && !trimmedLine.startsWith('---')) {
+					} else if (line.startsWith('-') && !line.startsWith('---')) {
 						lineColor = theme.colors.error;
 						lineDim = false;
-					} else if (trimmedLine.startsWith('@@')) {
+					} else if (line.startsWith('@@')) {
 						lineColor = theme.colors.info;
 						lineDim = false;
 					}
