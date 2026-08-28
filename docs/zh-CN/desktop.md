@@ -1,17 +1,16 @@
 # 桌面版
 
-IllusionAgent 桌面版基于 Electron 封装 Web 端，内置 Python 与 Node.js 运行时，提供便携版分发，支持 Windows、macOS、Linux。
+IllusionAgent 桌面版基于 Electron 封装 Web 端，内置 Python 与 Node.js 运行时，提供 Windows（NSIS 安装器）、macOS（dmg）与 Linux（AppImage）发行。
 
 ## 📦 下载与安装
 
 ### Windows
 
-1. 下载 `IllusionAgent-<版本>-win-x64.zip`。
-2. 解压到任意目录（如 `D:\Apps\IllusionAgent`）。
-3. 双击 `IllusionAgent.exe` 启动。
-4. 首次启动可能触发 SmartScreen 警告，点击"更多信息"→"仍要运行"。
+1. 下载 `IllusionAgent-Setup-<版本>.exe`。
+2. 运行安装程序（可按需选择安装目录）。
+3. 安装器自动创建开始菜单快捷方式与桌面快捷方式，点击 `IllusionAgent` 启动即可。
 
-无需安装，配置写入 `%USERPROFILE%\.illusion\`。如需迁移，复制整个解压目录即可。
+安装器在安装时以标准方式注册应用身份（AppUserModelID）——系统通知与任务栏图标来自安装器创建的快捷方式，应用运行时不做任何注册。配置写入 `%USERPROFILE%\.illusion\`。
 
 ### macOS
 
@@ -48,21 +47,22 @@ xattr -dr com.apple.quarantine /Applications/IllusionAgent.app
 
 执行后该 app 不再被 Gatekeeper 拦截。仅对当前用户有效，不影响系统其他 app。
 
-## 🪟 Windows 便携版说明
+## 🪟 Windows 安装说明
 
-- **无需安装**：解压即用，不写注册表，不进 `Program Files`。
-- **SmartScreen 警告**：未签名 exe 首次启动可能被拦截，按"更多信息"→"仍要运行"放行。
-- **迁移**：复制整个目录到其他机器即可运行。
-- **卸载**：删除解压目录即可。如需清理配置，删除 `%USERPROFILE%\.illusion\`。
+- **标准安装**：NSIS 安装器，开始菜单/桌面快捷方式（携带 AppUserModelID）由安装器在安装与卸载时维护。
+- **卸载**：通过"设置 → 应用"或安装器生成的卸载程序卸载；如需清理配置，删除 `%USERPROFILE%\.illusion\`。
+- **SmartScreen 警告**：未签名 exe 首次运行时可能被拦截，按"更多信息"→"仍要运行"放行。
+- **迁移**：配置在用户主目录，换机重装即可独立保留/导入配置。
 
-## 🐧 Linux AppImage 说明
+## 🐧 Linux 说明
 
-- **无需安装**：AppImage 为单文件便携格式，加可执行权限即可运行。
-- **桌面集成**：如需在应用菜单显示，可使用 [AppImageLauncher](https://github.com/TheAssassin/AppImageLauncher) 或手动创建 `.desktop` 文件。
+- **安装**：提供 `.deb`（Debian/Ubuntu 系 `sudo apt install ./IllusionAgent-<版本>.deb`）与 `.AppImage`（加可执行权限即可运行）两种产物。
+- **AppImage 桌面集成**：如需在应用菜单显示，可使用 [AppImageLauncher](https://github.com/TheAssassin/AppImageLauncher) 或手动创建 `.desktop` 文件。
 - **FUSE 依赖**：AppImage 运行需要 FUSE 支持。极少数最小化系统可能需安装：
   - Ubuntu/Debian：`sudo apt install libfuse2`
   - Fedora：`sudo dnf install fuse`
-- **卸载**：删除 AppImage 文件即可。配置在 `~/.illusion/`。
+- **托盘/通知依赖**：Linux 托盘走 StatusNotifier/AppIndicator，通知走 freedesktop 通知守护进程；GNOME 桌面需启用 AppIndicator 扩展（KDE 默认支持）。
+- **卸载**：deb 用 `sudo dpkg -r illusionagent`；AppImage 直接删除文件即可。配置在 `~/.illusion/`。
 
 ## 🐍 内置 Python / Node.js 运行时
 
@@ -92,7 +92,7 @@ xattr -dr com.apple.quarantine /Applications/IllusionAgent.app
 
 ## 🔄 更新
 
-便携版采用**整包替换**更新：检测新版本 → 下载 → 退出应用后替换整个目录 → 重新启动。配置目录 `~/.illusion/` 跨版本保留。
+Windows 走 NSIS 安装包：在现有安装上重新运行新版 `IllusionAgent-Setup-<版本>.exe` 即可原地更新。配置目录 `~/.illusion/` 跨版本保留。
 
 ## ⚠️ 注意事项
 

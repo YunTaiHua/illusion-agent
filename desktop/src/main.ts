@@ -21,7 +21,6 @@ import type { UiLanguage } from './settings';
 import { resolveRuntime } from './runtime';
 import { Backend } from './backend';
 import { createTray } from './tray';
-import { createDesktopShortcutIfAbsent, ensureWindowsAumidShortcut } from './shortcut';
 import { t } from './i18n';
 
 // 全局引用，防止被 GC 回收导致窗口/托盘消失
@@ -271,12 +270,6 @@ app.whenReady().then(async () => {
     return;
   }
   mainWindow.show();
-
-  // --- 首次启动自动创建桌面快捷方式（仅 Windows 打包后，已存在则跳过） ---
-  createDesktopShortcutIfAbsent();
-  // --- 注册携带 AUMID 的开始菜单快捷方式（Windows）：任务栏归属与系统
-  // 通知的来源名称/图标按 AUMID 反查此 lnk，缺失则回退 electron 占位 ---
-  ensureWindowsAumidShortcut();
 
   // --- 托盘 ---
   tray = createTray(mainWindow, lang, {

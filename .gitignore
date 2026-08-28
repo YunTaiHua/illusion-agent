@@ -80,6 +80,8 @@ desktop/build/*
 desktop/resources/python/
 desktop/resources/node/
 desktop/resources/icon.png
+desktop/resources/iconTemplate.png
+desktop/resources/iconTemplate@2x.png
 
 temp_test_data/
 temp_test_config/

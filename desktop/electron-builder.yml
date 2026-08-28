@@ -1,7 +1,9 @@
 # electron-builder 配置
 # ======================
-# 三端打包配置。便携版策略：
-#   - Windows: dir target（产出文件夹，CI 后续打 zip），解压即用、启动快
+# 三端打包配置。Windows 用标准 NSIS 安装器：
+#   - Windows: nsis target（安装器自动创建带 AppUserModelID 的开始菜单/
+#     桌面快捷方式并注入 exe 图标——应用运行时不再自建快捷方式/写注册表，
+#     toast 应用名与任务栏/toast 图标由安装注册的快捷方式身份决定）
 #   - macOS:   dmg target（未签名，用户需绕过 Gatekeeper，见 docs/zh-CN/desktop.md）
 #   - Linux:   AppImage（单文件便携）
 #
@@ -11,6 +13,15 @@ appId: com.illusionagent.desktop
 productName: IllusionAgent
 # executableName 显式指定，避免从 package.json name(@illusion/desktop) 派生出含 @ 的可执行名（AppImage 不接受）
 executableName: IllusionAgent
+# NSIS 安装器：标准安装流程，安装/卸载时由安装器维护快捷方式
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  runAfterFinish: true
+  # 开始菜单/桌面快捷方式名称取 productName（IllusionAgent），toast 显示名一致
+  shortcutName: IllusionAgent
+  createDesktopShortcut: true
+
 # 不设 artifactName：用 electron-builder 默认命名，避免 macOS dmg 构建时内部中间产物路径不匹配（ENOENT）
 # upload 步骤用 *.zip/*.dmg/*.AppImage 通配符，不依赖具体产物名
 
@@ -39,7 +50,7 @@ extraResources:
     to: .
 
 win:
-  target: dir
+  target: nsis
   icon: build/icon.ico
 
 mac:
@@ -50,6 +61,11 @@ mac:
   gatekeeperAssess: false
 
 linux:
-  target: AppImage
+  target:
+    - AppImage
+    - deb
   icon: build/icon.png
   category: Development
+  # deb 包 Control 字段所需维护者信息（与仓库作者一致）
+  maintainer: YunTaiHua <3597489498@qq.com>
+  synopsis: IllusionAgent 桌面版 - Electron 壳，内置 Python / Node.js 运行时

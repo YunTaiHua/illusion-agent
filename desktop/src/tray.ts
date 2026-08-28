@@ -20,18 +20,30 @@ import { t } from './i18n';
 /**
  * 托盘图标路径解析。
  * 优先级：打包资源（process.resourcesPath/icon.png）→ 工程内 resources → 源 assets。
- * 图标源由 scripts/build-icons.ts 准备（见 desktop/build/assets/）。
+ * 图标源由 scripts/build_icons.py 准备（见 desktop/build/assets/）。
  */
 function resolveTrayIcon(): string {
   const candidates = [
     // 打包后：extraResources 把 resources/icon.png 放到 Resources/icon.png
     path.join(process.resourcesPath ?? '', 'icon.png'),
-    // 开发时：build-icons.ts 已复制到 desktop/resources/icon.png
+    // 开发时：build_icons.py 已复制到 desktop/resources/icon.png
     path.resolve(__dirname, '..', 'resources', 'icon.png'),
     // 兜底：直接用源 assets 中的小尺寸图标
     path.resolve(__dirname, '..', 'build', 'assets', 'icon_32x32.png'),
   ];
   return candidates.find((c) => fs.existsSync(c)) ?? candidates[0];
+}
+
+/**
+ * macOS 菜单栏模板图标路径（由 build_icons.py 生成）：
+ * 透明底 + 纯黑形状，设置 template image 后由系统适配深浅色菜单栏。
+ */
+function resolveMenuBarTemplateIcon(): string {
+  const candidates = [
+    path.join(process.resourcesPath ?? '', 'iconTemplate.png'),
+    path.resolve(__dirname, '..', 'resources', 'iconTemplate.png'),
+  ];
+  return candidates.find((c) => fs.existsSync(c)) ?? '';
 }
 
 export interface TrayCallbacks {
@@ -49,11 +61,14 @@ export interface TrayCallbacks {
  * @param cb   菜单回调
  */
 export function createTray(win: BrowserWindow, lang: UiLanguage, cb: TrayCallbacks): Tray {
-  const iconPath = resolveTrayIcon();
-  const icon = nativeImage.createFromPath(iconPath);
-  // macOS 托盘图标建议小尺寸，resize 防止过大
-  if (!icon.isEmpty() && process.platform === 'darwin') {
-    icon.resize({ width: 22, height: 22 });
+  // macOS：优先用模板图标（透明底黑形，系统适配深浅色）；存在时才设为
+  // template image，缺失则回退彩色图标（与 Windows/Linux 一致）。
+  const trayIconPath = process.platform === 'darwin' ? resolveMenuBarTemplateIcon() : '';
+  const icon = nativeImage.createFromPath(trayIconPath || resolveTrayIcon());
+  if (process.platform === 'darwin') {
+    if (trayIconPath) icon.setTemplateImage(true);
+    // macOS 菜单栏图标建议小尺寸，resize 防止过大
+    else if (!icon.isEmpty()) icon.resize({ width: 22, height: 22 });
   }
   const tray = new Tray(icon);
   tray.setToolTip(t(lang, 'app_name'));
