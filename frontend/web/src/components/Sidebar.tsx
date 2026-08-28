@@ -413,7 +413,7 @@ export default function Sidebar({
 
   return (
     <aside className="glass-panel panel-below-titlebar flex flex-col h-full shrink-0 select-none transition-[width] duration-300 ease-in-out" style={{ width: `${width}px` }}>
-      <div className="flex items-center justify-between px-5 pt-4 pb-3 border-b border-border-medium">
+      <div className="flex items-center justify-between px-5 pt-4 pb-3">
         <button
           onClick={onToggle}
           className="w-8 h-8 flex items-center justify-center rounded-lg text-content-secondary hover:text-primary transition-colors cursor-pointer"

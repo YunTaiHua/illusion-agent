@@ -1308,13 +1308,13 @@ export default function App() {
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div className="absolute inset-0 bg-black/35 backdrop-blur-md animate-fade-in" onClick={handleCancelDeleteOne} />
           <div className="relative bg-surface-card rounded-2xl border border-border-light shadow-card w-[380px] flex flex-col animate-scale-in modal-origin-center">
-            <div className="px-6 py-4 border-b border-border-light">
+            <div className="px-6 py-4">
               <h3 className="text-lg font-semibold text-content-primary">{t(lang, 'delete_session')}</h3>
             </div>
             <div className="px-6 py-4">
               <p className="text-sm text-content-secondary leading-relaxed">{t(lang, 'confirm_delete_session')}</p>
             </div>
-            <div className="px-6 py-4 border-t border-border-light flex justify-end gap-2">
+            <div className="px-6 py-4 flex justify-end gap-2">
               <button ref={deleteCancelRef} onClick={handleCancelDeleteOne} className="px-4 py-2 text-sm text-content-secondary glass-option-hover rounded-lg transition-colors cursor-pointer border border-white/40">
                 {t(lang, 'cancel')}
               </button>
@@ -1342,7 +1342,7 @@ export default function App() {
 
       {/* Agent 摘要浮动卡片（查看已完成 agent 时展示） */}
       {agentResult != null && (
-        <div className="fixed bottom-24 right-6 z-40 w-[420px] max-w-[calc(100vw-3rem)] animate-fade-in-up">
+        <div className="fixed bottom-8 right-6 z-40 max-w-[420px] animate-fade-in-up">
           <div className="glass-surface rounded-2xl overflow-hidden flex flex-col shadow-glow">
             <div className="px-4 py-3 flex items-center justify-between border-b border-white/30">
               <div className="text-sm font-semibold text-content-primary">{t(lang, 'agentResultCardTitle')}</div>
@@ -1410,11 +1410,11 @@ export default function App() {
           className={`fixed bottom-8 right-6 z-50 ${toastExiting ? 'animate-toast-out' : 'animate-toast-in'}`}
           onMouseEnter={handleToastMouseEnter} onMouseLeave={handleToastMouseLeave}
         >
-          <div className="glass-surface border border-black/10 rounded-2xl max-w-lg overflow-hidden relative">
+          <div className="glass-surface border border-black/10 rounded-2xl max-w-[420px] overflow-hidden relative">
             {/* 滚动容器全宽：右 padding 只是内容让位区（不改变滚动条位置），
                 因此滚动条始终贴卡片最右侧；关闭按钮绝对定位悬浮于右上角，
                 脱离文档流、不挤占正文与滚动条的任何空间 */}
-            <div className="prose toast-md text-sm text-content-primary leading-relaxed max-h-72 overflow-y-auto pl-5 pr-16 pt-4 pb-3">
+            <div className="prose toast-md text-sm text-content-primary leading-relaxed max-h-[60vh] overflow-y-auto pl-5 pr-16 pt-4 pb-3">
               <ToastMarkdown text={toastMessage.text} />
             </div>
             <button onClick={closeToast}

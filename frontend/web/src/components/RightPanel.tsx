@@ -151,7 +151,7 @@ export default function RightPanel({
   return (
     <aside className="glass-panel panel-below-titlebar flex flex-col h-full shrink-0 select-none" style={{ width: `${width}px` }}>
       {/* 标题行：tab 切换按钮 + 居中标题 + 折叠按钮（3 列 grid 严格居中） */}
-      <div className="grid grid-cols-3 items-center px-5 pt-4 pb-3 shrink-0 border-b border-border-medium">
+      <div className="grid grid-cols-3 items-center px-5 pt-4 pb-3 shrink-0">
         <button
           onClick={() => setTab((t) => (t === 'sections' ? 'usage' : 'sections'))}
           title={tab === 'sections' ? t(lang, 'panel_tab_usage') : t(lang, 'panel_tab_sections')}

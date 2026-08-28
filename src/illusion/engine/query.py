@@ -967,6 +967,7 @@ async def run_query(
                 # 创建进度队列（仅单工具路径使用，用于 agent 工具前台模式上报子代理工具调用进度）
                 context.progress_queue = asyncio.Queue()
                 exec_task: asyncio.Task[Any] | None = None
+                get_task: asyncio.Task[Any] | None = None
                 try:
                     exec_task = asyncio.ensure_future(
                         _execute_tool_call(context, tc.name, tc.id, tc.input)
@@ -994,8 +995,15 @@ async def run_query(
                     result, hook_ctxs, tool_meta = exec_task.result()
                 finally:
                     context.progress_queue = None
-                    # 关键：run_query 被取消（Ctrl+X）时取消未完成的工具执行，
-                    # 否则 exec_task 成为孤儿 task，前台 agent 会继续运行
+                    # 关键：run_query 被取消（Ctrl+X）时取消未完成的 get_task，
+                    # 否则 get_task 成为孤儿 task，触发
+                    # "Task was destroyed but it is pending!" 警告
+                    if get_task is not None and not get_task.done():
+                        get_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await get_task
+                    # 同理取消未完成的工具执行，否则 exec_task 成为孤儿 task，
+                    # 前台 agent 会继续运行
                     if exec_task is not None and not exec_task.done():
                         exec_task.cancel()
                         with contextlib.suppress(asyncio.CancelledError):
