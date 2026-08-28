@@ -83,13 +83,11 @@ const TurnFilesBar = memo(function TurnFilesBar({ lang, rawPaths, stats, onReque
       {/* 展开/折叠微动画（简洁 fade：纯透明度 150ms）；容器无垂直内边距，
           文件行紧贴分隔线与卡片底边，hover 高亮连续不留间隙。
           max-h 限制展开高度（大量文件时卡片不无限撑高聊天流），
-          超出部分滚动查看；scrollbarGutter:'stable' 预留滚动条槽位，
-          避免滚动条出现/消失引起行宽与布局抖动 */}
+          超出部分滚动查看；scrollbar-hidden 彻底隐藏滚动条且不占槽位，
+          子项 w-full 悬浮选中可完整覆盖整行，也避免滚动条出现/消失
+          引起的行宽与布局抖动 */}
       {open && (
-        <div
-          className="animate-fade overflow-y-auto max-h-56"
-          style={{ scrollbarGutter: 'stable' }}
-        >
+        <div className="animate-fade overflow-y-auto max-h-56 scrollbar-hidden">
           <div className="flex flex-col border-t border-border-light">
             {rawPaths.map((raw) => (
               <TurnFileRow key={raw} raw={raw} stat={stats.get(raw)} onOpenFile={onOpenFile} />

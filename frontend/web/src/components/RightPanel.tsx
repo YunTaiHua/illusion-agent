@@ -120,8 +120,8 @@ export default function RightPanel({
     system: t(lang, 'theme_system'),
   };
   const themeTitle = themeLabels[theme];
-  // tab 视图：'usage' = 待办 + 上下文窗口 + 累积 API 用量（默认，待办与用量同表单）；
-  // 'sections' = 智能体与任务…规则各区块。切换 tab 时顶部标题栏与底部主题按钮保持不变
+  // tab 视图：'usage' = 上下文窗口 + 累积 API 用量（默认）；
+  // 'sections' = 智能体与任务…规则各区块。切换 tab 时顶部标题栏、待办卡片与底部主题按钮保持不变
   const [tab, setTab] = useState<'sections' | 'usage'>('usage');
   // 上下文使用量
   const contextWindow = Number(status?.context_window ?? 0);
@@ -173,8 +173,12 @@ export default function RightPanel({
         </button>
       </div>
 
-      {/* tab 内容区（顶部标题栏与底部主题按钮固定保留，仅此区域随 tab 切换） */}
+      {/* tab 内容区（顶部标题栏、待办卡片与底部主题按钮固定保留，仅此区域随 tab 切换） */}
       <div className="flex-1 min-h-0 overflow-y-auto scrollbar-hidden">
+      {/* Todo 列表（常驻所有 tab；空列表显示占位；置于切换区之外保证切 tab 时保留） */}
+      <div className="px-4 py-3">
+        <TodoPanel items={todoItems} lang={lang} />
+      </div>
       {tab === 'sections' ? (
       <>
       {/* 智能体与任务（复用 /agent 双数据源：前台 agent + 后台任务通知；随会话切换） */}
@@ -308,11 +312,6 @@ export default function RightPanel({
       </>
       ) : (
       <>
-        {/* Todo 列表（与用量同表单；始终显示，空列表显示占位） */}
-        <div className="px-4 py-3">
-          <TodoPanel items={todoItems} lang={lang} />
-        </div>
-
         {/* 上下文窗口（标题风格对齐左栏会话列表标题；标题与正文间保留 gap） */}
         {contextWindow > 0 && (
           <div className="px-4 pb-3">
