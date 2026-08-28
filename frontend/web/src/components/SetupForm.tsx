@@ -29,9 +29,9 @@ import ToggleSwitch from './ToggleSwitch';
 import { CronTab } from './CronTab';
 import type { WebWorkspaceItem } from '../types/protocol';
 import {
-  envApi, oauthApi, settingsApi, channelsApi,
+  envApi, oauthApi, settingsApi, channelsApi, computerUseApi,
   type EnvInfo, type SettingsResponse, type CreateEnvPayload,
-  type SandboxSettings, type PermissionRiskSettings,
+  type SandboxSettings, type PermissionRiskSettings, type ComputerUseStatus,
   type ChannelRuntimeStatusEntry, type ChannelsRuntimeStatus,
 } from '../api';
 
@@ -212,6 +212,14 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
   const [toastEnabled, setToastEnabled] = useState(true);
   /** 提示音效开关（仅在 toast 总开关开启时生效） */
   const [toastSound, setToastSound] = useState(true);
+  /** Computer Use 启用开关（settings.computer_use.enabled） */
+  const [computerUseEnabled, setComputerUseEnabled] = useState(false);
+  /** Computer Use 状态（cua 二进制版本/更新信息） */
+  const [computerUseStatus, setComputerUseStatus] = useState<ComputerUseStatus | null>(null);
+  /** Computer Use 二进制更新中标记 */
+  const [computerUseUpdating, setComputerUseUpdating] = useState(false);
+  /** Computer Use 操作提示（更新结果/错误） */
+  const [computerUseMsg, setComputerUseMsg] = useState<string | null>(null);
   /** 模型参数（上下文窗口大小 / 最大输出 tokens / 最大轮次，字符串态便于自由编辑） */
   const [contextWindow, setContextWindow] = useState<string>('200000');
   const [maxTokens, setMaxTokens] = useState<string>('16384');
@@ -262,6 +270,14 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
         // 通知开关（旧后端响应缺省时按全开兜底）
         setToastEnabled(s.notifications?.enabled ?? true);
         setToastSound(s.notifications?.sound ?? true);
+        // Computer Use 开关与版本状态（旧后端响应缺省时按关闭兜底）
+        setComputerUseEnabled(s.computer_use?.enabled ?? false);
+        // get_settings 仅返回开关（避免版本检查阻塞表单加载），
+        // 版本/更新信息单独从 /api/computer-use/status 拉取
+        try {
+          const cu = await computerUseApi.getStatus();
+          if (!cancelled) setComputerUseStatus(cu);
+        } catch { /* 状态获取失败不阻塞表单 */ }
         // 模型参数（默认值与后端 Settings 模型对齐）
         setContextWindow(String(s.context_window ?? 200000));
         setMaxTokens(String(s.max_tokens ?? 16384));
@@ -469,6 +485,15 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
           sound: toastSound,
         });
       }
+      // 3.9 Computer Use 开关改动（只提交开关；版本/更新走即时操作）
+      if (settings && computerUseEnabled !== settings.computer_use?.enabled) {
+        await computerUseApi.updateEnabled(computerUseEnabled);
+        // 重新拉取完整状态，避免用仅含 enabled 的响应覆盖版本信息
+        try {
+          const cu = await computerUseApi.getStatus();
+          setComputerUseStatus(cu);
+        } catch { /* 状态刷新失败不阻塞保存 */ }
+      }
       // 4. 渠道配置（兼容旧配置：enabled 但无运行目录的渠道自动填充默认工作区，
       //    避免后端启用校验（enabled 必填目录）拒绝整个保存；其余清空为 null）
       const defaultWs = workspaces.find((w) => w.is_default)?.path;
@@ -504,7 +529,7 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
       setSaving(false);
       setSaveError(err instanceof Error ? err.message : String(err));
     }
-  }, [settings, uiLang, workDir, contextWindow, maxTokens, maxTurns, memEnabled, memAutoExtract, memExtractModel, memDreamModel, memDir, titleEnabled, titleModel, toastEnabled, toastSound, reviewAuto, reviewModel, channels, workspaces, firstLogin, showAddEnv, draft, draftValid, createEnvFromDraft, onSetUiLanguage, onSaved, sandbox, lang]);
+  }, [settings, uiLang, workDir, contextWindow, maxTokens, maxTurns, memEnabled, memAutoExtract, memExtractModel, memDreamModel, memDir, titleEnabled, titleModel, toastEnabled, toastSound, computerUseEnabled, reviewAuto, reviewModel, channels, workspaces, firstLogin, showAddEnv, draft, draftValid, createEnvFromDraft, onSetUiLanguage, onSaved, sandbox, lang]);
 
   /** 删除环境（即时 API） */
   const handleDeleteEnv = useCallback(async (envKey: string) => {
@@ -545,6 +570,26 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
       setOpError(err instanceof Error ? err.message : String(err));
     }
   }, []);
+
+  /** 更新 cua 二进制（即时操作，完成后刷新版本状态） */
+  const handleUpdateComputerUse = useCallback(async () => {
+    setComputerUseUpdating(true);
+    setComputerUseMsg(null);
+    try {
+      const res = await computerUseApi.updateBinary();
+      const status = await computerUseApi.getStatus();
+      setComputerUseStatus(status);
+      setComputerUseMsg(
+        res.success
+          ? t(lang, 'computerUseUpdated')
+          : t(lang, 'computerUseNoUpdate'),
+      );
+    } catch (err) {
+      setComputerUseMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setComputerUseUpdating(false);
+    }
+  }, [lang]);
 
   /** 选择界面语言（即时同步 + 更新本地） */
   const handlePickUiLang = useCallback((val: 'zh-CN' | 'en-US') => {
@@ -666,6 +711,12 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
               onToastEnabledChange={setToastEnabled}
               toastSound={toastSound}
               onToastSoundChange={setToastSound}
+              computerUseEnabled={computerUseEnabled}
+              onComputerUseEnabledChange={setComputerUseEnabled}
+              computerUseStatus={computerUseStatus}
+              computerUseUpdating={computerUseUpdating}
+              computerUseMsg={computerUseMsg}
+              onUpdateComputerUse={handleUpdateComputerUse}
               contextWindow={contextWindow}
               onContextWindowChange={setContextWindow}
               maxTokens={maxTokens}
@@ -922,6 +973,17 @@ interface SettingsTabProps {
   /** 提示音效开关（toast 关闭时置灰不可操作） */
   toastSound: boolean;
   onToastSoundChange: (v: boolean) => void;
+  /** Computer Use 启用开关 */
+  computerUseEnabled: boolean;
+  onComputerUseEnabledChange: (v: boolean) => void;
+  /** Computer Use 状态（版本/更新信息） */
+  computerUseStatus: ComputerUseStatus | null;
+  /** Computer Use 二进制更新中标记 */
+  computerUseUpdating: boolean;
+  /** Computer Use 操作提示 */
+  computerUseMsg: string | null;
+  /** 更新 cua 二进制 */
+  onUpdateComputerUse: () => void;
   /** 上下文窗口大小（token，字符串态：保存时校验为正整数） */
   contextWindow: string;
   onContextWindowChange: (v: string) => void;
@@ -1298,6 +1360,46 @@ function SettingsTab(p: SettingsTabProps) {
             disabled={!p.toastEnabled}
           />
         </div>
+      </div>
+
+      {/* Computer Use（开关 + cua 二进制版本/更新） */}
+      <div className="space-y-3 rounded-lg border border-border-light p-4 bg-surface-card-alt/50">
+        <div className={labelClass}>{t(lang, 'setupFieldComputerUse')}</div>
+        {/* 启用开关 */}
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-content-primary">{t(lang, 'setupFieldComputerUseEnabled')}</span>
+          <ToggleSwitch
+            checked={p.computerUseEnabled}
+            onChange={p.onComputerUseEnabledChange}
+            label={t(lang, 'setupFieldComputerUseEnabled')}
+          />
+        </div>
+        {/* cua 二进制版本信息 + 更新按钮 */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0 text-xs text-content-secondary">
+            {p.computerUseStatus?.local_version
+              ? `${t(lang, 'computerUseLocalVersion')}: ${p.computerUseStatus.local_version}`
+              : t(lang, 'computerUseNotInstalled')}
+            {p.computerUseStatus?.latest_version && (
+              <span className="ml-1 opacity-70">
+                / {t(lang, 'computerUseLatestVersion')}: {p.computerUseStatus.latest_version}
+              </span>
+            )}
+          </div>
+          <button
+            onClick={p.onUpdateComputerUse}
+            disabled={p.computerUseUpdating}
+            className="shrink-0 px-3 py-1.5 text-xs text-white bg-primary hover:bg-primary-hover rounded-md transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {p.computerUseUpdating ? t(lang, 'computerUseUpdating') : t(lang, 'computerUseUpdate')}
+          </button>
+        </div>
+        {p.computerUseStatus?.update_available && !p.computerUseMsg && (
+          <div className="text-xs text-primary">{t(lang, 'computerUseUpdateAvailable')}</div>
+        )}
+        {p.computerUseMsg && (
+          <div className="text-xs text-content-secondary">{p.computerUseMsg}</div>
+        )}
       </div>
 
       {/* 权限 LLM 自动审核配置（auto 模式高危操作与沙箱拦截由 LLM 审核放行） */}

@@ -92,6 +92,18 @@ def load_plugins(settings: Any, cwd: str | Path) -> list[LoadedPlugin]:
             if plugin.manifest.name in project_permissions.denied_plugins:
                 continue
             plugins.append(plugin)
+
+    # 内置 Computer Use 插件（以 plugin 方式注入 MCP 工具与 skill）。
+    # 由 settings.computer_use.enabled 开关控制：关闭时不注入；
+    # 同时遵守项目级 denied_plugins（与磁盘插件一致）。
+    from illusion.computer.plugin import build_computer_plugin
+
+    computer_plugin = build_computer_plugin(settings)
+    if computer_plugin is not None and computer_plugin.name in project_permissions.denied_plugins:
+        computer_plugin = None
+    if computer_plugin is not None:
+        plugins.append(computer_plugin)
+
     return plugins
 
 

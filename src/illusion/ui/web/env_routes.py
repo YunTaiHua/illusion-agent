@@ -168,6 +168,12 @@ class UpdateNotificationsRequest(BaseModel):
     sound: bool | None = None
 
 
+class UpdateComputerUseRequest(BaseModel):
+    """修改 Computer Use 开关请求体。"""
+
+    enabled: bool = Field(..., description="是否启用 computer use 相关工具与 skill")
+
+
 class UpdateSandboxRequest(BaseModel):
     """修改沙箱配置请求体。
 
@@ -233,6 +239,29 @@ def _sandbox_settings_payload(sandbox: Any) -> dict[str, Any]:
             else None
         ),
     }
+
+
+def _computer_use_payload(settings: Any) -> dict[str, Any]:
+    """返回 computer use 配置摘要（enabled + 二进制状态）。
+
+    版本检查涉及子进程/网络调用，仅用于独立的 status 路由；
+    表单加载（get_settings）使用 _computer_use_enabled_payload 避免阻塞。
+    """
+    from illusion.computer.binary import check_update, find_cua_path
+
+    status = check_update()
+    return {
+        "enabled": settings.computer_use.enabled,
+        "binary_path": find_cua_path(),
+        "local_version": status["local_version"],
+        "latest_version": status["latest_version"],
+        "update_available": status["update_available"],
+    }
+
+
+def _computer_use_enabled_payload(settings: Any) -> dict[str, Any]:
+    """返回 computer use 开关状态（快速路径，不触版本检查）。"""
+    return {"enabled": settings.computer_use.enabled}
 
 
 def _permission_risk_payload() -> dict[str, Any]:
@@ -479,6 +508,7 @@ def register_env_routes(app: FastAPI, host_config: Any | None = None) -> None:
                 "auto_review": settings.permission.auto_review,
                 "review_model": settings.permission.review_model,
             },
+            "computer_use": _computer_use_enabled_payload(settings),
         }
 
     @app.patch("/api/settings/permission")
@@ -729,3 +759,45 @@ def register_env_routes(app: FastAPI, host_config: Any | None = None) -> None:
         for host in iter_active_hosts():
             host.apply_runtime_settings_sync()
         return {"success": True, **updates}
+
+    @app.patch("/api/settings/computer-use")
+    async def update_computer_use(req: UpdateComputerUseRequest) -> dict[str, Any]:
+        """修改 Computer Use 开关。
+
+        保存后返回最新状态；开关变更在下次会话启动时生效
+        （MCP 工具与 skill 在会话构建时按开关注入）。
+        """
+        settings = load_settings()
+        new_settings = settings.model_copy(
+            update={"computer_use": settings.computer_use.model_copy(update={"enabled": req.enabled})}
+        )
+        save_settings(new_settings)
+        return {"success": True, "computer_use": _computer_use_enabled_payload(new_settings)}
+
+    @app.get("/api/computer-use/status")
+    async def computer_use_status() -> dict[str, Any]:
+        """获取 Computer Use 状态（开关 + cua 二进制版本/更新信息）。"""
+        settings = load_settings()
+        # 版本检查涉及子进程/网络，放线程池避免阻塞事件循环
+        payload = await asyncio.to_thread(_computer_use_payload, settings)
+        return payload
+
+    @app.post("/api/computer-use/update")
+    async def computer_use_update() -> dict[str, Any]:
+        """更新 cua 二进制到最新稳定版。
+
+        涉及网络下载，在事件循环中执行；失败返回 400 与原因。
+        """
+        from illusion.computer.binary import CuaNotFoundError, update_cua_binary
+
+        try:
+            result = await update_cua_binary()
+        except (CuaNotFoundError, OSError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        if result.get("error"):
+            raise HTTPException(status_code=400, detail=result["error"])
+        return {
+            "success": result.get("updated", False),
+            "local_version": result.get("local_version"),
+            "latest_version": result.get("latest_version"),
+        }

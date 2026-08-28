@@ -176,6 +176,9 @@ def create_default_command_registry() -> CommandRegistry:
     # --- 认证 ---
     from illusion.commands.auth import login_handler, logout_handler
 
+    # --- Computer Use ---
+    from illusion.commands.computer import computer_handler
+
     # --- Goal ---
     from illusion.commands.goal import goal_handler
 
@@ -264,6 +267,7 @@ def create_default_command_registry() -> CommandRegistry:
     registry.register(SlashCommand("mcp", "Show MCP status", mcp_handler))
     registry.register(SlashCommand("plugin", "Manage plugins", plugin_handler))
     registry.register(SlashCommand("reload-plugins", "Reload plugin discovery for this workspace", reload_plugins_handler))
+    registry.register(SlashCommand("computer", "Manage Computer Use (toggle / version / update)", computer_handler, usage="/computer [show|on|off|toggle|version|update]"))
     registry.register(SlashCommand("permissions", "Show or update permission mode", permissions_handler, usage="/permissions [show|set MODE]"))
     registry.register(SlashCommand("thinking", "Show or update thinking mode", thinking_handler))
     registry.register(SlashCommand("effort", "Show or update reasoning effort", effort_handler, usage="/effort [show|low|medium|high|xhigh|max]"))

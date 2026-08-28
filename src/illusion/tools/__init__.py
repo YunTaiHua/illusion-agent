@@ -38,7 +38,7 @@ from illusion.tools.list_mcp_resources_tool import ListMcpResourcesTool
 from illusion.tools.list_sessions_tool import ListSessionsTool
 from illusion.tools.lsp_tool import LspTool
 from illusion.tools.mcp_auth_tool import McpAuthTool
-from illusion.tools.mcp_tool import McpToolAdapter
+from illusion.tools.mcp_tool import McpToolAdapter, is_mcp_tool_exposed
 from illusion.tools.powershell_tool import PowerShellTool
 from illusion.tools.read_mcp_resource_tool import ReadMcpResourceTool
 from illusion.tools.send_message_tool import SendMessageTool
@@ -109,6 +109,10 @@ def create_default_tool_registry(
         registry.register(ListMcpResourcesTool(mcp_manager))
         registry.register(ReadMcpResourceTool(mcp_manager))
         for tool_info in mcp_manager.list_tools():
+            # computer 服务器按白名单过滤（cua-driver 自带 50+ 工具，
+            # 仅暴露核心集避免撑爆 LLM 上下文）；其他服务器全部暴露
+            if not is_mcp_tool_exposed(tool_info):
+                continue
             registry.register(McpToolAdapter(mcp_manager, tool_info))
     # 注册渠道内置工具（飞书文档/云盘等，渠道启用时由调用方传入）
     if channel_tools:

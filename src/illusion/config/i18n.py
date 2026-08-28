@@ -632,6 +632,7 @@ COMMAND_DESCRIPTIONS_ZH: dict[str, str] = {
     "mcp": "显示 MCP 状态",
     "plugin": "管理插件",
     "reload-plugins": "重新加载当前工作区插件发现结果",
+    "computer": "管理 Computer Use（开关 / 版本检查 / 更新）",
     "permissions": "显示或更新权限模式（含 LLM 自动审核）",
     "thinking": "显示或更新思考模式",
     "effort": "显示或更新推理强度",

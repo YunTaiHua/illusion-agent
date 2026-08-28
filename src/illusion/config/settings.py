@@ -323,6 +323,18 @@ class NotificationSettings(BaseModel):
     sound: bool = True
 
 
+class ComputerUseSettings(BaseModel):
+    """Computer Use 配置
+
+    控制是否注入 computer use 相关 MCP 工具与 skill（默认关闭）。
+
+    Attributes:
+        enabled: 是否启用 computer use（关闭时不注入任何相关工具/skill）
+    """
+
+    enabled: bool = False
+
+
 class Settings(BaseModel):
     """IllusionAgent 主设置模型（env_N 分组格式）"""
 
@@ -344,6 +356,7 @@ class Settings(BaseModel):
     goal: GoalSettings = Field(default_factory=GoalSettings)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     notifications: NotificationSettings = Field(default_factory=NotificationSettings)
+    computer_use: ComputerUseSettings = Field(default_factory=ComputerUseSettings)
     enabled_plugins: dict[str, bool] = Field(default_factory=dict)
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)
     ui_language: str = ""  # 空字符串表示未设置，由 _ensure_language 引导选择
@@ -683,6 +696,15 @@ def _default_notification_config() -> dict[str, Any]:
     return NotificationSettings().model_dump()
 
 
+def _default_computer_use_config() -> dict[str, Any]:
+    """返回默认 computer use 配置。
+
+    与 sandbox/notifications 同一策略：缺失时一次性落盘，让字段在
+    settings.json 中可见可改；用户手动改过该键后不再触碰。
+    """
+    return ComputerUseSettings().model_dump()
+
+
 def _default_sandbox_config() -> dict[str, Any]:
     """返回默认沙箱配置。
 
@@ -751,6 +773,15 @@ def load_settings(config_path: Path | None = None) -> Settings:
         # 用户手动加过该键后不再触碰。
         if "notifications" not in raw:
             raw["notifications"] = _default_notification_config()
+            try:
+                save_settings(Settings.model_validate(raw), config_path)
+            except (OSError, ValueError):
+                pass
+
+        # 将默认 computer use 配置（开关）显式写入 settings.json。
+        # 同一策略：缺失时一次性落盘，用户手动改过后不再触碰。
+        if "computer_use" not in raw:
+            raw["computer_use"] = _default_computer_use_config()
             try:
                 save_settings(Settings.model_validate(raw), config_path)
             except (OSError, ValueError):

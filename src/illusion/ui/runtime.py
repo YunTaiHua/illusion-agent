@@ -606,6 +606,18 @@ async def build_runtime(
                 )
     mcp_manager = McpClientManager(server_configs)
     if not bare or server_configs:
+        # computer use 开启时，确保 cua 二进制已就绪（不存在则下载），
+        # 否则其 MCP 服务器（command 指向 bin 目录）将无法启动。
+        if getattr(settings, "computer_use", None) and settings.computer_use.enabled:
+            try:
+                from illusion.computer.binary import ensure_cua_binary
+
+                await ensure_cua_binary()
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "computer use 二进制准备失败，相关 MCP 工具将不可用",
+                    exc_info=True,
+                )
         await mcp_manager.connect_all()
     # 创建工具注册器（goal 工具随 settings.goal.enabled 注册）
     tool_registry = create_default_tool_registry(

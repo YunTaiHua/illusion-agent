@@ -256,16 +256,24 @@ class McpClientManager:
         session = self._require_session(server_name)
         result: CallToolResult = await session.call_tool(tool_name, arguments)
         parts: list[str] = []
-        # 处理返回的内容，支持文本和其他类型
+        # 处理返回的内容，支持文本、图片和其他类型。
+        # 图片（base64）直接拼进结果会撑爆 LLM 上下文，改为落盘后返回本地路径。
         for item in result.content:
-            if getattr(item, "type", None) == "text":
+            item_type = getattr(item, "type", None)
+            if item_type == "text":
                 parts.append(getattr(item, "text", ""))
+            elif item_type == "image":
+                # 图片落盘（磁盘 I/O 放线程池，避免阻塞事件循环）
+                parts.append(await asyncio.to_thread(_save_mcp_image, item, server_name))
             else:
                 parts.append(item.model_dump_json())
-        # 如果有结构化内容但没有文本 parts，添加结构化内容
-        # MCP v2: structured_content → structured_content
-        if result.structured_content and not parts:
-            parts.append(str(result.structured_content))
+        # 把 structured_content 的关键字段（如 cua-driver 快照的 snapshot_id）
+        # 提供给 LLM：没有它，element_index 无法寻址（bare index 会失败）。
+        # 不追加完整 structured_content——可能含 base64 截图等超大字段，
+        # 直接拼进结果会撑爆上下文。
+        structured_summary = _summarize_structured_content(result.structured_content)
+        if structured_summary:
+            parts.append(structured_summary)
         # 如果没有输出，返回默认消息
         if not parts:
             parts.append("(no output)")
@@ -536,3 +544,92 @@ class McpClientManager:
         raise ValueError(
             f"MCP server '{server_name}' is not connected (state={status.state}{detail})"
         )
+
+
+# MIME 类型 -> 文件扩展名
+_MIME_TO_EXT = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "image/bmp": ".bmp",
+}
+
+
+def _mime_to_ext(mime_type: str) -> str:
+    """把 MIME 类型映射为文件扩展名，未知类型默认 .png。"""
+    key = mime_type.strip().lower().split(";")[0].strip()
+    return _MIME_TO_EXT.get(key, ".png")
+
+
+def _summarize_structured_content(sc: Any) -> str | None:
+    """从 MCP structured_content 提取紧凑关键信息。
+
+    仅提取对 LLM 有用的短字段（如 cua-driver 快照的 ``snapshot_id``），
+    排除超大字段（base64 截图、完整 elements 数组等）以免撑爆上下文。
+
+    Args:
+        sc: MCP structured_content（dict 或 None）
+
+    Returns:
+        str | None: 提取到的关键信息；无可提取内容时返回 None
+    """
+    if not isinstance(sc, dict):
+        return None
+    summary: list[str] = []
+    snapshot_id = sc.get("snapshot_id")
+    if isinstance(snapshot_id, str) and snapshot_id:
+        summary.append(f"snapshot_id={snapshot_id}")
+    return "\n".join(summary) if summary else None
+
+
+def _save_mcp_image(item: Any, server_name: str) -> str:
+    """把 MCP 图片内容（base64）保存到缓存目录，返回本地路径描述。
+
+    图片直接拼进工具结果会撑爆 LLM 上下文；此处解码落盘到
+    ``~/.illusion/cache/<服务器>/``（插件服务器键形如 "插件名:服务器名"，
+    取插件名作子目录，如 ``computer:cua`` -> ``~/.illusion/cache/computer``），
+    并在结果中返回路径供 LLM 参考。
+
+    该行为对所有 MCP 服务器生效（属于有意的通用优化：任何服务器的图片
+    结果都会撑爆上下文），各服务器按各自子目录隔离。
+
+    Args:
+        item: MCP 图片内容对象（type="image"，含 base64 data 与 mime_type）
+        server_name: MCP 服务器键
+
+    Returns:
+        str: 落盘结果描述；保存失败时返回降级描述
+    """
+    import base64
+    import re
+    import uuid
+
+    from illusion.config.paths import get_config_dir
+    from illusion.utils.log_cleanup import cleanup_old_files
+
+    data = getattr(item, "data", "") or ""
+    mime_type = getattr(item, "mime_type", "") or "image/png"
+    ext = _mime_to_ext(mime_type)
+    # 插件服务器键形如 "插件名:服务器名"，用插件名作子目录
+    server_dir = re.sub(r"[^A-Za-z0-9_-]", "_", server_name.split(":", 1)[0]) or "mcp"
+    cache_dir = get_config_dir() / "cache" / server_dir
+    try:
+        if not data:
+            return "[Image content: empty data (unable to save)]"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        raw = base64.b64decode(data)
+        path = cache_dir / f"{server_dir}_{uuid.uuid4().hex[:12]}{ext}"
+        path.write_bytes(raw)
+        # 截图缓存只增不删会持续占用磁盘：按 7 天 TTL + 单文件体积上限清理
+        # 旧图（与日志清理同一策略；每次落盘扫描代价极低）
+        cleanup_old_files(
+            cache_dir,
+            "*",
+            max_age_days=7,
+            max_size_bytes=50 * 1024 * 1024,
+        )
+        return f"[Image saved to {path}]"
+    except (TypeError, ValueError, OSError) as exc:
+        logger.warning("failed to save MCP image from %s: %s", server_name, exc)
+        return f"[Image content: {len(data)} chars base64 (unable to save)]"

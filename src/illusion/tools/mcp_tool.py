@@ -41,16 +41,56 @@ class McpToolAdapter(BaseTool[Any]):
 
     async def execute(self, arguments: BaseModel, context: ToolExecutionContext) -> ToolResult:
         del context
+        # computer use 工具：结果末尾追加 skill 提示，告知 LLM 有 skill 指导。
+        is_computer = _is_computer_tool(self._tool_info.server_name)
         # 调用 MCP 工具
         try:
             output = await self._manager.call_tool(
                 self._tool_info.server_name,
                 self._tool_info.name,
-                arguments.model_dump(mode="json"),
+                # exclude_unset：只发送 LLM 明确提供的参数，避免把未提供的
+                # 可选字段（如 cua-driver 的 target）以 null 发出导致
+                # 服务器校验冲突（如 "target cannot be combined with legacy ..."）
+                arguments.model_dump(mode="json", exclude_unset=True),
             )
         except MCP_TOOL_EXCEPTIONS as exc:
             return ToolResult(output=str(exc), is_error=True)
+        if is_computer:
+            hint = computer_use_hint(self._tool_info.server_name)
+            if hint and output:
+                output = f"{output}\n\n{hint}"
         return ToolResult(output=output)
+
+
+def _is_computer_tool(server_name: str) -> bool:
+    """判断工具是否来自 computer use 服务器。"""
+    from illusion.computer.hint import is_computer_use_server
+
+    return is_computer_use_server(server_name)
+
+
+def computer_use_hint(server_name: str) -> str:
+    """返回 computer use 工具结果末尾的 skill 提示（非 computer 服务器返回空串）。"""
+    from illusion.computer.hint import computer_use_hint as _hint
+
+    return _hint(server_name)
+
+
+def is_mcp_tool_exposed(tool_info: McpToolInfo) -> bool:
+    """判断 MCP 工具是否应注册进工具注册表。
+
+    computer 服务器按白名单过滤（cua-driver 自带 50+ 工具，仅暴露核心集，
+    避免撑爆 LLM 上下文）；其他服务器全部暴露。
+
+    Args:
+        tool_info: MCP 工具信息
+
+    Returns:
+        bool: 是否暴露
+    """
+    from illusion.computer.hint import is_computer_tool_exposed
+
+    return is_computer_tool_exposed(tool_info.server_name, tool_info.name)
 
 
 def _input_model_from_schema(tool_name: str, schema: dict[str, object]) -> type[BaseModel]:

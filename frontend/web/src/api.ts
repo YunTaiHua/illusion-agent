@@ -84,6 +84,22 @@ export interface SettingsResponse {
   permission: PermissionRiskSettings;
   /** 权限 LLM 自动审核配置（auto 模式下高危操作与沙箱拦截由 LLM 审核放行） */
   permission_review: PermissionReviewSettings;
+  /** Computer Use 开关（get_settings 仅返回开关；完整版本/更新状态走 /api/computer-use/status） */
+  computer_use: { enabled: boolean };
+}
+
+/** Computer Use 配置（GET /api/settings 与 /api/computer-use/status 返回） */
+export interface ComputerUseStatus {
+  /** 是否启用 computer use 相关工具与 skill */
+  enabled: boolean;
+  /** cua 二进制路径（未安装时为 null） */
+  binary_path: string | null;
+  /** 本地 cua 版本（未安装时为 null） */
+  local_version: string | null;
+  /** 最新稳定版（查询失败时为 null） */
+  latest_version: string | null;
+  /** 是否存在可更新版本 */
+  update_available: boolean;
 }
 
 /** 权限 LLM 自动审核配置 */
@@ -545,6 +561,24 @@ export const settingsApi = {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
+};
+
+/** Computer Use 相关 API（开关 + cua 二进制版本/更新） */
+export const computerUseApi = {
+  /** 获取状态（开关 + 版本/更新信息） */
+  getStatus: () => request<ComputerUseStatus>('/api/computer-use/status'),
+  /** 修改开关 */
+  updateEnabled: (enabled: boolean) =>
+    request<{ success: boolean; computer_use: ComputerUseStatus }>('/api/settings/computer-use', {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled }),
+    }),
+  /** 更新 cua 二进制到最新稳定版 */
+  updateBinary: () =>
+    request<{ success: boolean; local_version: string | null; latest_version: string | null }>(
+      '/api/computer-use/update',
+      { method: 'POST' },
+    ),
 };
 
 /** channels 相关 API（channels.json 读写 + 运行时控制 + 微信扫码 + 测试连接） */

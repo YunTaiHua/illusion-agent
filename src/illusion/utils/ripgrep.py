@@ -70,12 +70,15 @@ def get_cache_dir() -> str:
     """
     获取 rg 缓存目录路径。
 
+    rg 与 cua 统一存放于 ``~/.illusion/bin/`` 目录（替代旧的 ripgrep 专属目录），
+    便于集中管理二进制文件。
+
     Returns:
-        缓存目录路径：~/.illusion/ripgrep/
+        缓存目录路径：~/.illusion/bin/
     """
     from illusion.config.paths import get_config_dir
 
-    return str(get_config_dir() / "ripgrep")
+    return str(get_config_dir() / "bin")
 
 
 def find_rg_path() -> str:
@@ -84,7 +87,7 @@ def find_rg_path() -> str:
 
     优先级：
     1. 环境变量 ILLUSION_RIPGREP_PATH
-    2. 本地缓存 ~/.illusion/ripgrep/rg
+    2. 本地缓存 ~/.illusion/bin/rg（与 cua 共用 bin 目录）
     3. 系统 PATH
 
     Returns:
@@ -105,6 +108,14 @@ def find_rg_path() -> str:
     cache_path = os.path.join(cache_dir, binary_name)
     if os.path.exists(cache_path):
         return cache_path
+
+    # 2.1 兼容旧缓存目录（~/.illusion/ripgrep/）：二进制统一迁移到 bin 后，
+    #     已安装用户无需重新下载即可继续使用
+    from illusion.config.paths import get_config_dir
+    legacy_cache_dir = os.path.join(str(get_config_dir()), "ripgrep")
+    legacy_path = os.path.join(legacy_cache_dir, binary_name)
+    if os.path.exists(legacy_path):
+        return legacy_path
 
     # 3. 检查系统 PATH
     system_path = shutil.which("rg")
