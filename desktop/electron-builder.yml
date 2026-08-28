@@ -13,15 +13,13 @@ appId: com.illusionagent.desktop
 productName: IllusionAgent
 # executableName 显式指定，避免从 package.json name(@illusion/desktop) 派生出含 @ 的可执行名（AppImage 不接受）
 executableName: IllusionAgent
-# 压缩策略：store（不压缩）。安装包内主要是内置 Python/Node 运行时，
-# 其中的 .pyd/.dll/.zip 已自身压缩，LZMA 收益极低却拖慢 200MB 级安装包
-# 的解压（安装缓慢）。store 直接写盘，安装明显提速，体积仅增约 5%。
-compression: store
 # NSIS 安装器：标准安装流程，安装/卸载时由安装器维护快捷方式
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
-  runAfterFinish: true
+  runAfterFinish: false
+  # 不要在安装完成后自动启动应用：首次启动需初始化内置运行时，
+  # 无窗口反馈会让用户误以为安装“卡死”；改由用户手动启动
   # 开始菜单/桌面快捷方式名称取 productName（IllusionAgent），toast 显示名一致
   shortcutName: IllusionAgent
   createDesktopShortcut: true
