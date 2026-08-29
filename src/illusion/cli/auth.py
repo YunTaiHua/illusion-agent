@@ -28,6 +28,7 @@ _FORMAT_OPTIONS: list[tuple[str, dict[str, str]]] = [
     ("custom", _I18N["custom_format"]),
     ("anthropic", _I18N["anthropic_label"]),
     ("openai", _I18N["openai_label"]),
+    ("response", _I18N["response_label"]),
     ("copilot", _I18N["copilot_label"]),
     ("codex", _I18N["codex_label"]),
 ]
@@ -35,11 +36,13 @@ _FORMAT_OPTIONS: list[tuple[str, dict[str, str]]] = [
 _API_FORMAT_OPTIONS: list[tuple[str, str]] = [
     ("openai", "OpenAI"),
     ("anthropic", "Anthropic"),
+    ("response", "Responses"),
 ]
 
 _DEFAULT_ENDPOINTS: dict[str, str] = {
     "anthropic": "https://api.anthropic.com",
     "openai": "https://api.openai.com/v1",
+    "response": "https://api.openai.com/v1",
     "copilot": "https://api.githubcopilot.com",
     "codex": "https://chatgpt.com/backend-api",
 }
@@ -47,6 +50,7 @@ _DEFAULT_ENDPOINTS: dict[str, str] = {
 _DEFAULT_MODELS: dict[str, str] = {
     "anthropic": "claude-sonnet-4-6",
     "openai": "gpt-5.4",
+    "response": "gpt-5.4",
     "copilot": "gpt-5.5",
     "codex": "codex-mini",
 }
@@ -68,7 +72,7 @@ def _prompt_models_and_create_env(
 
     Args:
         manager: AuthManager 实例
-        api_format: API 格式（anthropic/openai/copilot/codex）
+        api_format: API 格式（anthropic/openai/response/copilot/codex）
         format_choice: 提供商选择键（用于查找默认 model）
         endpoint: API 端点 URL
         auth_field: 凭据字段名（api_key/auth_token）
@@ -182,6 +186,8 @@ def auth_login() -> None:
         api_format = "anthropic"
     elif format_choice == "openai":
         api_format = "openai"
+    elif format_choice == "response":
+        api_format = "response"
     else:
         # 自定义提供商：让用户选择 API 格式
         print(_t("select_api_format"))

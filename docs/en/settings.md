@@ -213,7 +213,7 @@ Fixed working directory. If set, illusion-agent will automatically switch to thi
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `api_format` | string | Yes | API format: `anthropic` / `openai` / `copilot` / `codex` |
+| `api_format` | string | Yes | API format: `anthropic` / `openai` / `response` / `copilot` / `codex` |
 | `base_url` | string\|null | No | Custom API endpoint, null uses default |
 | `api_key` | string | No | API key (standard `x-api-key` auth) |
 | `auth_token` | string | No | Bearer Token auth (for providers like LongCat using `Authorization: Bearer`) |

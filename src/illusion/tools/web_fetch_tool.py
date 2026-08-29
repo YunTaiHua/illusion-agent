@@ -22,7 +22,7 @@ from contextvars import ContextVar
 from urllib.parse import urlparse
 
 import httpx
-from openai import AsyncOpenAI, OpenAIError
+from openai import OpenAIError
 from pydantic import BaseModel, Field
 
 from illusion.config.settings import load_settings
@@ -207,39 +207,38 @@ Usage notes:
 
 
 async def _process_with_model(content: str, prompt: str) -> str:
-    """使用 AI 模型处理内容。"""
+    """使用 AI 模型处理内容。
+
+    走统一的 API 客户端工厂（build_api_client_for_env），兼容全部
+    api_format（anthropic/openai/response/copilot/codex）与凭据形态
+    （api_key/auth_token/OAuth）。原实现手搓 AsyncOpenAI 且只解析
+    api_key：response 格式 env 会错误落到 chat/completions，anthropic
+    的 base_url 拼接也不符官方约定。
+    """
+    from illusion.api.client import ApiMessageCompleteEvent, ApiMessageRequest
+    from illusion.api.factory import build_api_client_for_env
+    from illusion.engine.messages import ConversationMessage
+
     settings = load_settings()
-    env = settings._active_env
-    api_key = env.api_key or None
-    base_url = env.base_url or None
-
-    if not api_key:
-        raise RuntimeError("No API key configured")
-
-    if env.api_format == "anthropic":
-        # Anthropic 需要固定 base_url
-        base_url = base_url or "https://api.anthropic.com"
-        client = AsyncOpenAI(api_key=api_key, base_url=f"{base_url}/v1")
-    else:
-        client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-
-    model_name = settings._active_model_name
-
-    system_prompt = (
-        "You are a web content summarizer. Analyze the provided web page content and respond "
-        "to the user's prompt. Be concise and accurate. Only use information from the provided content."
-    )
-
-    resp = await client.chat.completions.create(
-        model=model_name,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Web page content:\n\n{content}\n\nUser prompt: {prompt}"},
-        ],
+    client = build_api_client_for_env(settings, settings._active_env_key)
+    request = ApiMessageRequest(
+        model=settings._active_model_name,
+        system_prompt=(
+            "You are a web content summarizer. Analyze the provided web page content and respond "
+            "to the user's prompt. Be concise and accurate. Only use information from the provided content."
+        ),
+        messages=[ConversationMessage.from_user_text(
+            f"Web page content:\n\n{content}\n\nUser prompt: {prompt}"
+        )],
         max_tokens=4096,
-        temperature=0.3,
     )
-    return resp.choices[0].message.content or ""
+    summary = ""
+    async for event in client.stream_message(request):  # type: ignore[attr-defined]
+        if isinstance(event, ApiMessageCompleteEvent):
+            summary = event.message.text
+    if not summary.strip():
+        raise RuntimeError("Model returned an empty summary")
+    return summary
 
 
 def _html_to_markdown(html_text: str) -> str:

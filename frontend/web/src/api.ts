@@ -13,7 +13,7 @@
 export interface EnvInfo {
   /** 环境键名，如 env_1 */
   env_key: string;
-  /** API 格式：anthropic/openai/copilot/codex */
+  /** API 格式：anthropic/openai/response/copilot/codex */
   api_format: string;
   /** 接入地址 */
   base_url: string;

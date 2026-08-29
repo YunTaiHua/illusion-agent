@@ -697,6 +697,9 @@ class QueryContext:
     # >= compacted_message_count，则 last_usage 是压缩后的真实值，应保留；
     # 否则是压缩前的旧值（无后续调用），应回退估算。
     compacted_message_count: int = 0
+    # 提示缓存路由键（通常为会话 ID）：仅 Kimi（Moonshot）消费该字段，
+    # 稳定同一会话的前缀缓存命中
+    prompt_cache_key: str | None = None
 
     def current_context_tokens(self, messages: list[ConversationMessage]) -> int:
         """当前上下文估算 = 最后一次 API 调用的真实 context_size + 新增消息估算。
@@ -828,6 +831,7 @@ async def run_query(
                     max_tokens=context.max_tokens,
                     tools=context.tool_registry.to_api_schema(),
                     effort=context.effort,
+                    prompt_cache_key=context.prompt_cache_key,
                 )
             ):
                 if isinstance(event, ApiTextDeltaEvent):

@@ -23,6 +23,7 @@ MESSAGES: dict[str, dict[str, str]] = {
     "custom_format": {"zh-CN": "自定义格式", "en-US": "Custom format"},
     "anthropic_label": {"zh-CN": "Anthropic (Claude API)", "en-US": "Anthropic (Claude API)"},
     "openai_label": {"zh-CN": "OpenAI / 兼容接口", "en-US": "OpenAI / compatible"},
+    "response_label": {"zh-CN": "OpenAI Responses", "en-US": "OpenAI Responses"},
     "copilot_label": {"zh-CN": "GitHub Copilot", "en-US": "GitHub Copilot"},
     "copilot_open_url": {"zh-CN": "请在浏览器中打开以下 URL 完成授权:", "en-US": "Open the following URL in your browser to authorize:"},
     "copilot_enter_code": {"zh-CN": "并输入代码: {code}", "en-US": "and enter code: {code}"},

@@ -280,13 +280,19 @@ def _stop_reason_from_response(response: dict[str, Any], *, has_tool_calls: bool
     return None
 
 
-def _format_error_message(status_code: int, payload: str) -> str:
+def _format_error_message(
+    status_code: int,
+    payload: str,
+    *,
+    provider_label: str = "Codex",
+) -> str:
     """格式化错误消息
-    
+
     Args:
         status_code: HTTP 状态码
         payload: 响应负载
-    
+        provider_label: 兜底文案中的提供商名（payload 非 JSON 时使用）
+
     Returns:
         str: 格式化的错误消息
     """
@@ -306,7 +312,7 @@ def _format_error_message(status_code: int, payload: str) -> str:
     text = payload.strip()
     if text:
         return text
-    return f"Codex request failed with status {status_code}"
+    return f"{provider_label} request failed with status {status_code}"
 
 
 def _translate_status_error(status_code: int, message: str) -> IllusionAgentApiError:

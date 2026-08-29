@@ -214,7 +214,7 @@
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `api_format` | string | 是 | API 格式：`anthropic` / `openai` / `copilot` / `codex` |
+| `api_format` | string | 是 | API 格式：`anthropic` / `openai` / `response` / `copilot` / `codex` |
 | `base_url` | string\|null | 否 | 自定义 API 端点，null 使用默认端点 |
 | `api_key` | string | 否 | API 密钥（标准 x-api-key 认证） |
 | `auth_token` | string | 否 | Bearer Token 认证（用于 LongCat 等使用 `Authorization: Bearer` 的提供商） |

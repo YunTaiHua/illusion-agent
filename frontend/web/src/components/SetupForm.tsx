@@ -39,6 +39,7 @@ import {
 const DEFAULT_ENDPOINTS: Record<string, string> = {
   anthropic: 'https://api.anthropic.com',
   openai: 'https://api.openai.com/v1',
+  response: 'https://api.openai.com/v1',
   copilot: 'https://api.githubcopilot.com',
   codex: 'https://chatgpt.com/backend-api',
 };
@@ -47,12 +48,13 @@ const DEFAULT_ENDPOINTS: Record<string, string> = {
 const DEFAULT_MODELS: Record<string, string> = {
   anthropic: 'claude-sonnet-4-6',
   openai: 'gpt-5.4',
+  response: 'gpt-5.4',
   copilot: 'gpt-5.5',
   codex: 'codex-mini',
 };
 
 /** api_format 可选值 */
-const API_FORMATS = ['anthropic', 'openai', 'copilot', 'codex'] as const;
+const API_FORMATS = ['anthropic', 'openai', 'response', 'copilot', 'codex'] as const;
 /** copilot/codex 走 OAuth，其余走密钥输入 */
 const OAUTH_FORMATS = new Set(['copilot', 'codex']);
 /** OAuth 轮询间隔（毫秒） */
@@ -307,8 +309,8 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
       base_url: DEFAULT_ENDPOINTS[fmt] ?? d.base_url,
       models: d.models.length > 0 ? d.models : [DEFAULT_MODELS[fmt] ?? ''],
       oauth_authorized: false,
-      // openai 格式不支持 auth_token（OpenAI SDK 无该参数），强制切回 api_key
-      auth_type: fmt === 'openai' ? 'api_key' : d.auth_type,
+      // openai/response 格式使用 Bearer API Key（无 auth_token 分支），强制切回 api_key
+      auth_type: fmt === 'openai' || fmt === 'response' ? 'api_key' : d.auth_type,
     }));
   }, []);
 
@@ -1496,6 +1498,7 @@ function formatOptionsLocal(lang: UiLanguage): DropdownOption[] {
   return API_FORMATS.map((f) => {
     const keyMap: Record<string, string> = {
       anthropic: 'setupFormatAnthropic', openai: 'setupFormatOpenai',
+      response: 'setupFormatResponse',
       copilot: 'setupFormatCopilot', codex: 'setupFormatCodex',
     };
     return { value: f, label: t(lang, keyMap[f] ?? f) };

@@ -94,12 +94,17 @@ class ThinkingBlock(BaseModel):
     Attributes:
         type: 块类型（固定为 "thinking"）
         thinking: 思考文本
-        signature: 加密签名（Anthropic API 需要回传以验证思考内容未被篡改）
+        signature: 加密签名（Anthropic API 需要回传以验证思考内容未被篡改）；
+            redacted 块时存放上游的加密数据（data 字段）
+        redacted: 是否为 redacted_thinking 块（上游拒绝明文返回思考内容时，
+            以加密数据形式下发）。回放时需原样序列化回 redacted_thinking，
+            否则 Anthropic 会因思考链缺失拒绝请求
     """
 
     type: Literal["thinking"] = "thinking"
     thinking: str
     signature: str = ""
+    redacted: bool = False
 
 
 class MediaBlock(BaseModel):
@@ -299,6 +304,9 @@ def serialize_content_block(block: ContentBlock, *, provider_type: str = "anthro
         }
 
     if isinstance(block, ThinkingBlock):
+        if block.redacted:
+            # redacted_thinking 回放：无明文，仅上游加密数据（存于 signature）
+            return {"type": "redacted_thinking", "data": block.signature}
         result: dict[str, Any] = {"type": "thinking", "thinking": block.thinking}
         if block.signature:
             result["signature"] = block.signature
@@ -374,6 +382,16 @@ def assistant_message_from_api(raw_message: Any) -> ConversationMessage:
                 ThinkingBlock(
                     thinking=getattr(raw_block, "thinking", ""),
                     signature=getattr(raw_block, "signature", "") or "",
+                )
+            )
+        elif block_type == "redacted_thinking":
+            # redacted_thinking 无明文（data 为加密思考数据），必须原样回放，
+            # 丢弃会导致 Anthropic 因思考链缺失拒绝后续请求
+            content.append(
+                ThinkingBlock(
+                    thinking="",
+                    signature=getattr(raw_block, "data", "") or "",
+                    redacted=True,
                 )
             )
 

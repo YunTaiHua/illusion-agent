@@ -806,6 +806,8 @@ class QueryEngine:
             hook_executor=self._hook_executor,
             tool_metadata=self._tool_metadata,
             effort=self._effort,
+            # 提示缓存路由键（仅 Kimi 消费）：会话 ID 稳定前缀缓存命中
+            prompt_cache_key=self._session_id or None,
             bg_agent_tracker=self._bg_agent_tracker,
             # idle 超时阈值：后台 agent 持续有活动（工具调用、文本生成）时
             # 主循环保持 busy；仅当 300s 无任何活动才退出 busy（agent 仍存活，

@@ -42,7 +42,7 @@ def _next_model_key(env_data: dict[str, Any]) -> str:
 class CreateEnvRequest(BaseModel):
     """新增 env 请求体。"""
 
-    api_format: str = Field(..., description="API 格式：anthropic/openai/copilot/codex")
+    api_format: str = Field(..., description="API 格式：anthropic/openai/response/copilot/codex")
     base_url: str | None = None
     api_key: str = ""
     auth_token: str = ""

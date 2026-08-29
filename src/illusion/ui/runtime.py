@@ -551,6 +551,15 @@ async def build_runtime(
                 auth_token_resolver=CodexOAuth().get_valid_token,
                 base_url=settings.base_url,
             )
+        elif settings.api_format == "response":
+            from illusion.api.responses_client import ResponsesApiClient
+
+            auth = settings.resolve_auth()
+            resolved_api_client = ResponsesApiClient(  # type: ignore[assignment]
+                api_key=auth.value if auth.auth_kind == "api_key" else None,
+                base_url=settings.base_url,
+                auth_token=auth.value if auth.auth_kind == "auth_token" else None,
+            )
         elif settings.api_format == "anthropic":
             auth = settings.resolve_auth()
             resolved_api_client = AnthropicApiClient(  # type: ignore[assignment]
@@ -999,6 +1008,15 @@ def _rebuild_api_client(bundle: RuntimeBundle, settings: Settings) -> None:
             new_client = CodexApiClient(  # type: ignore[assignment]
                 auth_token_resolver=CodexOAuth().get_valid_token,
                 base_url=settings.base_url,
+            )
+        elif _api_format == "response":
+            from illusion.api.responses_client import ResponsesApiClient
+
+            auth = settings.resolve_auth()
+            new_client = ResponsesApiClient(  # type: ignore[assignment]
+                api_key=auth.value if auth.auth_kind == "api_key" else None,
+                base_url=settings.base_url,
+                auth_token=auth.value if auth.auth_kind == "auth_token" else None,
             )
         elif _api_format == "anthropic":
             auth = settings.resolve_auth()

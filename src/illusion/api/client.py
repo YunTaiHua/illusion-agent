@@ -41,7 +41,13 @@ _sdk_sig_field = _SDKThinkingBlock.model_fields["signature"]
 _sdk_sig_field.annotation = str | None  # type: ignore[assignment]
 _SDKThinkingBlock.model_rebuild()
 
+from illusion.api.compat import (
+    THINKING_PASSBACK_PLACEHOLDER,
+    is_thinking_passback_error,
+    model_consumes_thinking_passback,
+)
 from illusion.api.effort import EffortLevel
+from illusion.api.error_log import log_api_error
 from illusion.api.errors import (
     AuthenticationFailure,
     IllusionAgentApiError,
@@ -51,6 +57,7 @@ from illusion.api.errors import (
 from illusion.api.usage import UsageSnapshot
 from illusion.engine.messages import (
     ConversationMessage,
+    ThinkingBlock,
     _messages_have_media,
     _strip_media_from_messages,
     assistant_message_from_api,
@@ -79,6 +86,8 @@ class ApiMessageRequest:
         max_tokens: 最大令牌数（默认 4096）
         tools: 工具定义列表（默认空列表）
         effort: 推理强度级别（可选，支持 low/medium/high/xhigh/max）
+        prompt_cache_key: 提示缓存路由键（可选，通常为会话 ID）。仅 Kimi
+            （Moonshot）消费该字段——稳定同一会话的前缀缓存命中
     """
 
     model: str
@@ -88,6 +97,7 @@ class ApiMessageRequest:
     tools: list[dict[str, Any]] = field(default_factory=list[Any])
     effort: EffortLevel | None = None
     extra_body: dict[str, Any] | None = None
+    prompt_cache_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -170,6 +180,39 @@ class SupportsStreamingMessages(Protocol):
 
     async def stream_message(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:  # pyright: ignore[reportReturnType]
         """为请求产生流式事件"""
+
+
+def repair_thinking_passback(messages: list[ConversationMessage]) -> list[ConversationMessage]:
+    """为缺少 thinking 块的 assistant 消息合成占位思考块。
+
+    DeepSeek v4 思考模式要求请求历史中每条 assistant 消息都携带思考内容
+    （content[].thinking），缺失时返回 400。历史里缺块的轮次无法找回原文
+    （上游当时未返回、或被网关丢弃），用占位文本补齐以满足存在性校验；
+    上游将其作为该轮 reasoning 拼入上下文，无其他副作用。
+
+    已有 thinking 块（含 redacted_thinking）的消息原样保留，因此本函数
+    幂等，可重复调用。
+
+    Args:
+        messages: 对话消息列表
+
+    Returns:
+        list[ConversationMessage]: 修复后的新消息列表（不修改入参）
+    """
+    repaired: list[ConversationMessage] = []
+    for msg in messages:
+        if msg.role == "assistant" and not any(
+            isinstance(block, ThinkingBlock) for block in msg.content
+        ):
+            new_msg = msg.model_copy(deep=True)
+            new_msg.content.insert(0, ThinkingBlock(
+                thinking=THINKING_PASSBACK_PLACEHOLDER,
+                signature="",
+            ))
+            repaired.append(new_msg)
+        else:
+            repaired.append(msg)
+    return repaired
 
 
 def _is_media_related_error(exc: Exception) -> bool:
@@ -260,6 +303,10 @@ class AnthropicApiClient:
         _api_key: API 密钥
         _base_url: 基础 URL
         _client: AsyncAnthropic 客户端实例
+        _force_passback_repair: 思考回传修复记忆（实例级）。一旦某端点在
+            请求中出现过回传校验 400（reactive 修复触发），后续所有请求
+            直接主动补齐占位 thinking 块，避免每轮重复"失败一次再修复"。
+            客户端实例与 env 一一对应且随会话存活，实例级状态即可覆盖。
     """
 
     def __init__(
@@ -272,6 +319,7 @@ class AnthropicApiClient:
         self._api_key = api_key
         self._base_url = base_url
         self._auth_token = auth_token
+        self._force_passback_repair = False
         self._client = self._create_client()
 
     def _create_client(self) -> AsyncAnthropic:
@@ -303,6 +351,9 @@ class AnthropicApiClient:
         """
         last_error: Exception | None = None
         media_stripped = False
+        # 思考回传自愈状态：先补齐占位 thinking 块重试，仍失败则降级关闭思考
+        thinking_repaired = False
+        thinking_disabled = False
 
         for attempt in range(MAX_RETRIES + 1):
             try:
@@ -310,9 +361,75 @@ class AnthropicApiClient:
                     yield event
                 return  # 成功
             except IllusionAgentApiError as exc:
+                last_error = exc
+                # 思考回传校验失败（DeepSeek 思考模式 400）：先补齐占位
+                # thinking 块重试；若补齐为空操作或上游已主动补齐（DeepSeek
+                # 家族在 _stream_once 中处理），则降级为非思考模式，避免会话
+                # 被历史缺块永久卡死（详见 repair_thinking_passback）。
+                # 注意：必须先于 media 检查——回传错误文案含 "content"，会被
+                # _is_media_related_error 误判而丢图片。
+                is_passback_error = is_thinking_passback_error(exc)
+                if is_passback_error and request.effort is not None:
+                    if (
+                        not thinking_repaired
+                        and not model_consumes_thinking_passback(request.model)
+                    ):
+                        thinking_repaired = True
+                        repaired_messages = repair_thinking_passback(request.messages)
+                        if repaired_messages != request.messages:
+                            log.warning(
+                                "Thinking passback validation failed; "
+                                "retrying with placeholder thinking blocks.",
+                            )
+                            # 记住该端点需要回传修复：后续请求直接主动补齐，
+                            # 不再每轮先失败一次再进入 reactive 修复
+                            self._force_passback_repair = True
+                            yield ApiRetryEvent(
+                                message=str(exc),
+                                attempt=attempt + 1,
+                                max_attempts=MAX_RETRIES + 1,
+                                delay_seconds=0.0,
+                            )
+                            request = ApiMessageRequest(
+                                model=request.model,
+                                messages=repaired_messages,
+                                system_prompt=request.system_prompt,
+                                tools=request.tools,
+                                max_tokens=request.max_tokens,
+                                effort=request.effort,
+                                extra_body=request.extra_body,
+                                prompt_cache_key=request.prompt_cache_key,
+                            )
+                            continue
+                    if not thinking_disabled:
+                        thinking_disabled = True
+                        log.warning(
+                            "Thinking passback validation still failing; "
+                            "retrying with thinking disabled.",
+                        )
+                        yield ApiRetryEvent(
+                            message=str(exc),
+                            attempt=attempt + 1,
+                            max_attempts=MAX_RETRIES + 1,
+                            delay_seconds=0.0,
+                        )
+                        request = ApiMessageRequest(
+                            model=request.model,
+                            messages=request.messages,
+                            system_prompt=request.system_prompt,
+                            tools=request.tools,
+                            max_tokens=request.max_tokens,
+                            effort=None,
+                            extra_body=request.extra_body,
+                            prompt_cache_key=request.prompt_cache_key,
+                        )
+                        continue
+                    # 两级自愈都已生效仍失败：直接抛出
+                    raise
                 # 如果消息包含图片且错误可能是模型不支持图片导致的，尝试降级
                 if (
-                    not media_stripped
+                    not is_passback_error
+                    and not media_stripped
                     and _messages_have_media(request.messages)
                     and _is_media_related_error(exc)
                 ):
@@ -328,6 +445,7 @@ class AnthropicApiClient:
                         max_tokens=request.max_tokens,
                         effort=request.effort,
                         extra_body=request.extra_body,
+                        prompt_cache_key=request.prompt_cache_key,
                     )
                     media_stripped = True
                     continue
@@ -352,6 +470,7 @@ class AnthropicApiClient:
                         max_tokens=request.max_tokens,
                         effort=request.effort,
                         extra_body=request.extra_body,
+                        prompt_cache_key=request.prompt_cache_key,
                     )
                     media_stripped = True
                     continue
@@ -393,9 +512,18 @@ class AnthropicApiClient:
             ApiStreamEvent: 流式事件
         """
         # 构建请求参数
+        # DeepSeek 思考模型：thinking 启用时主动补齐历史中缺失的 thinking 块，
+        # 避免上游对回传校验（content[].thinking must be passed back）返回 400。
+        # 非 DeepSeek 命名端点一旦出现过回传 400（_force_passback_repair 记忆），
+        # 同样主动补齐，避免每轮重复 reactive 修复。
+        api_messages = request.messages
+        if request.effort is not None and (
+            model_consumes_thinking_passback(request.model) or self._force_passback_repair
+        ):
+            api_messages = repair_thinking_passback(api_messages)
         params: dict[str, Any] = {
             "model": request.model,
-            "messages": [message.to_api_param(provider_type="anthropic") for message in request.messages],
+            "messages": [message.to_api_param(provider_type="anthropic") for message in api_messages],
             "max_tokens": request.max_tokens,
         }
         # 添加系统提示词
@@ -443,6 +571,8 @@ class AnthropicApiClient:
                 # 获取最终消息
                 final_message = await stream.get_final_message()
         except APIError as exc:
+            # 400 格式类错误体落盘（如思考回传校验失败），便于事后取证
+            log_api_error(exc, provider="anthropic", model=request.model)
             # 检查是否为 effort 不支持错误
             if _is_effort_unsupported_error(exc) and request.effort is not None:
                 # 直接向用户反馈错误，不进行降级

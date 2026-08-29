@@ -97,7 +97,7 @@ class TestConvertMessagesToOpenai:
                 ToolUseBlock(id="call_1", name="read_file", input={"path": "/tmp/x"}),
             ],
         )
-        result = _convert_messages_to_openai([msg], None)
+        result = _convert_messages_to_openai([msg], None, has_tools=True)
         assert result[0]["role"] == "assistant"
         assert result[0]["content"] == "Let me read that file."
         assert len(result[0]["tool_calls"]) == 1
@@ -106,6 +106,7 @@ class TestConvertMessagesToOpenai:
         assert tc["type"] == "function"
         assert tc["function"]["name"] == "read_file"
         assert json.loads(tc["function"]["arguments"]) == {"path": "/tmp/x"}
+        # 带 tools 时思维模型的工具轮保持空 reasoning_content（Kimi 类要求）
         assert result[0]["reasoning_content"] == ""
 
     def test_assistant_with_thinking_and_tool_calls(self):

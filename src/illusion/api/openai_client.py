@@ -35,15 +35,21 @@ from openai import AsyncOpenAI
 from illusion.api.client import (
     ApiMessageCompleteEvent,
     ApiMessageRequest,
+    ApiRetryEvent,
     ApiStreamEvent,
     ApiTextDeltaEvent,
     ApiToolCallStartedEvent,
 )
 from illusion.api.compat import (
+    THINKING_PASSBACK_PLACEHOLDER,
+    is_reasoning_passback_error,
     merge_reasoning_text,
+    model_consumes_thinking_passback,
+    model_requires_reasoning_field,
     parse_tool_arguments,
     split_thinking_from_text,
 )
+from illusion.api.error_log import log_api_error
 from illusion.api.errors import (
     AuthenticationFailure,
     IllusionAgentApiError,
@@ -274,6 +280,27 @@ class _StreamingThoughtTagProcessor:
         return results
 
 
+def _usage_field(usage: Any, name: str) -> int:
+    """从 usage 对象或字典中读取整数字段（Moonshot 的 usage 可能以 dict 形态
+    出现在 chunk.choices[0].model_extra 里，见 _extract_chunk_usage）。"""
+    if isinstance(usage, dict):
+        return int(usage.get(name) or 0)
+    return int(getattr(usage, name, 0) or 0)
+
+
+def _usage_details_field(usage: Any, details_name: str, key: str) -> int:
+    """读取 usage 嵌套明细（prompt_tokens_details.cached_tokens 等）。"""
+    if isinstance(usage, dict):
+        details = usage.get(details_name)
+    else:
+        details = getattr(usage, details_name, None)
+    if details is None:
+        return 0
+    if isinstance(details, dict):
+        return int(details.get(key) or 0)
+    return int(getattr(details, key, 0) or 0)
+
+
 def _extract_openai_usage(usage: Any) -> dict[str, int]:
     """从 OpenAI usage 对象提取 4 字段用量（兼容 Chat Completions 与 Responses）。
 
@@ -284,33 +311,45 @@ def _extract_openai_usage(usage: Any) -> dict[str, int]:
     cache_creation_input_tokens 恒为 0。
 
     Args:
-        usage: OpenAI SDK 的 usage 对象
+        usage: OpenAI SDK 的 usage 对象（或等价字典）
 
     Returns:
         dict[str, int]: UsageSnapshot 字段映射
     """
     # 总输入：Chat Completions 用 prompt_tokens，Responses 用 input_tokens
-    prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
+    prompt = _usage_field(usage, "prompt_tokens")
     if prompt == 0:
-        prompt = int(getattr(usage, "input_tokens", 0) or 0)
-    output = int(getattr(usage, "completion_tokens", 0) or 0)
+        prompt = _usage_field(usage, "input_tokens")
+    output = _usage_field(usage, "completion_tokens")
     if output == 0:
-        output = int(getattr(usage, "output_tokens", 0) or 0)
+        output = _usage_field(usage, "output_tokens")
     # 缓存命中：prompt_tokens_details.cached_tokens / input_tokens_details.cached_tokens
-    cached = 0
-    details = getattr(usage, "prompt_tokens_details", None)
-    if details is not None:
-        cached = int(getattr(details, "cached_tokens", 0) or 0)
+    cached = _usage_details_field(usage, "prompt_tokens_details", "cached_tokens")
     if cached == 0:
-        details = getattr(usage, "input_tokens_details", None)
-        if details is not None:
-            cached = int(getattr(details, "cached_tokens", 0) or 0)
+        cached = _usage_details_field(usage, "input_tokens_details", "cached_tokens")
     return {
         "input_tokens": max(0, prompt - cached),
         "output_tokens": output,
         "cache_read_input_tokens": cached,
         "cache_creation_input_tokens": 0,
     }
+
+
+def _extract_chunk_usage(chunk: Any) -> Any:
+    """提取流式 chunk 中的 usage。
+
+    兼容 Moonshot 的非标准位置：usage 不在 chunk.usage 而在
+    chunk.choices[0] 的 model_extra 里（官方 kimi-cli 的
+    extract_usage_from_chunk 同款兼容）。
+    """
+    if getattr(chunk, "usage", None):
+        return chunk.usage
+    choices = getattr(chunk, "choices", None)
+    if choices:
+        model_extra = getattr(choices[0], "model_extra", None)
+        if isinstance(model_extra, dict):
+            return model_extra.get("usage")
+    return None
 
 
 def _convert_tools_to_openai(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -345,6 +384,8 @@ def _convert_messages_to_openai(
     system_prompt: str | None,
     *,
     model: str = "",
+    reasoning_field_all_turns: bool = False,
+    has_tools: bool = False,
 ) -> list[dict[str, Any]]:
     """将 Anthropic 风格消息转换为 OpenAI 聊天格式
 
@@ -364,6 +405,10 @@ def _convert_messages_to_openai(
         system_prompt: 系统提示词
         model: 目标模型名称，用于决定是否回传 Gemini thought_signature
             （``extra_content``）。仅 Gemini 家族模型保留，其余剥离。
+        reasoning_field_all_turns: True 时所有 assistant 消息保证携带
+            reasoning_content（无捕获内容时空串）。Kimi 保留式思考要求
+            每个轮次都有该字段（空串 = "reasoned but empty"，官方 kimi-cli
+            语义）；openai 格式 reactive 自愈强制模式下同样置位。
 
     Returns:
         list[dict[str, Any]]: OpenAI 格式的消息列表
@@ -400,7 +445,10 @@ def _convert_messages_to_openai(
         if msg.role == "assistant":
             # 新的 assistant 消息前，补齐上一轮未完成的 tool_use
             _flush_pending()
-            openai_msg = _convert_assistant_message(msg, model=model)
+            openai_msg = _convert_assistant_message(
+                msg, model=model, reasoning_field_all_turns=reasoning_field_all_turns,
+                has_tools=has_tools,
+            )
             openai_messages.append(openai_msg)
             # 记录本轮 tool_use ID，等待下一条消息中的 tool_result
             pending_tool_use_ids = [
@@ -477,11 +525,25 @@ def _convert_messages_to_openai(
     return openai_messages
 
 
-def _convert_assistant_message(msg: ConversationMessage, *, model: str = "") -> dict[str, Any]:
+def _convert_assistant_message(
+    msg: ConversationMessage,
+    *,
+    model: str = "",
+    reasoning_field_all_turns: bool = False,
+    has_tools: bool = False,
+) -> dict[str, Any]:
     """将 assistant ConversationMessage 转换为 OpenAI 格式
 
     支持思维模型（如 Kimi k2.5）的 providers 要求每个包含 tool calls 的 assistant
     消息都有 ``reasoning_content`` 字段。这里统一从 ThinkingBlock 回放 reasoning。
+
+    Kimi（保留式思考）进一步要求**所有** assistant 轮都有该字段——空串表示
+    "思考了但为空"，同样必须存在（官方 kimi-cli 语义），缺失字段才被拒绝。
+
+    工具轮空文本的 ``content`` 线格式因供应商而异（官方实现互不相同）：
+    DeepSeek 官方示例回放 ``""``（deepseek-harness：null 会被部分网关拒绝）；
+    Kimi 官方 kimi-cli 省略整个 content 键（"always accepted"，Kimi-for-Coding
+    兼容层拒绝空文本 part）；其余保持既有行为（null）。
 
     Gemini 3 思考模型还会对每个 functionCall 附加 ``thought_signature``（通过
     ``extra_content`` 字段）。该签名必须原样回传，否则 API 返回 400。仅当目标
@@ -489,7 +551,10 @@ def _convert_assistant_message(msg: ConversationMessage, *, model: str = "") -> 
 
     Args:
         msg: ConversationMessage 对象
-        model: 目标模型名称，用于 Gemini thought_signature 门控
+        model: 目标模型名称，用于 Gemini thought_signature 门控与
+            DeepSeek/Kimi 差异化线格式
+        reasoning_field_all_turns: True 时所有 assistant 轮保证携带
+            reasoning_content（无捕获内容时空串）
 
     Returns:
         dict[str, Any]: OpenAI 格式的消息
@@ -501,21 +566,38 @@ def _convert_assistant_message(msg: ConversationMessage, *, model: str = "") -> 
     openai_msg: dict[str, Any] = {"role": "assistant"}
 
     content, tagged_reasoning = split_thinking_from_text("".join(text_parts))
-    # 确保 content 不为 None，否则 DeepSeek 等 API 会报错
-    # "Invalid assistant message: content or tool_calls must be set"
-    openai_msg["content"] = content if content else None
-    if openai_msg["content"] is None and not tool_uses:
+    if content:
+        openai_msg["content"] = content
+    elif tool_uses:
+        if model_consumes_thinking_passback(model):
+            openai_msg["content"] = ""
+        elif model_requires_reasoning_field(model):
+            # Kimi：省略 content 键（官方 kimi-cli）
+            pass
+        else:
+            openai_msg["content"] = None
+    else:
+        # 确保 content 不为 None，否则 DeepSeek 等 API 会报错
+        # "Invalid assistant message: content or tool_calls must be set"
         openai_msg["content"] = content or ""
 
-    # 为思维模型回放 reasoning_content（统一来源：ThinkingBlock）
+    # reasoning_content 回放链：捕获内容 > DeepSeek 占位 > 空串
     reasoning = merge_reasoning_text(
         *(b.thinking for b in thinking_blocks),
         tagged_reasoning,
     )
     if reasoning:
         openai_msg["reasoning_content"] = reasoning
-    elif tool_uses:
-        # 思维模型即使为空也需要此字段
+    elif model_consumes_thinking_passback(model) and has_tools:
+        # DeepSeek v4 带工具时要求回传思考内容本身，缺失被判为未回传；
+        # 缺块的轮次用占位文本补齐（空串是否被接受未证实，占位更稳）。
+        # 纯聊天请求（无 tools）无需回传（官方文档：传了也会被忽略），
+        # 不注入占位以免污染上下文
+        openai_msg["reasoning_content"] = THINKING_PASSBACK_PLACEHOLDER
+    elif (reasoning_field_all_turns or tool_uses) and has_tools:
+        # Kimi 保留式思考 / reactive 自愈强制模式：所有轮携带字段（空串
+        # 表示"思考了但为空"，官方 kimi-cli 语义）；其他思维模型的
+        # tool-call 轮维持既有空串行为
         openai_msg["reasoning_content"] = ""
 
     if tool_uses:
@@ -600,13 +682,21 @@ def _parse_assistant_response(response: Any) -> ConversationMessage:
 
 class OpenAICompatibleClient:
     """OpenAI 兼容 API 客户端
-    
+
     用于 DashScope、GitHub Models 等 OpenAI 兼容 API。
     实现与 AnthropicApiClient 相同的 SupportsStreamingMessages 协议，
     因此可以在 agent 循环中作为直接替代品使用。
-    
+
     Attributes:
         _client: AsyncOpenAI 客户端实例
+        _force_reasoning_field: reactive 自愈记忆——端点出现过 reasoning_content
+            回传校验 400 后置 True，后续请求强制所有 assistant 轮携带该字段
+            （空串），避免每轮重复"失败一次再自愈"
+        _disable_thinking: reactive 自愈终级记忆——强制补字段仍失败时置 True，
+            后续请求显式发送 thinking.type: "disabled" 并去掉 reasoning_effort。
+            **永久生效（客户端实例与 env 同生命周期），且会降低该端点的推理
+            质量**——由回传检测器（is_reasoning_passback_error）的严格匹配
+            兜底误判风险；若需恢复请重建客户端（切换 env / 重启）
     """
 
     def __init__(self, api_key: str, *, base_url: str | None = None, extra_headers: dict[str, str] | None = None) -> None:
@@ -616,6 +706,8 @@ class OpenAICompatibleClient:
         if extra_headers:
             kwargs["default_headers"] = extra_headers
         self._client = AsyncOpenAI(**kwargs)
+        self._force_reasoning_field = False
+        self._disable_thinking = False
 
     async def stream_message(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
         """流式生成文本增量和最终消息，匹配 Anthropic 客户端接口
@@ -659,8 +751,53 @@ class OpenAICompatibleClient:
                 raise
             except Exception as exc:
                 last_error = exc
-                if (
-                    not media_stripped
+                # 400 格式类错误体落盘（如思考回传校验失败），便于事后取证
+                log_api_error(exc, provider="openai", model=request.model)
+                # 思考/推理内容回传校验失败（DeepSeek/Kimi 等保留式思考模型
+                # 400）：第 1 级强制所有 assistant 轮携带 reasoning_content
+                # 重试；仍失败则第 2 级关闭思考重试（显式 thinking.type:
+                # "disabled"——DeepSeek 等服务端默认开启思考，仅停止注入可能
+                # 仍在思考模式）。两级状态都记忆在实例上，避免受影响端点每轮
+                # 重复失败。注意：必须先于 media 检查——回传错误文案含
+                # "content"，会被 _is_media_related_error 误判而丢图片。
+                is_passback_error = (
+                    getattr(exc, "status_code", None) == 400
+                    and is_reasoning_passback_error(str(exc))
+                )
+                if is_passback_error and not self._disable_thinking:
+                    if not self._force_reasoning_field:
+                        # 第 1 级：强制所有 assistant 轮携带 reasoning_content
+                        self._force_reasoning_field = True
+                        log.warning(
+                            "Reasoning passback validation failed; "
+                            "retrying with reasoning_content on all "
+                            "assistant turns.",
+                        )
+                        yield ApiRetryEvent(
+                            message=str(exc),
+                            attempt=attempt + 1,
+                            max_attempts=MAX_RETRIES + 1,
+                            delay_seconds=0.0,
+                        )
+                        continue
+                    if self._detect_thinking_config(request.model) is not None:
+                        # 第 2 级：仅当本客户端确实注入过思考配置时才有得关
+                        self._disable_thinking = True
+                        log.warning(
+                            "Reasoning passback validation still failing; "
+                            "retrying with thinking disabled.",
+                        )
+                        yield ApiRetryEvent(
+                            message=str(exc),
+                            attempt=attempt + 1,
+                            max_attempts=MAX_RETRIES + 1,
+                            delay_seconds=0.0,
+                        )
+                        continue
+                    # 无思考注入可关：走通用错误路径
+                elif (
+                    not is_passback_error
+                    and not media_stripped
                     and _messages_have_media(request.messages)
                     and self._is_media_related_error(exc)
                 ):
@@ -674,7 +811,9 @@ class OpenAICompatibleClient:
                         system_prompt=request.system_prompt,
                         tools=request.tools,
                         max_tokens=request.max_tokens,
+                        effort=request.effort,
                         extra_body=request.extra_body,
+                        prompt_cache_key=request.prompt_cache_key,
                     )
                     media_stripped = True
                     continue
@@ -701,8 +840,28 @@ class OpenAICompatibleClient:
         Yields:
             ApiStreamEvent: 流式事件
         """
+        # Kimi 保留式思考 / reactive 自愈强制模式：所有 assistant 轮携带
+        # reasoning_content（空串 = "reasoned but empty"，官方 kimi-cli 语义）。
+        # 思考被自愈关闭后回传要求解除，不再强制；Kimi 的思考注入本身是
+        # effort 门控的（见下），未开启思考时同样不强制字段。
+        # 无 tools 的纯聊天请求不注入任何合成 reasoning 字段（官方文档：
+        # reasoning_content 无需回传，传了也会被忽略）；占位/强制仅服务于
+        # 带 tools 时的回传校验
+        reasoning_field_all_turns = (
+            bool(request.tools)
+            and not self._disable_thinking
+            and (
+                self._force_reasoning_field
+                or (
+                    model_requires_reasoning_field(request.model)
+                    and request.effort is not None
+                )
+            )
+        )
         openai_messages = _convert_messages_to_openai(
             request.messages, request.system_prompt, model=request.model,
+            reasoning_field_all_turns=reasoning_field_all_turns,
+            has_tools=bool(request.tools),
         )
         openai_tools = _convert_tools_to_openai(request.tools) if request.tools else None
 
@@ -719,21 +878,51 @@ class OpenAICompatibleClient:
             "messages": openai_messages,
             "max_tokens": request.max_tokens,
             "stream": True,
+            # 官方 Kimi CLI（kosong/kimi.py）在带工具的流式请求中同样保留
+            # stream_options，历史上的全局移除是为绕开 Kimi 的错误 folklore，
+            # 代价是所有 openai 格式 env 的 usage 统计失效，已移除。
             "stream_options": {"include_usage": True},
         }
         if openai_tools:
             params["tools"] = openai_tools
-            # 某些 providers（如 Kimi）在 tool-call 后续请求中对空的 reasoning_content 报错
-            # 如果存在 tools，则移除整个 stream_options 键，避免触发模型端思维模式
-            # 该模式要求每个 assistant 消息都有 reasoning_content
-            params.pop("stream_options", None)
 
-        # 自动注入供应商思考配置
-        auto_thinking = self._detect_thinking_config(request.model)
+        # Kimi（Moonshot）：使用 max_completion_tokens 参数名（max_tokens 为
+        # 已废弃别名，官方 kimi-cli 统一归一化为新名）
+        if "kimi" in request.model.lower() and "max_tokens" in params:
+            params["max_completion_tokens"] = params.pop("max_tokens")
+
+        # 自动注入供应商思考配置。
+        # - reactive 自愈降级后：显式发送 thinking.type: "disabled"，而非仅
+        #   停止注入——DeepSeek 等服务端默认开启思考的供应商，仅停止注入
+        #   可能仍在思考模式，回传校验依旧生效（官方 kimi.py with_thinking
+        #   的 disabled 形态）。
+        # - Kimi：仅当用户显式配置了推理强度（effort）时注入（对齐官方
+        #   kimi-cli 的 opt-in 语义；非思考 Kimi 模型可能拒绝 thinking 参数，
+        #   且该类错误不属于回传校验、无法被自愈捕获）。
+        detected_thinking = self._detect_thinking_config(request.model)
+        if self._disable_thinking:
+            auto_thinking = (
+                {"thinking": {"type": "disabled"}}
+                if detected_thinking and "thinking" in detected_thinking
+                else None
+            )
+        elif (
+            detected_thinking
+            and "kimi" in request.model.lower()
+            and request.effort is None
+        ):
+            auto_thinking = None
+        else:
+            auto_thinking = detected_thinking
         user_extra_body = request.extra_body or {}
+        # Kimi 的会话级缓存路由键（官方 kimi-cli 以 session_id 传入，稳定
+        # 前缀缓存命中）。走 extra_body 合并到请求体顶层——该参数不在
+        # 旧版 openai SDK 的类型签名里，直传会在旧环境 TypeError
+        if request.prompt_cache_key and "kimi" in request.model.lower():
+            user_extra_body = {**user_extra_body, "prompt_cache_key": request.prompt_cache_key}
 
         # effort 字段处理（供应商差异适配）
-        if request.effort is not None:
+        if request.effort is not None and not self._disable_thinking:
             model_lower = request.model.lower()
             effort_val = request.effort.value
 
@@ -770,8 +959,9 @@ class OpenAICompatibleClient:
         async for chunk in stream:
             if not chunk.choices:
                 # 仅使用量块（某些 providers 在最后发送）
-                if chunk.usage:
-                    usage_data = _extract_openai_usage(chunk.usage)
+                usage = _extract_chunk_usage(chunk)
+                if usage is not None:
+                    usage_data = _extract_openai_usage(usage)
                 continue
 
             delta = chunk.choices[0].delta
@@ -837,9 +1027,11 @@ class OpenAICompatibleClient:
                         if tc_delta.function.arguments:
                             entry["arguments"] += tc_delta.function.arguments
 
-            # chunk 中的使用量（如果 provider 发送）
-            if chunk.usage:
-                usage_data = _extract_openai_usage(chunk.usage)
+            # chunk 中的使用量（如果 provider 发送；兼容 Moonshot 的
+            # choices[0] 非标准位置）
+            usage = _extract_chunk_usage(chunk)
+            if usage is not None:
+                usage_data = _extract_openai_usage(usage)
 
         # 刷出流式思考标签处理器中可能残留的内容
         for text_part, reasoning_part in thought_processor.flush():
@@ -927,6 +1119,12 @@ class OpenAICompatibleClient:
         if "deepseek" in model_lower:
             return {"thinking": {"type": "enabled"}}
 
+        # Kimi（月之暗面）— 思考开关与 DeepSeek 同构（thinking.type，官方
+        # kimi-cli 同款线格式）。K2 Thinking 系列为保留式思考，开启后要求
+        # 所有 assistant 轮回传 reasoning_content（见 model_requires_reasoning_field）
+        if "kimi" in model_lower:
+            return {"thinking": {"type": "enabled"}}
+
         # Doubao（豆包）— 默认关闭，需显式启用，结构同 DeepSeek
         if model_lower.startswith("doubao"):
             return {"thinking": {"type": "enabled"}}
@@ -948,7 +1146,8 @@ class OpenAICompatibleClient:
         if model_lower.startswith("step"):
             return {"enable_thinking": True}
 
-        # MiMo / Kimi / Mistral / xAI / MiniMax — 不需要 extra_body
+        # MiMo / Mistral / xAI / MiniMax — 不需要 extra_body
+        # （Kimi 已上移为独立分支：thinking.type 开关 + 保留式思考回传）
         return None
 
     @staticmethod

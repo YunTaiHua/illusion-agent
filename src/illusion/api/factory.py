@@ -73,6 +73,15 @@ def build_api_client_for_env(settings: Any, env_key: str) -> SupportsStreamingMe
             base_url=base_url,
             auth_token=auth.value if auth.auth_kind == "auth_token" else None,
         )
+    # "openai" 及其他 OpenAI 兼容格式之前：通用 Responses API 格式
+    if api_format == "response":
+        from illusion.api.responses_client import ResponsesApiClient
+
+        return ResponsesApiClient(  # type: ignore[return-value]
+            api_key=auth.value if auth.auth_kind == "api_key" else None,
+            base_url=base_url,
+            auth_token=auth.value if auth.auth_kind == "auth_token" else None,
+        )
     # "openai" 及其他 OpenAI 兼容格式
     return OpenAICompatibleClient(  # type: ignore[return-value]
         api_key=auth.value,

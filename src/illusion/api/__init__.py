@@ -8,6 +8,7 @@ API 模块
     - AnthropicApiClient: Anthropic API 客户端
     - OpenAICompatibleClient: OpenAI 兼容 API 客户端
     - CodexApiClient: OpenAI Codex 客户端
+    - ResponsesApiClient: 通用 OpenAI Responses API 客户端
     - IllusionAgentApiError: API 异常基类
     - UsageSnapshot: 使用量追踪
 
@@ -21,6 +22,7 @@ from illusion.api.client import AnthropicApiClient
 from illusion.api.codex_client import CodexApiClient
 from illusion.api.errors import IllusionAgentApiError
 from illusion.api.openai_client import OpenAICompatibleClient
+from illusion.api.responses_client import ResponsesApiClient
 from illusion.api.usage import UsageSnapshot
 
 __all__ = [
@@ -28,6 +30,7 @@ __all__ = [
     "CodexApiClient",
     "IllusionAgentApiError",
     "OpenAICompatibleClient",
+    "ResponsesApiClient",
     "UsageSnapshot",
     "auth_status",
 ]
