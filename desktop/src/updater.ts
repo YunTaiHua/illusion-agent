@@ -6,7 +6,7 @@
  * publish 配置生成，打包时自动写入 app-update.yml）。
  *
  * 交互策略（点击式，不打扰用户）：
- *   - 每次启动延迟检查一次新版本；用户不关程序的场景以 12 小时为周期复查兜底
+ *   - 启动即检查一次新版本；用户不关程序的场景以 12 小时为周期复查兜底
  *   - 发现新版本仅在顶栏最小化按钮附近亮出更新图标，不自动下载；
  *     用户点击图标才开始下载，进度经事件广播渲染为进度环
  *   - 下载完成后点击图标立即重启安装（quitAndInstall）；
@@ -59,7 +59,7 @@ export interface UpdaterState {
 }
 
 /** 检查节奏：启动延迟、周期复查兜底、出错后退避重试（毫秒） */
-const AUTO_CHECK_DELAY_MS = 30 * 1000;
+const AUTO_CHECK_DELAY_MS = 0;
 const AUTO_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const ERROR_RETRY_DELAY_MS = 2 * 60 * 1000;
 const ERROR_RETRY_MAX = 3;
@@ -207,7 +207,7 @@ export function initUpdater(deps_: UpdaterDeps): void {
     deps?.onBeforeQuitForUpdate();
   });
 
-  // 每次启动延迟检查（避开启动高峰），之后周期复查兜底（不阻止应用退出）
+  // 启动即检查（与 Web 端后端 update_available toast 时机同步），之后周期复查兜底（不阻止应用退出）
   const startupTimer = setTimeout(() => checkForUpdates(), AUTO_CHECK_DELAY_MS);
   startupTimer.unref();
   intervalTimer = setInterval(() => checkForUpdates(), AUTO_CHECK_INTERVAL_MS);

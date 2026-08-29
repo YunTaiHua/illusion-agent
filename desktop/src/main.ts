@@ -155,9 +155,10 @@ app.whenReady().then(async () => {
 
   // --- 自动更新 ---
   // 仅打包版生效（开发模式无 app-update.yml，updater 内部跳过）。
-  // 启动即初始化（30s 后首次检查，不等后端就绪），事件经 webContents
-  // 广播给渲染进程顶栏更新图标；before-quit-for-update 置位 isQuitting，
-  // 放行窗口关闭，否则更新安装会被"关闭最小化到托盘"拦截挂起。
+  // 启动即初始化并立即检查（与 Web 端后端 update_available toast 时机同步），
+  // 事件经 webContents 广播给渲染进程顶栏更新图标；before-quit-for-update
+  // 置位 isQuitting，放行窗口关闭，否则更新安装会被"关闭最小化到托盘"
+  // 拦截挂起。
   initUpdater({
     getMainWindow: () => mainWindow,
     onBeforeQuitForUpdate: () => {

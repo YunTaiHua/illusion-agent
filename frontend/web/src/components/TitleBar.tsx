@@ -75,7 +75,7 @@ function UpdateButton({ lang }: { lang: UiLanguage }) {
         onClick={startDownload}
         title={availableTitle}
         aria-label={availableTitle}
-        className="w-8 h-9 flex items-center justify-center text-content-secondary hover:text-content-primary hover:bg-black/10 dark:hover:bg-white/10 transition-colors cursor-pointer"
+        className="w-8 h-9 flex items-center justify-center text-primary hover:text-primary-hover hover:bg-primary-light dark:hover:bg-white/10 transition-colors cursor-pointer"
       >
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           <path d="M8 2v7.5" />
@@ -114,7 +114,7 @@ function UpdateButton({ lang }: { lang: UiLanguage }) {
     return (
       <span
         title={`${downloadingTitle} ${percent.toFixed(0)}%`}
-        className="w-8 h-9 flex items-center justify-center text-content-secondary"
+        className="w-8 h-9 flex items-center justify-center text-primary"
       >
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" strokeWidth="1.5" strokeLinecap="round">
           <circle cx="8" cy="8" r={RING_RADIUS} stroke="currentColor" strokeOpacity="0.25" />
@@ -135,7 +135,7 @@ function UpdateButton({ lang }: { lang: UiLanguage }) {
   return (
     <span
       title={downloadingTitle}
-      className="w-8 h-9 flex items-center justify-center text-content-secondary"
+      className="w-8 h-9 flex items-center justify-center text-primary"
     >
       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" className="animate-spin">
         <circle cx="8" cy="8" r={RING_RADIUS} strokeDasharray="8 6" />

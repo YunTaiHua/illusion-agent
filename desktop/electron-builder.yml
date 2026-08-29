@@ -31,6 +31,12 @@ extraResources:
 win:
   target: nsis
   icon: build/icon.ico
+  # 显式设置无空格 artifactName（空格会导致三处命名分裂）：
+  #   - electron-builder 本地产物 / GitHub 上传资产名含空格时被转成点号
+  #   - latest.yml 的 URL 是 electron-builder 生成的"安全名"（连字符）
+  #   - electron-updater 按 latest.yml 下载 → 404 → 更新失败
+  # 统一为连字符命名，保证本地产物名 = GitHub 资产名 = latest.yml URL。
+  artifactName: IllusionAgent-Setup-${version}.${ext}
 
 mac:
   target:
