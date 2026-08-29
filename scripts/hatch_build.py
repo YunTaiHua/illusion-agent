@@ -37,6 +37,21 @@ class CustomBuildHook(BuildHookInterface):
 
         self._build_frontend(root, npm, "terminal")
         self._build_frontend(root, npm, "web")
+        self._build_browser_runtime(root, npm)
+
+    def _build_browser_runtime(self, root: Path, npm: str) -> None:
+        """构建 Browser Use node_repl 运行时（browser_runtime/ → dist/）。"""
+        runtime_dir = root / "browser_runtime"
+        if not (runtime_dir / "package.json").exists():
+            print("hatch_build: skipping browser_runtime (no package.json)")
+            return
+        dist_dir = runtime_dir / "dist"
+        if (dist_dir / "mcp-server.js").is_file():
+            print("hatch_build: skipping browser_runtime (dist already exists)")
+            return
+        print("hatch_build: building browser_runtime...")
+        self._run([npm, "install", "--no-fund", "--no-audit"], runtime_dir)
+        self._run([npm, "run", "build"], runtime_dir)
 
     def _build_frontend(self, root: Path, npm: str, name: str) -> None:
         """构建单个前端。"""

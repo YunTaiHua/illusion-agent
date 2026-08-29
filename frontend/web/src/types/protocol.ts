@@ -394,6 +394,24 @@ export interface FileContentPayload {
 // ---- 前端请求 ----
 
 /**
+ * Browser Use 实时画面载荷（web_browser_view 事件携带）
+ *
+ * available=false 表示当前工作区未启用 Browser Use 或浏览器尚未启动；
+ * image 为活动标签页的 JPEG 帧（base64），tabs 为受控标签页列表。
+ */
+export interface BrowserViewPayload {
+  available: boolean;
+  reason?: string;
+  generation?: number;
+  profile?: string;
+  headless?: boolean;
+  url?: string;
+  title?: string;
+  tabs?: { id: string; url: string; title?: string; active?: boolean }[];
+  image?: string;
+}
+
+/**
  * 前端请求类型
  *
  * 前端发送到后端的所有可能请求类型。
@@ -436,7 +454,10 @@ export type FrontendRequest =
   | { type: 'agent_generate_cancel'; request_id: string }
   | { type: 'agent_wizard_submit'; fields: Record<string, unknown>; scope: 'user' | 'project' }
   // === Goal 状态栏操作（GoalBar 的 pause/resume/edit/clear）===
-  | { type: 'goal_action'; goal_action: 'pause' | 'resume' | 'edit' | 'clear'; goal_id?: string; revision?: number; objective?: string; session_id?: string };
+  | { type: 'goal_action'; goal_action: 'pause' | 'resume' | 'edit' | 'clear'; goal_id?: string; revision?: number; objective?: string; session_id?: string }
+  // === Browser Use 实时画面（右栏用量页签卡片）===
+  | { type: 'web_browser_view_toggle'; browser_view_enabled: boolean }
+  | { type: 'web_request_browser_view' };
 
 // ---- 后端事件 ----
 
@@ -603,6 +624,9 @@ export interface BackendEvent {
   goal_action?: string;
   /** goal_action_result 失败时的 {code, message}（可选） */
   goal_error?: { code: string; message: string };
+  // === web_browser_view 专属字段 ===
+  /** Browser Use 实时画面载荷（available=false 表示未启用/未启动） */
+  browser_view?: BrowserViewPayload;
   /** goal_status 携带的结构化轮次生命周期（round/wrapup/limit/disarmed） */
   goal_status?: {
     kind: string;

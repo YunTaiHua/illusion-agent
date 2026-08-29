@@ -41,9 +41,11 @@ from mcp.types import CallToolResult, ReadResourceResult
 from illusion.mcp.types import (
     McpConnectionStatus,
     McpHttpServerConfig,
+    McpImageContent,
     McpResourceInfo,
     McpSseServerConfig,
     McpStdioServerConfig,
+    McpToolCallResult,
     McpToolInfo,
 )
 
@@ -253,23 +255,55 @@ class McpClientManager:
         Returns:
             工具执行结果的字符串形式
         """
+        detail = await self.call_tool_detail(server_name, tool_name, arguments)
+        return detail.text
+
+    async def call_tool_detail(
+        self, server_name: str, tool_name: str, arguments: dict[str, Any]
+    ) -> McpToolCallResult:
+        """
+        调用指定的 MCP 工具并保留内容块细节（文本 + 图片）。
+
+        与 :meth:`call_tool` 的区别：图片内容块（如 Browser Use 截图）不会
+        被序列化成 JSON 文本丢失，而是以 :class:`McpImageContent` 列表返回，
+        供工具适配器映射为模型可见的媒体块。
+
+        Args:
+            server_name: 服务器名称
+            tool_name: 工具名称
+            arguments: 工具参数字典
+
+        Returns:
+            McpToolCallResult: 文本与图片内容块的组合结果
+        """
         session = self._require_session(server_name)
         result: CallToolResult = await session.call_tool(tool_name, arguments)
-        parts: list[str] = []
-        # 处理返回的内容，支持文本和其他类型
+        text_parts: list[str] = []
+        images: list[McpImageContent] = []
         for item in result.content:
-            if getattr(item, "type", None) == "text":
-                parts.append(getattr(item, "text", ""))
+            item_type = getattr(item, "type", None)
+            if item_type == "text":
+                text_parts.append(getattr(item, "text", ""))
+            elif item_type == "image":
+                images.append(
+                    McpImageContent(
+                        data=str(getattr(item, "data", "")),
+                        mime_type=str(getattr(item, "mimeType", None) or "image/png"),
+                    )
+                )
             else:
-                parts.append(item.model_dump_json())
+                text_parts.append(item.model_dump_json())
         # 如果有结构化内容但没有文本 parts，添加结构化内容
         # MCP v2: structured_content → structured_content
-        if result.structured_content and not parts:
-            parts.append(str(result.structured_content))
+        if result.structured_content and not text_parts:
+            text_parts.append(str(result.structured_content))
         # 如果没有输出，返回默认消息
-        if not parts:
-            parts.append("(no output)")
-        return "\n".join(parts).strip()
+        if not text_parts:
+            text_parts.append("(no output)")
+        text = "\n".join(text_parts).strip()
+        if result.is_error:
+            return McpToolCallResult(text=text, images=images, is_error=True)
+        return McpToolCallResult(text=text, images=images, is_error=False)
 
     async def read_resource(self, server_name: str, uri: str) -> str:
         """

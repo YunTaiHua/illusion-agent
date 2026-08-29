@@ -13,6 +13,7 @@
   - [记忆系统配置](#记忆系统配置)
   - [会话自动标题配置](#会话自动标题配置)
   - [通知开关（Toast 与音效）](#通知开关toast-与音效)
+  - [Browser Use（内置浏览器）](#browser-use内置浏览器)
   - [沙箱配置](#沙箱配置)
 
 ---
@@ -122,6 +123,19 @@
     "enabled": true,
     "sound": true
   },
+  "browser": {
+    "enabled": false,
+    "profile": "blank",
+    "user_data_dir": "",
+    "headless": true,
+    "channel": "auto",
+    "executable_path": "",
+    "cdp_url": "",
+    "viewport": { "width": 1280, "height": 720 },
+    "keep_alive_minutes": 30,
+    "stream_interval_ms": 800,
+    "screenshot_quality": 60
+  },
   "sandbox": {
     "enabled_platforms": [],
     "excluded_commands": [],
@@ -168,6 +182,10 @@
 | `effort` | string | "medium" | 推理强度：low/medium/high/xhigh/max |
 | `notifications.enabled` | bool | true | Toast 通知总开关（任务完成/终止、询问、权限提醒；关闭后后端不再下发 toast 事件） |
 | `notifications.sound` | bool | true | Toast 提示音效开关（仅在 `notifications.enabled` 开启时生效） |
+| `browser.enabled` | bool | false | 内置 Browser Use 运行时总开关；开启后注入 `node_repl` MCP 服务器、浏览器 skills 与文档（见 [Browser Use](browser-use.md)） |
+| `browser.profile` | string | "blank" | `"blank"` = 一次性空白档案；`"user"` = 用户真实浏览器数据（需先关闭浏览器） |
+| `browser.headless` | bool | true | 无头浏览器（静默执行）；`false` 弹出浏览器窗口 |
+| `browser.keep_alive_minutes` | int | 30 | 浏览器空闲自动回收时间；0 表示不回收 |
 | `working_directory` | string | - | 固定工作目录（可选） |
 
 ---
@@ -499,6 +517,25 @@ LongCat 使用 `Authorization: Bearer` 认证方式，需要通过 `auth_token` 
 > **联动规则**：两个开关独立保存，但**音效只在 toast 总开关开启时才处理**——`enabled=false` 时无论 `sound` 取值如何都静默。
 
 ---
+
+### Browser Use（内置浏览器）
+
+内置浏览器自动化。完整字段说明、CLI 会话参数（`--browser-use`、
+`--browser-profile`）与模型侧工作流见 [Browser Use](browser-use.md)。
+
+```json
+{
+  "browser": {
+    "enabled": true,
+    "profile": "blank",
+    "headless": true
+  }
+}
+```
+
+缺失 `browser` 键时首次加载自动写入默认值（与 `sandbox`/`notifications` 同策略）。
+`profile="blank"` 启动一次性临时用户数据目录，代理不会触碰用户真实浏览器状态；
+`profile="user"` 附加用户真实档案数据（需先退出正在运行的浏览器以释放档案锁）。
 
 ### 沙箱配置
 

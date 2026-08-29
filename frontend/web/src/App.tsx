@@ -1194,6 +1194,9 @@ export default function App() {
         onOpenFileDiff={(path) => session.openFileDiff(path)}
         skills={session.skills} plugins={session.plugins}
         rules={session.rules} mcpServers={session.mcpServers}
+        browserView={session.browserView}
+        browserViewEnabled={session.browserViewEnabled}
+        onToggleBrowserView={session.toggleBrowserView}
         width={rightPanelWidth} />
       )}
 

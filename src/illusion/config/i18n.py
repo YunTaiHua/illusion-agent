@@ -213,6 +213,9 @@ MESSAGES: dict[str, dict[str, str]] = {
     "continue_requires_print": {"zh-CN": "--continue/--resume 需要配合 -p 使用", "en-US": "--continue/--resume requires -p"},
     # --- settings ---
     "cwd_invalid": {"zh-CN": "settings.json中配置的working_directory不存在或不是目录: {path}", "en-US": "working_directory in settings.json does not exist or is not a directory: {path}"},
+    # --- browser use ---
+    "browser_use_invalid": {"zh-CN": "无效的 --browser-use 值: {value}（可选 off/auto/headless/headed）", "en-US": "Invalid --browser-use value: {value} (expected off/auto/headless/headed)"},
+    "browser_profile_invalid": {"zh-CN": "无效的 --browser-profile 值: {value}（可选 blank/user）", "en-US": "Invalid --browser-profile value: {value} (expected blank/user)"},
     "no_api_key": {"zh-CN": "未找到 API 密钥。请使用 'illusion auth login' 配置", "en-US": "No API key found. Run 'illusion auth login' to configure"},
     "no_auth": {"zh-CN": "未找到认证信息。请使用 'illusion auth login' 配置", "en-US": "No credentials found. Run 'illusion auth login' to configure"},
     # --- workspace / set command ---

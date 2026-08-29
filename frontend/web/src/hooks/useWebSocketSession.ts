@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type {
+  BrowserViewPayload,
   AgentTaskItem,
   BackendEvent,
   FileContentPayload,
@@ -373,6 +374,13 @@ export interface WebSocketSessionState {
   sendGoalAction: (action: 'pause' | 'resume' | 'edit' | 'clear', objective?: string) => void;
   /** 清除 goal 操作错误（GoalBar 关闭错误提示时调用） */
   clearGoalActionError: () => void;
+  // ---- Browser Use 实时画面（右栏用量页签卡片）----
+  /** 最近一次浏览器画面快照（available=false 表示未启用/未启动；null = 尚未收到） */
+  browserView: BrowserViewPayload | null;
+  /** 画面卡片是否已启用（启用后后端按内容变化推送帧） */
+  browserViewEnabled: boolean;
+  /** 启用/关闭浏览器画面推送 */
+  toggleBrowserView: (enabled: boolean) => void;
   /** 停止请求已发送、等待后端确认（按钮旋转动画），line_complete 后清除 */
   stopping: boolean;
   /** 发送停止请求（针对活跃会话，自动管理 stopping 状态与超时兜底） */
@@ -475,6 +483,9 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   const [awaitingNewSession, setAwaitingNewSession] = useState(false);
   const [showThinking, setShowThinking] = useState(true);
   const [swarmTeammates, setSwarmTeammates] = useState<SwarmTeammateSnapshot[]>([]);
+  // Browser Use 实时画面（右栏用量页签卡片；web_browser_view 事件驱动）
+  const [browserView, setBrowserView] = useState<BrowserViewPayload | null>(null);
+  const [browserViewEnabled, setBrowserViewEnabled] = useState(false);
   const [swarmNotifications, setSwarmNotifications] = useState<SwarmNotificationSnapshot[]>([]);
   const [bgAgentLabel, setBgAgentLabel] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
@@ -1093,6 +1104,19 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
         revision: goal.revision,
         ...(action === 'edit' && objective ? { objective } : {}),
       });
+    },
+    [sendRequest],
+  );
+
+  // Browser Use 实时画面开关：本地状态即时反馈，请求后端开/关画面流，
+  // 开启时后端立即推送一次当前快照（含 available=false 占位）
+  const toggleBrowserView = useCallback(
+    (enabled: boolean): void => {
+      setBrowserViewEnabled(enabled);
+      if (!enabled) {
+        setBrowserView(null);
+      }
+      sendRequest({ type: 'web_browser_view_toggle', browser_view_enabled: enabled });
     },
     [sendRequest],
   );
@@ -1817,6 +1841,11 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       }
 
       // === 其他全局事件 ===
+      if (evt.type === 'web_browser_view') {
+        // Browser Use 实时画面快照（后端内容变化才推送；此处整包替换）
+        setBrowserView(evt.browser_view ?? null);
+        return;
+      }
       if (evt.type === 'toast' && evt.toast) {
         // toast 通知：转发给 App 做监管判定（界内不打扰）、播放音效、
         // 页面不可见时透传系统级通知。文案由后端本地化，这里原样传递。
@@ -1949,6 +1978,8 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       clearStaticItems, optimisticSubmit,
       // GoalBar（活跃视图）
       goalActionError, sendGoalAction, clearGoalActionError,
+      // Browser Use 实时画面（右栏用量页签卡片）
+      browserView, browserViewEnabled, toggleBrowserView,
       setOnSelectRequest, setOnCommandResult, setOnUpdateAvailable, setOnRewindRestored,
       setOnToast,
     };

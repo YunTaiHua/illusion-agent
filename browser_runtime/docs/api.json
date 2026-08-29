@@ -1,0 +1,884 @@
+{
+  "version": 11,
+  "entrypoints": [
+    "agent.browsers.get(\"iab\")",
+    "agent.browsers.getDefault()",
+    "agent.browsers.getForUrl(url)"
+  ],
+  "semantics": {
+    "success": "High-level SDK methods return the payload directly.",
+    "failure": "High-level SDK methods throw BrowserCommandError with code, command, and raw result.",
+    "discovery": "list() returns only backends reported by the host registry; the facade does not synthesize availability.",
+    "selection": "get() accepts an exact runtime browser id or a backend type alias. getDefault() prefers iab, preferred extension, extension, then cdp. getForUrl() also considers local targets and existing tabs.",
+    "navigationUrl": "goto() accepts http:, https:, and exact about:blank. file: can be a backend-selection hint but is not directly navigable; other about:* and non-web schemes are rejected.",
+    "tabRecovery": "Every Browser Use JS call starts in a fresh kernel. Re-run the Skill bootstrap and recreate the same selected Browser wrapper without changing backend. Before every logical tab operation batch, use a dedicated JS call to return the complete tabs.list() result to the model. After inspecting it, use the next fresh JS call to match the target by stable id or verified URL/title, then call tabs.get(info.id). An internal or same-cell hidden list does not count as model inspection. get validates and activates that tab inside its owning scope; a background session never steals the foreground UI. Never choose a multi-tab target by array position. If no controlled tab matches, inspect user.openTabs() and claim the matching page before creating a tab. This is the pre-action target-selection protocol; it does not replace the combined post-action observation required by actionResultObservation.",
+    "actionResultObservation": "When an action may open a popup/new tab and the source tab does not show the expected effect, read `browser.tabs.list()` and `browser.user.openTabs()` unconditionally in the same observation cell. Prefer `Promise.all`, then return `{ controlledTabs, userTabs }` as that cell's final result so the model makes one decision from both lists. Do not return the controlled list first or decide whether to query user tabs from its contents. A non-empty controlled list or existing source tab is not an action effect; match the expected URL, title, or page state before activating or claiming a tab.",
+    "tabCleanup": "IAB tabs persist for the current IllusionAgent process until the model explicitly calls tab.close(), the user closes them, their window closes, or the process exits. finalize({ keep }) marks only listed tabs as deliverable or handoff; unlisted tabs remain open.",
+    "playwright": "Playwright is a Tab API surface, never a backend type. playwright.domSnapshot() returns the Codex-compatible compact AI/ARIA tree and is the default locator ground truth. Fixed waiting is tab.playwright.waitForTimeout(timeoutMs), not a root Tab method. Unsupported members are hidden by the effective capability policy.",
+    "locatorEvidence": "Construct locators only from the latest relevant domSnapshot. Never guess labels, accessible names, placeholders, selectors, or URL patterns. count()=0 requires a fresh snapshot and rebuild, not action-waiting; timeout/strict/parse failure forbids retrying the same locator.",
+    "evaluate": "playwright.evaluate() and locator.evaluate() execute JavaScript in the page context and may change page state. Use them for page-side logic that cannot be expressed through the high-level locator API; use normal action methods when they communicate the intended interaction more clearly.",
+    "screenshotOutput": "After choosing the visual branch, every screenshot call must be emitted in the same JS cell as an image block with nodeRepl.emitImage(await tab.screenshot()). Never use tab.screenshot() as the final expression or return its Uint8Array bytes directly.",
+    "operationTimeout": "Routine locator, URL/load-state wait, and evaluate operations default to and are capped at 3000ms. Fixed waitForTimeout is separate; download event waiting may use up to 120000ms.",
+    "navigationWait": "After every successful `tab.goto(url)`, explicitly call `await tab.playwright.waitForLoadState({ state: \"domcontentloaded\" })` before the first title, URL, or DOM observation. Keep this confirmation in the model-visible trajectory even when goto() has already settled the backend navigation. Routine URL/load-state waits remain capped at 3000ms. networkidle is rejected by the current IAB backend. expectNavigation without an expected URL can be satisfied by an already-loaded page; pass url when a new navigation must be proven.",
+    "roleName": "getByRole(..., { name }) accepts a string or RegExp, including RegExp values created in the node_repl VM realm."
+  },
+  "types": {
+    "TextMatcher": "string | RegExp",
+    "LoadState": "\"load\" | \"domcontentloaded\" | \"networkidle\"",
+    "WaitUntil": "LoadState | \"commit\"",
+    "WaitForState": "\"attached\" | \"detached\" | \"visible\" | \"hidden\"",
+    "MouseButton": "\"left\" | \"right\" | \"middle\"",
+    "KeyboardModifier": "\"Alt\" | \"Control\" | \"ControlOrMeta\" | \"Meta\" | \"Shift\"",
+    "PlaywrightEvaluateOptions": "{ timeoutMs?: number }",
+    "WaitForEventOptions": "{ timeoutMs?: number }",
+    "PageWaitForLoadStateOptions": "{ state?: LoadState; timeoutMs?: number }",
+    "PageWaitForURLOptions": "{ timeoutMs?: number; waitUntil?: WaitUntil }",
+    "LocatorClickOptions": "{ button?: MouseButton; force?: boolean; modifiers?: KeyboardModifier[]; timeoutMs?: number }",
+    "LocatorCheckOptions": "{ force?: boolean; timeoutMs?: number }",
+    "LocatorWaitForOptions": "{ state: WaitForState; timeoutMs?: number }",
+    "LocatorFilterOptions": "{ has?: PlaywrightLocator; hasNot?: PlaywrightLocator; hasNotText?: TextMatcher; hasText?: TextMatcher; visible?: boolean }",
+    "LocatorLocatorOptions": "{ has?: PlaywrightLocator; hasNot?: PlaywrightLocator; hasNotText?: TextMatcher; hasText?: TextMatcher }",
+    "SelectOptionInput": "string | { index?: number; label?: string; value?: string }",
+    "ElementInfoOptions": "{ includeNonInteractable?: boolean; x: number; y: number }",
+    "ElementScreenshotOptions": "{ includeNonInteractable?: boolean; x: number; y: number }",
+    "ElementInfo": "{ ariaName?: string | null; boundingBox?: { x: number; y: number; width: number; height: number } | null; nodeId?: number | null; preview: string; role?: string | null; selector: { candidates: string[]; frameSelectors?: string[]; primary?: string | null }; tagName: string; testId?: string | null; visibleText?: string | null }",
+    "BrowserViewportSize": "{ width: number; height: number }",
+    "BrowserRecordingAction": "{ type: \"wait\"; durationMs: number } | { type: \"click\"; selector?: string; x?: number; y?: number; button?: MouseButton; doubleClick?: boolean; delayAfterMs?: number } | { type: \"type\"; selector: string; text: string; delayAfterMs?: number } | { type: \"hover\" | \"move\"; selector?: string; x?: number; y?: number; durationMs?: number; delayAfterMs?: number } | { type: \"scroll\"; deltaX?: number; deltaY: number; durationMs?: number; delayAfterMs?: number } | { type: \"scrollTo\"; selector?: string; x?: number; y?: number; durationMs?: number; delayAfterMs?: number } | { type: \"wheel\"; deltaX?: number; deltaY: number; times?: number; intervalMs?: number; delayAfterMs?: number } | { type: \"drag\"; path: Array<{ x: number; y: number }>; durationMs?: number; delayAfterMs?: number } | { type: \"waitFor\"; selector: string; state?: WaitForState; timeoutMs?: number; delayAfterMs?: number }",
+    "BrowserRecordingOptions": "{ actions?: BrowserRecordingAction[]; fps?: number; jpegQuality?: number; maxDurationMs?: number; settleMs?: number; showCursor?: boolean; viewport?: BrowserViewportSize }",
+    "BrowserRecordingArtifact": "{ path: string; mimeType: \"video/webm\"; width: number; height: number; fps: number; durationMs: number; frameCount: number }",
+    "BrowserRecordingJob": "{ id: string; status: \"running\" | \"completed\" | \"failed\" | \"cancelled\"; phase: \"preparing\" | \"capturing\" | \"finalizing\" | \"completed\" | \"failed\" | \"cancelled\"; progress: number; startedAt: number; updatedAt: number; artifact?: BrowserRecordingArtifact; error?: string }",
+    "TabInfo": "{ id: string; active?: boolean; title?: string; url?: string; viewport: BrowserViewportSize }",
+    "BrowserUserTabInfo": "{ id: string; lastOpened?: string; tabGroup?: string; title?: string; url?: string }",
+    "BrowserHistoryOptions": "{ from?: string | Date; limit?: number; queries?: string[]; to?: string | Date }",
+    "BrowserHistoryEntry": "{ dateVisited: string; title?: string; url: string }",
+    "FinalizeTabStatus": "handoff | deliverable",
+    "FinalizeTabsOptions": "{ keep?: Array<{ status: FinalizeTabStatus; tab: string | Tab | { id: string } }> }"
+  },
+  "objects": {
+    "Agent": {
+      "members": [
+        {
+          "name": "browsers",
+          "kind": "property",
+          "signature": "browsers: Browsers"
+        },
+        {
+          "name": "documentation",
+          "kind": "property",
+          "signature": "documentation: Documentation"
+        }
+      ]
+    },
+    "Documentation": {
+      "members": [
+        {
+          "name": "get",
+          "kind": "method",
+          "signature": "get(name: string): Promise<string>"
+        }
+      ]
+    },
+    "Browsers": {
+      "members": [
+        {
+          "name": "list",
+          "kind": "method",
+          "signature": "list(): Promise<BrowserDescriptor[]>"
+        },
+        {
+          "name": "get",
+          "kind": "method",
+          "signature": "get(idOrType: string): Promise<Browser>"
+        },
+        {
+          "name": "getDefault",
+          "kind": "method",
+          "signature": "getDefault(): Promise<Browser>"
+        },
+        {
+          "name": "getForUrl",
+          "kind": "method",
+          "signature": "getForUrl(url: string): Promise<Browser>"
+        },
+        {
+          "name": "open",
+          "kind": "method",
+          "signature": "open(url?: string, options?: { reuseTab?: boolean }): Promise<Tab>"
+        }
+      ]
+    },
+    "Browser": {
+      "members": [
+        {
+          "name": "browserId",
+          "kind": "property",
+          "signature": "browserId: string"
+        },
+        {
+          "name": "capabilities",
+          "kind": "property",
+          "signature": "capabilities: BrowserCapabilityCollection"
+        },
+        {
+          "name": "tabs",
+          "kind": "property",
+          "signature": "tabs: Tabs"
+        },
+        {
+          "name": "nameSession",
+          "kind": "method",
+          "signature": "nameSession(name: string): Promise<void>",
+          "command": "nameSession"
+        },
+        {
+          "name": "user",
+          "kind": "property",
+          "signature": "user: BrowserUser"
+        },
+        {
+          "name": "documentation",
+          "kind": "method",
+          "signature": "documentation(): Promise<string>"
+        }
+      ]
+    },
+    "BrowserUser": {
+      "members": [
+        {
+          "name": "claimTab",
+          "kind": "method",
+          "signature": "claimTab(tab: string | BrowserUserTabInfo): Promise<Tab>",
+          "command": "claimTab",
+          "unsupportedByDefaultIn": ["iab", "cdp"]
+        },
+        {
+          "name": "history",
+          "kind": "method",
+          "signature": "history(options: BrowserHistoryOptions): Promise<BrowserHistoryEntry[]>",
+          "unsupportedByDefaultIn": ["iab"]
+        },
+        {
+          "name": "openTabs",
+          "kind": "method",
+          "signature": "openTabs(): Promise<BrowserUserTabInfo[]>",
+          "command": "listUserTabs"
+        }
+      ]
+    },
+    "Tabs": {
+      "members": [
+        {
+          "name": "list",
+          "kind": "method",
+          "signature": "list(): Promise<TabInfo[]>",
+          "command": "list"
+        },
+        {
+          "name": "selected",
+          "kind": "method",
+          "signature": "selected(): Promise<Tab | undefined>",
+          "command": "list"
+        },
+        {
+          "name": "get",
+          "kind": "method",
+          "signature": "get(id: string): Promise<Tab>",
+          "command": "list"
+        },
+        {
+          "name": "new",
+          "kind": "method",
+          "signature": "new(): Promise<Tab>",
+          "command": "newTab"
+        },
+        {
+          "name": "finalize",
+          "kind": "method",
+          "signature": "finalize(options: FinalizeTabsOptions): Promise<void>",
+          "command": "finalizeTabs",
+          "unsupportedByDefaultIn": ["iab", "cdp"]
+        }
+      ]
+    },
+    "Tab": {
+      "members": [
+        {
+          "name": "id",
+          "kind": "property",
+          "signature": "id: string"
+        },
+        {
+          "name": "capabilities",
+          "kind": "property",
+          "signature": "capabilities: TabCapabilityCollection"
+        },
+        {
+          "name": "goto",
+          "kind": "method",
+          "signature": "goto(url: string): Promise<void>",
+          "command": "navigate"
+        },
+        {
+          "name": "back",
+          "kind": "method",
+          "signature": "back(): Promise<void>",
+          "command": "back"
+        },
+        {
+          "name": "forward",
+          "kind": "method",
+          "signature": "forward(): Promise<void>",
+          "command": "forward"
+        },
+        {
+          "name": "reload",
+          "kind": "method",
+          "signature": "reload(): Promise<void>",
+          "command": "reload"
+        },
+        {
+          "name": "close",
+          "kind": "method",
+          "signature": "close(): Promise<void>",
+          "command": "close"
+        },
+        {
+          "name": "url",
+          "kind": "method",
+          "signature": "url(): Promise<string | undefined>",
+          "command": "getState"
+        },
+        {
+          "name": "title",
+          "kind": "method",
+          "signature": "title(): Promise<string | undefined>",
+          "command": "getState"
+        },
+        {
+          "name": "screenshot",
+          "kind": "method",
+          "signature": "screenshot(options?: { fullPage?: boolean; clip?: { x: number; y: number; width: number; height: number } }): Promise<Uint8Array>",
+          "command": "screenshot"
+        },
+        {
+          "name": "getJsDialog",
+          "kind": "method",
+          "signature": "getJsDialog(): Promise<Dialog | undefined>",
+          "command": "getDialog"
+        },
+        {
+          "name": "setViewportSize",
+          "kind": "method",
+          "signature": "setViewportSize(viewportSize: { width: number; height: number }): Promise<void>",
+          "command": "browserViewportSet"
+        },
+        {
+          "name": "viewportSize",
+          "kind": "method",
+          "signature": "viewportSize(): { width: number; height: number } | null"
+        },
+        {
+          "name": "recording",
+          "kind": "property",
+          "signature": "recording: BrowserRecordingAPI"
+        },
+        {
+          "name": "finalize",
+          "kind": "method",
+          "signature": "finalize(options?: { deliverable?: boolean }): Promise<void>",
+          "command": "finalize",
+          "documented": false,
+          "unsupportedByDefaultIn": ["iab", "cdp"]
+        },
+        {
+          "name": "markDeliverable",
+          "kind": "method",
+          "signature": "markDeliverable(): Promise<void>",
+          "command": "markDeliverable",
+          "unsupportedByDefaultIn": ["iab", "cdp"]
+        },
+        {
+          "name": "markHandoff",
+          "kind": "method",
+          "signature": "markHandoff(): Promise<void>",
+          "command": "markHandoff",
+          "unsupportedByDefaultIn": ["iab", "cdp"]
+        },
+        {
+          "name": "cua",
+          "kind": "property",
+          "signature": "cua: CUAAPI"
+        },
+        {
+          "name": "dom_cua",
+          "kind": "property",
+          "signature": "dom_cua: DomCUAAPI"
+        },
+        {
+          "name": "playwright",
+          "kind": "property",
+          "signature": "playwright: PlaywrightAPI"
+        }
+      ]
+    },
+    "BrowserRecordingAPI": {
+      "members": [
+        {
+          "name": "start",
+          "kind": "method",
+          "signature": "start(options?: BrowserRecordingOptions): Promise<BrowserRecordingJob>",
+          "command": "recordingStart",
+          "unsupportedByDefaultIn": ["extension", "cdp"]
+        },
+        {
+          "name": "status",
+          "kind": "method",
+          "signature": "status(recordingId: string, options?: { outputPath?: string }): Promise<BrowserRecordingJob>",
+          "command": "recordingStatus",
+          "unsupportedByDefaultIn": ["extension", "cdp"]
+        },
+        {
+          "name": "cancel",
+          "kind": "method",
+          "signature": "cancel(recordingId: string): Promise<BrowserRecordingJob>",
+          "command": "recordingCancel",
+          "unsupportedByDefaultIn": ["extension", "cdp"]
+        }
+      ]
+    },
+    "PlaywrightAPI": {
+      "members": [
+        {
+          "name": "domSnapshot",
+          "kind": "method",
+          "signature": "domSnapshot(): Promise<string>",
+          "command": "playwright"
+        },
+        {
+          "name": "elementInfo",
+          "kind": "method",
+          "signature": "elementInfo(options: ElementInfoOptions): Promise<ElementInfo[]>",
+          "command": "playwright",
+          "documented": false
+        },
+        {
+          "name": "elementScreenshot",
+          "kind": "method",
+          "signature": "elementScreenshot(options: ElementScreenshotOptions): Promise<Uint8Array>",
+          "command": "playwright",
+          "documented": false
+        },
+        {
+          "name": "evaluate",
+          "kind": "method",
+          "signature": "evaluate(pageFunction, arg?, options?): Promise<TResult>",
+          "command": "playwright"
+        },
+        {
+          "name": "expectNavigation",
+          "kind": "method",
+          "signature": "expectNavigation(action, options?): Promise<T>",
+          "command": "playwright"
+        },
+        {
+          "name": "frameLocator",
+          "kind": "method",
+          "signature": "frameLocator(frameSelector: string): PlaywrightFrameLocator"
+        },
+        {
+          "name": "getByLabel",
+          "kind": "method",
+          "signature": "getByLabel(text: TextMatcher, options?): PlaywrightLocator"
+        },
+        {
+          "name": "getByPlaceholder",
+          "kind": "method",
+          "signature": "getByPlaceholder(text: TextMatcher, options?): PlaywrightLocator"
+        },
+        {
+          "name": "getByRole",
+          "kind": "method",
+          "signature": "getByRole(role: string, options?): PlaywrightLocator"
+        },
+        {
+          "name": "getByTestId",
+          "kind": "method",
+          "signature": "getByTestId(testId: string): PlaywrightLocator"
+        },
+        {
+          "name": "getByText",
+          "kind": "method",
+          "signature": "getByText(text: TextMatcher, options?): PlaywrightLocator"
+        },
+        {
+          "name": "locator",
+          "kind": "method",
+          "signature": "locator(selector: string): PlaywrightLocator"
+        },
+        {
+          "name": "waitForEvent",
+          "kind": "method",
+          "signature": "waitForEvent(event: \"download\", options?): Promise<PlaywrightDownload>",
+          "command": "playwright",
+          "declarations": [
+            {
+              "signature": "waitForEvent(event: \"download\", options?): Promise<PlaywrightDownload>"
+            },
+            {
+              "signature": "waitForEvent(event: \"filechooser\", options?): Promise<PlaywrightFileChooser>",
+              "unsupportedByDefaultIn": ["iab"]
+            }
+          ]
+        },
+        {
+          "name": "waitForLoadState",
+          "kind": "method",
+          "signature": "waitForLoadState(options?): Promise<void>",
+          "command": "playwright"
+        },
+        {
+          "name": "waitForTimeout",
+          "kind": "method",
+          "signature": "waitForTimeout(timeoutMs: number): Promise<void>",
+          "command": "playwrightWaitForTimeout"
+        },
+        {
+          "name": "waitForURL",
+          "kind": "method",
+          "signature": "waitForURL(url: string, options?): Promise<void>",
+          "command": "playwright"
+        }
+      ]
+    },
+    "PlaywrightFrameLocator": {
+      "members": [
+        {
+          "name": "frameLocator",
+          "kind": "method",
+          "signature": "frameLocator(frameSelector: string): PlaywrightFrameLocator"
+        },
+        {
+          "name": "getByLabel",
+          "kind": "method",
+          "signature": "getByLabel(text: TextMatcher, options?): PlaywrightLocator"
+        },
+        {
+          "name": "getByPlaceholder",
+          "kind": "method",
+          "signature": "getByPlaceholder(text: TextMatcher, options?): PlaywrightLocator"
+        },
+        {
+          "name": "getByRole",
+          "kind": "method",
+          "signature": "getByRole(role: string, options?): PlaywrightLocator"
+        },
+        {
+          "name": "getByTestId",
+          "kind": "method",
+          "signature": "getByTestId(testId: string): PlaywrightLocator"
+        },
+        {
+          "name": "getByText",
+          "kind": "method",
+          "signature": "getByText(text: TextMatcher, options?): PlaywrightLocator"
+        },
+        {
+          "name": "locator",
+          "kind": "method",
+          "signature": "locator(selector: string): PlaywrightLocator"
+        }
+      ]
+    },
+    "PlaywrightLocator": {
+      "members": [
+        {
+          "name": "all",
+          "kind": "method",
+          "signature": "all(): Promise<PlaywrightLocator[]>"
+        },
+        {
+          "name": "allTextContents",
+          "kind": "method",
+          "signature": "allTextContents(options?): Promise<string[]>",
+          "command": "playwright"
+        },
+        {
+          "name": "and",
+          "kind": "method",
+          "signature": "and(locator: PlaywrightLocator): PlaywrightLocator"
+        },
+        {
+          "name": "check",
+          "kind": "method",
+          "signature": "check(options?): Promise<void>",
+          "command": "playwright"
+        },
+        {
+          "name": "click",
+          "kind": "method",
+          "signature": "click(options?): Promise<void>",
+          "command": "playwright"
+        },
+        {
+          "name": "count",
+          "kind": "method",
+          "signature": "count(): Promise<number>",
+          "command": "playwright"
+        },
+        {
+          "name": "dblclick",
+          "kind": "method",
+          "signature": "dblclick(options?): Promise<void>",
+          "command": "playwright"
+        },
+        {
+          "name": "downloadMedia",
+          "kind": "method",
+          "signature": "downloadMedia(options?): Promise<void>",
+          "command": "playwright"
+        },
+        {
+          "name": "evaluate",
+          "kind": "method",
+          "signature": "evaluate(pageFunction, arg?, options?): Promise<TResult>",
+          "command": "playwright"
+        },
+        {
+          "name": "fill",
+          "kind": "method",
+          "signature": "fill(value: string, options?): Promise<void>",
+          "command": "playwright"
+        },
+        {
+          "name": "filter",
+          "kind": "method",
+          "signature": "filter(options: LocatorFilterOptions): PlaywrightLocator"
+        },
+        {
+          "name": "first",
+          "kind": "method",
+          "signature": "first(): PlaywrightLocator"
+        },
+        {
+          "name": "getAttribute",
+          "kind": "method",
+          "signature": "getAttribute(name: string, options?): Promise<string | null>",
+          "command": "playwright"
+        },
+        {
+          "name": "getByLabel",
+          "kind": "method",
+          "signature": "getByLabel(text: TextMatcher, options?): PlaywrightLocator"
+        },
+        {
+          "name": "getByPlaceholder",
+          "kind": "method",
+          "signature": "getByPlaceholder(text: TextMatcher, options?): PlaywrightLocator"
+        },
+        {
+          "name": "getByRole",
+          "kind": "method",
+          "signature": "getByRole(role: string, options?): PlaywrightLocator"
+        },
+        {
+          "name": "getByTestId",
+          "kind": "method",
+          "signature": "getByTestId(testId: string): PlaywrightLocator"
+        },
+        {
+          "name": "getByText",
+          "kind": "method",
+          "signature": "getByText(text: TextMatcher, options?): PlaywrightLocator"
+        },
+        {
+          "name": "innerText",
+          "kind": "method",
+          "signature": "innerText(options?): Promise<string>",
+          "command": "playwright"
+        },
+        {
+          "name": "isEnabled",
+          "kind": "method",
+          "signature": "isEnabled(): Promise<boolean>",
+          "command": "playwright"
+        },
+        {
+          "name": "isVisible",
+          "kind": "method",
+          "signature": "isVisible(): Promise<boolean>",
+          "command": "playwright"
+        },
+        {
+          "name": "last",
+          "kind": "method",
+          "signature": "last(): PlaywrightLocator"
+        },
+        {
+          "name": "locator",
+          "kind": "method",
+          "signature": "locator(selector: string, options?): PlaywrightLocator"
+        },
+        {
+          "name": "nth",
+          "kind": "method",
+          "signature": "nth(index: number): PlaywrightLocator"
+        },
+        {
+          "name": "or",
+          "kind": "method",
+          "signature": "or(locator: PlaywrightLocator): PlaywrightLocator"
+        },
+        {
+          "name": "press",
+          "kind": "method",
+          "signature": "press(value: string, options?): Promise<void>",
+          "command": "playwright"
+        },
+        {
+          "name": "selectOption",
+          "kind": "method",
+          "signature": "selectOption(value, options?): Promise<void>",
+          "command": "playwright"
+        },
+        {
+          "name": "setChecked",
+          "kind": "method",
+          "signature": "setChecked(checked: boolean, options?): Promise<void>",
+          "command": "playwright"
+        },
+        {
+          "name": "textContent",
+          "kind": "method",
+          "signature": "textContent(options?): Promise<string | null>",
+          "command": "playwright"
+        },
+        {
+          "name": "type",
+          "kind": "method",
+          "signature": "type(value: string, options?): Promise<void>",
+          "command": "playwright"
+        },
+        {
+          "name": "uncheck",
+          "kind": "method",
+          "signature": "uncheck(options?): Promise<void>",
+          "command": "playwright"
+        },
+        {
+          "name": "waitFor",
+          "kind": "method",
+          "signature": "waitFor(options: LocatorWaitForOptions): Promise<void>",
+          "command": "playwright"
+        }
+      ]
+    },
+    "PlaywrightDownload": {
+      "members": [
+        {
+          "name": "path",
+          "kind": "method",
+          "signature": "path(options?): Promise<string | null>",
+          "command": "playwright",
+          "documented": false
+        }
+      ]
+    },
+    "PlaywrightFileChooser": {
+      "members": [
+        {
+          "name": "isMultiple",
+          "kind": "method",
+          "signature": "isMultiple(): boolean"
+        },
+        {
+          "name": "setFiles",
+          "kind": "method",
+          "signature": "setFiles(files, options?): Promise<void>",
+          "command": "playwright",
+          "unsupportedByDefaultIn": ["iab"]
+        }
+      ]
+    },
+    "BrowserCapabilityCollection": {
+      "members": [
+        {
+          "name": "get",
+          "kind": "method",
+          "signature": "get(id: string): Promise<unknown>"
+        },
+        {
+          "name": "list",
+          "kind": "method",
+          "signature": "list(): Promise<Array<{ id: string; description: string }>>"
+        }
+      ]
+    },
+    "TabCapabilityCollection": {
+      "members": [
+        {
+          "name": "get",
+          "kind": "method",
+          "signature": "get(id: string): Promise<unknown>"
+        },
+        {
+          "name": "list",
+          "kind": "method",
+          "signature": "list(): Promise<Array<{ id: string; description: string }>>"
+        }
+      ]
+    },
+    "CUAAPI": {
+      "members": [
+        {
+          "name": "click",
+          "kind": "method",
+          "signature": "click(options: ClickOptions): Promise<void>"
+        },
+        {
+          "name": "double_click",
+          "kind": "method",
+          "signature": "double_click(options: DoubleClickOptions): Promise<void>"
+        },
+        {
+          "name": "downloadMedia",
+          "kind": "method",
+          "signature": "downloadMedia(options: CuaDownloadMediaOptions): Promise<void>",
+          "unsupportedByDefaultIn": ["iab"],
+          "documented": false
+        },
+        {
+          "name": "drag",
+          "kind": "method",
+          "signature": "drag(options: DragOptions): Promise<void>"
+        },
+        {
+          "name": "keypress",
+          "kind": "method",
+          "signature": "keypress(options: KeypressOptions): Promise<void>"
+        },
+        {
+          "name": "move",
+          "kind": "method",
+          "signature": "move(options: MoveOptions): Promise<void>"
+        },
+        {
+          "name": "scroll",
+          "kind": "method",
+          "signature": "scroll(options: ScrollOptions): Promise<void>"
+        },
+        {
+          "name": "type",
+          "kind": "method",
+          "signature": "type(options: TypeOptions): Promise<void>"
+        }
+      ]
+    },
+    "DomCUAAPI": {
+      "members": [
+        {
+          "name": "click",
+          "kind": "method",
+          "signature": "click(options: DomClickOptions): Promise<void>"
+        },
+        {
+          "name": "double_click",
+          "kind": "method",
+          "signature": "double_click(options: DomClickOptions): Promise<void>"
+        },
+        {
+          "name": "downloadMedia",
+          "kind": "method",
+          "signature": "downloadMedia(options: DomDownloadMediaOptions): Promise<void>",
+          "unsupportedByDefaultIn": ["iab"],
+          "documented": false
+        },
+        {
+          "name": "get_visible_dom",
+          "kind": "method",
+          "signature": "get_visible_dom(): Promise<unknown>"
+        },
+        {
+          "name": "keypress",
+          "kind": "method",
+          "signature": "keypress(options: DomKeypressOptions): Promise<void>"
+        },
+        {
+          "name": "scroll",
+          "kind": "method",
+          "signature": "scroll(options: DomScrollOptions): Promise<void>"
+        },
+        {
+          "name": "type",
+          "kind": "method",
+          "signature": "type(options: DomTypeOptions): Promise<void>"
+        }
+      ]
+    },
+    "AlertDialog": {
+      "members": [
+        {
+          "name": "type",
+          "kind": "property",
+          "signature": "type: alert"
+        },
+        {
+          "name": "dismiss",
+          "kind": "method",
+          "signature": "dismiss(): Promise<void>"
+        }
+      ]
+    },
+    "ConfirmDialog": {
+      "members": [
+        {
+          "name": "type",
+          "kind": "property",
+          "signature": "type: confirm"
+        },
+        {
+          "name": "accept",
+          "kind": "method",
+          "signature": "accept(): Promise<void>"
+        },
+        {
+          "name": "dismiss",
+          "kind": "method",
+          "signature": "dismiss(): Promise<void>"
+        }
+      ]
+    },
+    "PromptDialog": {
+      "members": [
+        {
+          "name": "type",
+          "kind": "property",
+          "signature": "type: prompt"
+        },
+        {
+          "name": "accept",
+          "kind": "method",
+          "signature": "accept(text: string): Promise<void>"
+        },
+        {
+          "name": "dismiss",
+          "kind": "method",
+          "signature": "dismiss(): Promise<void>"
+        }
+      ]
+    },
+    "BeforeUnloadDialog": {
+      "members": [
+        {
+          "name": "type",
+          "kind": "property",
+          "signature": "type: beforeunload"
+        },
+        {
+          "name": "dismiss",
+          "kind": "method",
+          "signature": "dismiss(): Promise<void>"
+        }
+      ]
+    }
+  }
+}

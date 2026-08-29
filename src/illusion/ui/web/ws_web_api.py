@@ -206,6 +206,8 @@ class WebApiDispatcher:
             "web_request_sessions": self.handle_web_request_sessions,
             "web_request_models": self.handle_web_request_models,
             "web_refresh_status": self.handle_web_refresh_status,
+            "web_browser_view_toggle": self.handle_web_browser_view_toggle,
+            "web_request_browser_view": self.handle_web_request_browser_view,
             "web_request_resources": self.handle_web_request_resources,
             "web_request_file_tree": self.handle_web_request_file_tree,
             "web_request_git_status": self.handle_web_request_git_status,
@@ -638,7 +640,7 @@ class WebApiDispatcher:
         # 键名 → app_state 字段名映射（settings 字段名可能与 key 不同）
         if key not in (
             "effort", "permission_mode", "model", "context_window",
-            "ui_language", "turns",
+            "ui_language", "turns", "browser",
         ):
             return False, f"不支持的设置键: {key}"
 
@@ -670,6 +672,26 @@ class WebApiDispatcher:
                 else:
                     turns_val = int(value)
                 bundle.engine.set_max_turns(turns_val)
+            elif key == "browser":
+                # Browser Use 子系统总开关：持久化 + 当前 bundle 服务热启停。
+                # 注：node_repl MCP 工具在下次会话构建时注入（当前会话的服务/
+                # 浏览器画面立即可用；工具注册表不支持运行中重建）。
+                settings.browser.enabled = bool(value)
+                _save_settings(settings)
+                from illusion.browser_use.integration import create_browser_service
+                from illusion.config.paths import get_config_dir
+
+                if settings.browser.enabled and bundle.browser_service is None:
+                    service = create_browser_service(
+                        settings.browser, config_dir=str(get_config_dir())
+                    )
+                    if service is None:
+                        return False, "playwright 未安装，无法启用 Browser Use"
+                    await service.start()
+                    bundle.browser_service = service
+                elif not settings.browser.enabled and bundle.browser_service is not None:
+                    await bundle.browser_service.stop()
+                    bundle.browser_service = None
             elif key == "model":
                 settings.model = str(value)
                 _save_settings(settings)
@@ -714,6 +736,20 @@ class WebApiDispatcher:
             await self._emit(BackendEvent(type="error", message="运行时未就绪"))
             return
         await host._push_sessions()
+
+    async def handle_web_browser_view_toggle(self, request: FrontendRequest) -> None:
+        """开关本连接的 Browser Use 实时画面（右栏用量页签卡片）。
+
+        Args:
+            request: browser_view_enabled 指示开启（true）或关闭（false）
+        """
+        enabled = bool(request.browser_view_enabled)
+        await self._host.set_browser_view_enabled(enabled)
+
+    async def handle_web_request_browser_view(self, request: FrontendRequest) -> None:
+        """拉取一次当前浏览器画面快照（前端启用卡片后的初始加载）。"""
+        del request
+        await self._host._push_browser_view_if_due(force=True)
 
     async def handle_web_refresh_status(self, request: FrontendRequest) -> None:
         """设置保存后的状态刷新脉冲（前端主动触发）。

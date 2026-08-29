@@ -1,0 +1,24 @@
+{
+  "name": "@illusion/browser-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "IllusionAgent Browser Use 的 node_repl MCP 服务器运行时（vm 内核 + broker 客户端 + agent.browsers 桥接）。",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/mcp-server.js",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.20.0",
+    "meriyah": "^7.1.2",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.9.0"
+  }
+}

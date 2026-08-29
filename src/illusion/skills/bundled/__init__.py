@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
 from illusion.skills.types import SkillDefinition
@@ -26,20 +27,46 @@ from illusion.skills.types import SkillDefinition
 # 内置 skill 内容目录
 _CONTENT_DIR = Path(__file__).parent / "content"
 
+# 目录形态的内置 skill（content/<feature>/<skill>/SKILL.md）按特性门控注入：
+# 目录名对应一个功能开关，仅当该功能启用时才注册为可用 skill。
+# browser_use → settings.browser.enabled（Browser Use 子系统）。
+_FEATURE_SKILL_DIRS = frozenset({"browser_use"})
 
-def get_bundled_skills() -> list[SkillDefinition]:
-    """从 content 目录加载所有内置 skills（支持 .md、.yaml、.yml）。"""
+
+def get_bundled_skills(enabled_features: frozenset[str] | set[str] = frozenset()) -> list[SkillDefinition]:
+    """从 content 目录加载内置 skills（支持 .md、.yaml、.yml 与目录形态）。
+
+    Args:
+        enabled_features: 已启用功能名集合（目录形态 skill 的门控条件）。
+            文件形态的 skill 不受门控；目录形态（content/<feature>/<name>/SKILL.md）
+            仅当 <feature> 在该集合中时加载。
+
+    Returns:
+        list[SkillDefinition]: 内置 skill 定义列表
+    """
     skills: list[SkillDefinition] = []
     if not _CONTENT_DIR.exists():
         return skills
-    from illusion.skills.loader import _load_yaml_skill
+    from illusion.skills.loader import _load_yaml_skill, parse_skill_markdown
 
     for path in sorted(_CONTENT_DIR.iterdir()):
+        if path.is_dir():
+            # 目录形态：content/<feature>/<skill>/SKILL.md，按特性门控注入
+            if path.name not in _FEATURE_SKILL_DIRS or path.name not in enabled_features:
+                continue
+            for skill_dir in sorted(path.iterdir()):
+                skill_md = skill_dir / "SKILL.md"
+                if not skill_dir.is_dir() or not skill_md.is_file():
+                    continue
+                content = skill_md.read_text(encoding="utf-8")
+                parsed = parse_skill_markdown(skill_dir.name, content, skill_root=str(path))
+                skills.append(_with_bundled_source(parsed, str(skill_md)))
+            continue
         if not path.is_file():
             continue
         if path.suffix in (".yaml", ".yml"):
-            skill = _load_yaml_skill(path, source="bundled")
-            if skill:
+            skill: SkillDefinition | None = _load_yaml_skill(path, source="bundled")
+            if skill is not None:
                 skills.append(skill)
         elif path.suffix == ".md":
             content = path.read_text(encoding="utf-8")
@@ -54,6 +81,11 @@ def get_bundled_skills() -> list[SkillDefinition]:
                 )
             )
     return skills
+
+
+def _with_bundled_source(skill: SkillDefinition, path: str) -> SkillDefinition:
+    """目录形态 skill 统一标记为 bundled 来源并回填磁盘路径。"""
+    return dataclasses.replace(skill, source="bundled", path=path)
 
 
 def _parse_frontmatter(default_name: str, content: str) -> tuple[str, str]:

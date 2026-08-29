@@ -38,6 +38,11 @@ class FakeMcpManager:
     async def call_tool(self, server_name: str, tool_name: str, arguments: dict):
         return f"{server_name}:{tool_name}:{arguments['name']}"
 
+    async def call_tool_detail(self, server_name: str, tool_name: str, arguments: dict):
+        from illusion.mcp.types import McpToolCallResult
+
+        return McpToolCallResult(text=f"{server_name}:{tool_name}:{arguments['name']}")
+
     async def read_resource(self, server_name: str, uri: str):
         return f"{server_name}:{uri}"
 

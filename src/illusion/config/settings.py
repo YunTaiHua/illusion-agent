@@ -35,6 +35,9 @@ from typing import Any  # 导入 Any 类型用于泛型
 
 from pydantic import BaseModel, Field, field_validator  # 导入 pydantic 模型基类和验证器
 
+from illusion.browser_use.config import (
+    BrowserSettings,  # Browser Use 子系统配置（唯一模型定义见 browser_use.config）
+)
 from illusion.mcp.types import McpServerConfig, _normalize_server_config_type  # 导入 MCP 服务器配置
 from illusion.permissions.modes import PermissionMode  # 导入权限模式
 from illusion.utils.atomic_write import atomic_write_text  # 导入原子写入工具
@@ -344,6 +347,7 @@ class Settings(BaseModel):
     goal: GoalSettings = Field(default_factory=GoalSettings)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     notifications: NotificationSettings = Field(default_factory=NotificationSettings)
+    browser: BrowserSettings = Field(default_factory=BrowserSettings)
     enabled_plugins: dict[str, bool] = Field(default_factory=dict)
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)
     ui_language: str = ""  # 空字符串表示未设置，由 _ensure_language 引导选择
@@ -716,6 +720,23 @@ def _default_sandbox_config() -> dict[str, Any]:
     }
 
 
+def _default_browser_config() -> dict[str, Any]:
+    """返回写入 settings.json 的 Browser Use 默认配置（透明可改，与模型默认值一致）。"""
+    return {
+        "enabled": False,
+        "profile": "blank",
+        "user_data_dir": "",
+        "headless": True,
+        "channel": "auto",
+        "executable_path": "",
+        "cdp_url": "",
+        "viewport": {"width": 1280, "height": 720},
+        "keep_alive_minutes": 30,
+        "stream_interval_ms": 800,
+        "screenshot_quality": 60,
+    }
+
+
 def load_settings(config_path: Path | None = None) -> Settings:
     """从配置文件加载设置
 
@@ -751,6 +772,16 @@ def load_settings(config_path: Path | None = None) -> Settings:
         # 用户手动加过该键后不再触碰。
         if "notifications" not in raw:
             raw["notifications"] = _default_notification_config()
+            try:
+                save_settings(Settings.model_validate(raw), config_path)
+            except (OSError, ValueError):
+                pass
+
+        # 将默认 Browser Use 配置显式写入 settings.json。与 sandbox/notifications
+        # 同一策略：缺失时一次性落盘，让字段在文件中可见可改（enabled 默认 false，
+        # 用户显式开启后才会注入 node_repl MCP / skills / broker）。
+        if "browser" not in raw:
+            raw["browser"] = _default_browser_config()
             try:
                 save_settings(Settings.model_validate(raw), config_path)
             except (OSError, ValueError):

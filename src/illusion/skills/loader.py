@@ -55,8 +55,14 @@ def load_skill_registry(cwd: str | Path | None = None) -> SkillRegistry:
     if project_permissions and "*" in project_permissions.denied_skills:
         return registry
 
-    # 注册内置 skills
-    for skill in get_bundled_skills():
+    # 注册内置 skills（目录形态 skill 按功能门控注入：browser_use ← settings.browser.enabled）
+    enabled_features: frozenset[str] = frozenset()
+    try:
+        if load_settings().browser.enabled:
+            enabled_features = frozenset({"browser_use"})
+    except Exception:  # noqa: BLE001, S110 - settings 读取失败不阻塞 skills 加载
+        pass
+    for skill in get_bundled_skills(enabled_features):
         if project_permissions and skill.name in project_permissions.denied_skills:
             continue
         registry.register(skill)

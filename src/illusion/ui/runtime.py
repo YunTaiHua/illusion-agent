@@ -128,6 +128,8 @@ class RuntimeBundle:
     hook_additional_contexts: list[str] = field(default_factory=list[Any])
     # 渠道感知提示词（PC 终端或渠道端注入），handle_line 重建系统提示词时复用
     channel_hint: str | None = None
+    # Browser Use 服务（settings.browser.enabled 时创建；None = 未启用）
+    browser_service: Any | None = None
 
     def current_settings(self) -> Settings:
         """返回会话的有效设置。
@@ -529,6 +531,24 @@ async def build_runtime(
         plugins = load_plugins(settings, cwd)
     else:
         plugins = []
+    # Browser Use 子系统（settings.browser.enabled 时启动 broker 并注入 node_repl
+    # MCP / skills；--bare 跳过自动发现）。CLI --browser-use/--browser-profile 经
+    # 环境变量覆盖会话配置。broker 启动即监听，浏览器在首次 browser 命令时惰性拉起。
+    browser_service = None
+    if not bare:
+        from illusion.browser_use.integration import (
+            apply_env_browser_overrides,
+            create_browser_service,
+        )
+
+        settings = apply_env_browser_overrides(settings)
+        from illusion.config.paths import get_config_dir
+
+        browser_service = create_browser_service(
+            settings.browser, config_dir=str(get_config_dir())
+        )
+        if browser_service is not None:
+            await browser_service.start()
     # 解析 API 客户端
     resolved_api_client: SupportsStreamingMessages
     _web_auth_missing = False
@@ -591,6 +611,11 @@ async def build_runtime(
         server_configs: dict[str, object] = load_mcp_server_configs(settings, plugins, cwd)
     else:
         server_configs = {}
+    # 注入 Browser Use 的 node_repl MCP 服务器（settings.browser.enabled 且非 --bare）
+    if not bare:
+        from illusion.browser_use.integration import inject_browser_mcp_config
+
+        inject_browser_mcp_config(server_configs, browser_service, cwd=cwd)
     # 加载 CLI 指定的额外 MCP 配置（--bare 模式也允许显式指定）
     if mcp_config:
         from pydantic import ValidationError
@@ -693,6 +718,7 @@ async def build_runtime(
             "session_id": session_id,
             "session_hook_store": session_hook_store,
             "session_name": name,
+            **({"browser_service": browser_service} if browser_service is not None else {}),
         },
         effort=EffortMapper.normalize(settings.effort),
         session_id=session_id,
@@ -766,6 +792,7 @@ async def build_runtime(
         session_id=session_id,
         settings_overrides=settings_overrides,
         channel_hint=channel_hint,
+        browser_service=browser_service,
     )
 
 
@@ -814,6 +841,9 @@ async def close_runtime(bundle: RuntimeBundle) -> None:
     from illusion.swarm.team_helpers import cleanup_session_teams
 
     await cleanup_session_teams()
+    # 关闭 Browser Use 服务（broker + 受管浏览器）
+    if bundle.browser_service is not None:
+        await bundle.browser_service.stop()
     # 关闭 MCP 管理器
     await bundle.mcp_manager.close()
     # 执行会话结束钩子

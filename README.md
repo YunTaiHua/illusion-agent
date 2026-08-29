@@ -37,6 +37,7 @@ a cron scheduler for unattended automation — spanning Feishu, WeChat, and QQ.
 - 🌐 **Web UI Interface** - Browser-based chat interface with `illusion web`, independently usable alongside the terminal
 - 🌍 **Bilingual Interface** - Chinese/English auto-switch via `ui_language` setting
 - 📝 **Comprehensive Markdown Rendering** - Tables, code blocks, rich text
+- 🌐 **Built-in Browser Use** - Managed Chromium with clean/user profiles, node_repl REPL, snapshot-driven automation, and a live browser view in the web UI
 - 🔌 **Flexible Extension System** - Plugins, hooks, skills, MCP servers
 - 🔐 **Comprehensive Permission Control** - Three modes + fine-grained rules
 - 🎯 **Reasoning Effort Control** - low/medium/high/xhigh/max levels

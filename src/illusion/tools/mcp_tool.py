@@ -41,16 +41,36 @@ class McpToolAdapter(BaseTool[Any]):
 
     async def execute(self, arguments: BaseModel, context: ToolExecutionContext) -> ToolResult:
         del context
-        # 调用 MCP 工具
+        # 调用 MCP 工具（保留内容块细节：图片映射为模型可见的媒体块）
         try:
-            output = await self._manager.call_tool(
+            result = await self._manager.call_tool_detail(
                 self._tool_info.server_name,
                 self._tool_info.name,
                 arguments.model_dump(mode="json"),
             )
         except MCP_TOOL_EXCEPTIONS as exc:
             return ToolResult(output=str(exc), is_error=True)
-        return ToolResult(output=output)
+        output = result.text
+        metadata: dict[str, Any] = {}
+        if result.images:
+            # 第一张图片内联为媒体块（引擎 _build_tool_result_content 消费）；
+            # 其余以路径/序号在文本中提示，模型可经后续调用取用
+            first = result.images[0]
+            metadata["media_category"] = "image"
+            metadata["media_type"] = first.mime_type
+            metadata["media_data"] = first.data
+            metadata["media_size"] = len(first.data) * 3 // 4
+            if len(result.images) > 1:
+                extra = "\n".join(
+                    f"- image {index + 1}: {image.mime_type}, {len(image.data) * 3 // 4} bytes"
+                    for index, image in enumerate(result.images[1:])
+                )
+                output = f"{output}\n\n[additional images discarded: {len(result.images) - 1}]\n{extra}"
+        return ToolResult(
+            output=output,
+            is_error=result.is_error,
+            metadata=metadata,
+        )
 
 
 def _input_model_from_schema(tool_name: str, schema: dict[str, object]) -> type[BaseModel]:

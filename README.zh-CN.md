@@ -34,6 +34,7 @@ IllusionAgent 是一款开源的 AI 智能体平台。它将多模型语言模�
 - 🌐 **Web UI 界面** - 通过 `illusion web` 启动浏览器聊天界面，与终端界面相互独立、同等可用
 - 🌍 **中英双语支持** - 所有 CLI 输出根据 `ui_language` 设置自动切换中英文
 - 📝 **全面 Markdown 渲染** - 直角边框表格、圆角卡片代码块、多色富文本
+- 🌐 **内置 Browser Use** - 受管 Chromium（空白/用户档案）、node_repl 内核、快照驱动自动化，Web 端实时浏览器画面
 - 🔌 **灵活扩展系统** - 插件、钩子、技能、MCP 服务器
 - 🔐 **完善权限控制** - 三种模式 + 细粒度规则 + Always Allow 一键放行
 - 🎯 **推理强度控制** - 支持 low/medium/high/xhigh/max 五种推理强度级别

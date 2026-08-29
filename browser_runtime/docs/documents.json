@@ -1,0 +1,118 @@
+{
+  "version": 2,
+  "title": "Built-in Browser Automation API",
+  "documents": [
+    {
+      "path": "overview.md",
+      "title": "Overview",
+      "name": "overview",
+      "mode": "included"
+    },
+    {
+      "path": "workflow.md",
+      "title": "Workflow",
+      "name": "workflow",
+      "mode": "included"
+    },
+    {
+      "path": "playwright.md",
+      "title": "Playwright",
+      "name": "playwright",
+      "mode": "included"
+    },
+    {
+      "path": "visibility.md",
+      "title": "Browser Visibility Guidance",
+      "name": "visibility",
+      "mode": "included",
+      "when": {
+        "requiredBrowserCapabilities": ["visibility"]
+      }
+    },
+    {
+      "path": "tab-claiming-iab.md",
+      "title": "User Tab Claiming",
+      "name": "tab-claiming-iab",
+      "mode": "included",
+      "when": {
+        "browserTypes": ["iab"],
+        "requiredApiMembers": ["BrowserUser.openTabs", "BrowserUser.claimTab"]
+      }
+    },
+    {
+      "path": "tab-cleanup-iab.md",
+      "title": "Tab Cleanup",
+      "name": "tab-cleanup-iab",
+      "mode": "included",
+      "when": {
+        "browserTypes": ["iab"],
+        "requiredApiMembers": ["Tabs.finalize"]
+      }
+    },
+    {
+      "path": "tab-cleanup-iab-internal.md",
+      "title": "Tab Lifecycle Marks",
+      "name": "tab-cleanup-iab-internal",
+      "mode": "included",
+      "when": {
+        "browserTypes": ["iab"],
+        "requiredApiMembers": ["Tab.markDeliverable", "Tab.markHandoff"]
+      }
+    },
+    {
+      "path": "all-tabs-cleanup.md",
+      "title": "All-Tabs Cleanup Guidance",
+      "name": "all-tabs-cleanup",
+      "mode": "included",
+      "when": {
+        "browserTypes": ["iab"],
+        "requiredApiMembers": [
+          "BrowserUser.openTabs",
+          "BrowserUser.claimTab",
+          "Tab.close",
+          "Tabs.list"
+        ]
+      }
+    },
+    {
+      "path": "viewport.md",
+      "title": "Browser Viewport Guidance",
+      "name": "viewport",
+      "mode": "lookup",
+      "when": {
+        "requiredApiMembers": ["Tab.setViewportSize", "Tab.viewportSize"]
+      }
+    },
+    {
+      "path": "screenshot.md",
+      "title": "Screenshots",
+      "name": "screenshots",
+      "mode": "lookup",
+      "description": "Read only when the user asks for a screenshot or visual evidence is required."
+    },
+    {
+      "path": "recording.md",
+      "title": "In-app Browser Video Recording",
+      "name": "recording",
+      "mode": "lookup",
+      "description": "Read when a task needs to record an IAB tab into a workspace WebM.",
+      "when": {
+        "browserTypes": ["iab"],
+        "requiredApiMembers": ["BrowserRecordingAPI.start", "BrowserRecordingAPI.status"]
+      }
+    },
+    {
+      "path": "browser-troubleshooting.md",
+      "title": "Browser Interaction Troubleshooting",
+      "name": "browser-troubleshooting",
+      "mode": "lookup",
+      "description": "Read when the selected browser fails while interacting with a page."
+    },
+    {
+      "path": "safety.md",
+      "title": "Safety",
+      "name": "safety",
+      "mode": "included"
+    }
+  ]
+}

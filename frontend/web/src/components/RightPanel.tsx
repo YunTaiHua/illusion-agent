@@ -23,11 +23,12 @@ import FileTreeSection from './FileTreeSection';
 import GitSection from './GitSection';
 import SessionFilesSection from './SessionFilesSection';
 import {
-  ChartBarIcon, ChevronRightIcon, CpuIcon, LayersIcon, McpIcon, MonitorIcon,
+  ChartBarIcon, GlobeIcon, ChevronRightIcon, CpuIcon, LayersIcon, McpIcon, MonitorIcon,
   MoonIcon, PanelRightIcon, PluginsIcon, RefreshIcon, RulesIcon, SparkleIcon, SunIcon,
 } from './icons';
 import type {
   AgentTaskItem,
+  BrowserViewPayload,
   FileTreeNode,
   GitStatusSnapshot,
   McpServerSnapshot,
@@ -90,6 +91,12 @@ interface RightPanelProps {
   rules: RuleSnapshot[];
   /** MCP 服务器列表 */
   mcpServers: McpServerSnapshot[];
+  /** Browser Use 实时画面快照（null = 尚未收到） */
+  browserView: BrowserViewPayload | null;
+  /** Browser Use 画面卡片是否已启用 */
+  browserViewEnabled: boolean;
+  /** 启用/关闭浏览器画面推送 */
+  onToggleBrowserView: (enabled: boolean) => void;
   /** 面板宽度（可选，默认 260） */
   width?: number;
   /** 展开时刷新资源回调（区块展开或面板展开时触发） */
@@ -110,7 +117,9 @@ export default function RightPanel({
   fileTree, fileTreeLoadingPaths, gitStatus, gitLoading,
   sessionFiles, sessionFilesLoading, onRequestSessionFiles, onOpenSessionFile,
   onRequestFileTree, onRequestGitStatus, onOpenFile, onOpenFileDiff,
-  skills, plugins, rules, mcpServers, width = 260, onRefreshResources,
+  skills, plugins, rules, mcpServers,
+  browserView, browserViewEnabled, onToggleBrowserView,
+  width = 260, onRefreshResources,
 }: RightPanelProps) {
   // 主题（浅色/深色/跟随系统）— 移动到底部按钮，与左栏设置按钮风格一致
   const { theme, toggleTheme } = useTheme();
@@ -380,6 +389,14 @@ export default function RightPanel({
             </div>
           </div>
         )}
+
+        {/* Browser Use 实时画面（内置浏览器运行时的可视化；仅 web 端展示） */}
+        <BrowserViewCard
+          lang={lang}
+          view={browserView}
+          enabled={browserViewEnabled}
+          onToggle={onToggleBrowserView}
+        />
       </>
       )}
       </div>
@@ -409,6 +426,85 @@ export default function RightPanel({
         </button>
       </div>
     </aside>
+  );
+}
+
+// ---- Browser Use 实时画面卡片 ----
+
+/**
+ * Browser Use 实时画面卡片（右栏用量页签）
+ *
+ * 展示受管 Chromium 活动标签页的实时画面（JPEG 帧流）、当前 URL 与标签页数。
+ * 默认关闭（不产生任何画面采样开销）；用户点开后由后端按内容变化推送帧。
+ */
+export function BrowserViewCard({
+  lang, view, enabled, onToggle,
+}: {
+  lang: UiLanguage;
+  view: BrowserViewPayload | null;
+  enabled: boolean;
+  onToggle: (enabled: boolean) => void;
+}) {
+  return (
+    <div className="px-4 pb-3">
+      <div className="py-2 pb-2 text-[11px] text-content-disabled font-semibold px-1 uppercase tracking-widest">
+        {t(lang, 'browserViewTitle')}
+      </div>
+      {!enabled ? (
+        <button
+          onClick={() => onToggle(true)}
+          className="pill-badge w-full flex items-center justify-center gap-2 text-xs text-content-secondary hover:text-content-primary rounded-lg px-2 py-2 transition-colors cursor-pointer"
+        >
+          <GlobeIcon className="w-3.5 h-3.5" />
+          <span className="text-[11px] font-medium">{t(lang, 'browserViewShow')}</span>
+        </button>
+      ) : (
+        <div className="px-1 pt-1">
+          <div className="relative rounded-lg overflow-hidden border border-border-light bg-black/5 mb-1.5">
+            {view?.available && view.image ? (
+              <img
+                src={`data:image/jpeg;base64,${view.image}`}
+                alt={view.title || view.url || 'browser'}
+                className="w-full h-auto block"
+                draggable={false}
+              />
+            ) : (
+              <div className="h-28 flex items-center justify-center px-3 text-center text-[11px] text-content-disabled">
+                {t(lang, view?.available === false && view?.reason === 'disabled' ? 'browserViewDisabled' : 'browserViewNotStarted')}
+              </div>
+            )}
+          </div>
+          <div className="flex items-center justify-between text-xs mb-1">
+            <span className="text-content-secondary truncate flex-1" title={view?.url || ''}>
+              {view?.url || '—'}
+            </span>
+            <button
+              onClick={() => onToggle(false)}
+              title={t(lang, 'browserViewHide')}
+              aria-label={t(lang, 'browserViewHide')}
+              className="ml-2 text-content-secondary hover:text-content-primary transition-colors cursor-pointer shrink-0"
+            >
+              <PanelRightIcon className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          {view?.available && (
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[10px] text-content-secondary bg-[var(--badge-bg-subtle)] px-1.5 py-0.5 rounded-full">
+                {t(lang, view.headless ? 'browserViewHeadless' : 'browserViewHeaded')}
+              </span>
+              <span className="text-[10px] text-content-secondary bg-[var(--badge-bg-subtle)] px-1.5 py-0.5 rounded-full">
+                {t(lang, view.profile === 'user' ? 'browserViewProfileUser' : 'browserViewProfileBlank')}
+              </span>
+              {view.tabs && view.tabs.length > 0 && (
+                <span className="text-[10px] text-content-secondary bg-[var(--badge-bg-subtle)] px-1.5 py-0.5 rounded-full tabular-nums">
+                  {view.tabs.length} tabs
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

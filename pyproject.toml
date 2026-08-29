@@ -62,13 +62,17 @@ dev = [
 feishu = [
     "lark-oapi>=1.4.0",
 ]
+browser = [
+    # Browser Use 子系统（受管 Chromium 驱动）；浏览器可执行文件自动探测
+    "playwright>=1.50.0",
+]
 weixin = [
     "aiohttp>=3.9.0",
     "cryptography>=42.0.0",
     "qrcode>=7.4.0",
 ]
 all = [
-    "illusion-agent[feishu,weixin]",
+    "illusion-agent[feishu,weixin,browser]",
 ]
 
 [project.scripts]
@@ -88,6 +92,8 @@ packages = ["src/illusion"]
 "frontend/terminal/src" = "illusion/_frontend/src"
 "frontend/terminal/dist" = "illusion/_frontend/dist"
 "frontend/web/dist" = "illusion/_web_dist"
+# Browser Use node_repl 运行时（mcp-server 产物 + browser-client + docs）
+"browser_runtime/dist" = "illusion/_browser_runtime"
 
 [tool.hatch.build.hooks.custom]
 path = "scripts/hatch_build.py"

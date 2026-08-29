@@ -13,6 +13,7 @@
   - [Memory System Configuration](#memory-system-configuration)
   - [Auto Title Configuration](#auto-title-configuration)
   - [Notification Toggles (Toast & Sound)](#notification-toggles-toast--sound)
+  - [Browser Use](#browser-use)
   - [Sandbox Configuration](#sandbox-configuration)
 
 ---
@@ -121,6 +122,19 @@ Uses `env_N` grouped format. Each `env_N` is an independent environment config (
     "enabled": true,
     "sound": true
   },
+  "browser": {
+    "enabled": false,
+    "profile": "blank",
+    "user_data_dir": "",
+    "headless": true,
+    "channel": "auto",
+    "executable_path": "",
+    "cdp_url": "",
+    "viewport": { "width": 1280, "height": 720 },
+    "keep_alive_minutes": 30,
+    "stream_interval_ms": 800,
+    "screenshot_quality": 60
+  },
   "sandbox": {
     "enabled_platforms": [],
     "excluded_commands": [],
@@ -167,6 +181,10 @@ Uses `env_N` grouped format. Each `env_N` is an independent environment config (
 | `effort` | string | "medium" | Reasoning effort: low/medium/high/xhigh/max |
 | `notifications.enabled` | bool | true | Master toggle for toast notifications (task completion/termination, questions, permission reminders); when off the backend stops emitting toast events |
 | `notifications.sound` | bool | true | Toast sound-effect toggle (only effective while `notifications.enabled` is on) |
+| `browser.enabled` | bool | false | Master switch for the built-in Browser Use runtime; when on, injects the `node_repl` MCP server, browser skills, and docs (see [Browser Use](browser-use.md)) |
+| `browser.profile` | string | "blank" | `"blank"` = disposable clean profile; `"user"` = the user's real browser data (close the browser first) |
+| `browser.headless` | bool | true | Headless browser (silent); `false` opens a visible window |
+| `browser.keep_alive_minutes` | int | 30 | Idle auto-recycle for the browser; 0 disables recycling |
 | `working_directory` | string | - | Fixed working directory (optional) |
 
 ---
@@ -498,6 +516,28 @@ Besides editing settings.json directly, these toggles are also available in the 
 > **Coupling rule**: the two toggles are stored independently, but **the sound is processed only while the toast master toggle is on** — with `enabled=false` nothing plays regardless of `sound`.
 
 ---
+
+### Browser Use
+
+Built-in browser automation. See [Browser Use](browser-use.md) for the full
+field reference, CLI session overrides (`--browser-use`, `--browser-profile`),
+and the model-facing workflow.
+
+```json
+{
+  "browser": {
+    "enabled": true,
+    "profile": "blank",
+    "headless": true
+  }
+}
+```
+
+Missing `browser` keys are materialized with defaults on first load (same
+policy as `sandbox`/`notifications`). `profile="blank"` launches a disposable
+user-data directory so the agent never touches your real browser state;
+`profile="user"` attaches your real profile data (the running browser must be
+closed first to release the profile lock).
 
 ### Sandbox Configuration
 

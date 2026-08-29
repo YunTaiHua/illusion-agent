@@ -107,6 +107,9 @@ class FrontendRequest(BaseModel):
         "agent_wizard_submit",
         # === Goal 状态栏操作（web GoalBar；terminal 用 /goal 命令）===
         "goal_action",
+        # === Browser Use 实时画面（web 端右栏用量页签）===
+        "web_browser_view_toggle",
+        "web_request_browser_view",
     ]
     line: str | None = None
     command: str | None = None
@@ -140,6 +143,8 @@ class FrontendRequest(BaseModel):
     model: str | None = None  # agent_generate_request 使用的模型
     fields: dict[str, Any] | None = None  # agent_wizard_submit 的字段
     scope: str | None = None  # agent_wizard_submit 的作用域（user/project）
+    # === web_browser_view_toggle 专属字段：true 开启本连接的浏览器画面流 ===
+    browser_view_enabled: bool | None = None
     # === goal_action 专属字段（web GoalBar 的 pause/resume/edit/clear）===
     goal_action: str | None = None  # pause | resume | edit | clear
     goal_id: str | None = None  # CAS：当前 goal 的精确 id
@@ -302,6 +307,8 @@ class BackendEvent(BaseModel):
         "update_available",
         # === Toast 通知推送（web/desktop 监管外提醒，前端可透传系统级通知）===
         "toast",
+        # === Browser Use 实时画面（web_browser_view_toggle 开启后周期推送）===
+        "web_browser_view",
     ]
     select_options: list[dict[str, Any]] | None = None
     message: str | None = None
@@ -327,6 +334,8 @@ class BackendEvent(BaseModel):
     reasoning: str | None = None
     command_result_data: dict[str, Any] | None = None
     items: list[TranscriptItem] | None = None
+    # Browser Use 实时画面载荷（available/url/title/tabs/image 等）
+    browser_view: dict[str, Any] | None = None
     # 新增：结构化输出支持
     structured_output: dict[str, Any] | None = None
     output_type: str | None = None

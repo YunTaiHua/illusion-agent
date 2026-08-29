@@ -160,6 +160,34 @@ class McpJsonConfig(BaseModel):
         return data
 
 
+@dataclass
+class McpImageContent:
+    """MCP 图片内容块（如 Browser Use 截图）。
+
+    Attributes:
+        data: base64 编码的图片数据
+        mime_type: MIME 类型（image/png 等）
+    """
+
+    data: str
+    mime_type: str = "image/png"
+
+
+@dataclass
+class McpToolCallResult:
+    """MCP 工具调用结果（保留内容块细节）。
+
+    Attributes:
+        text: 文本内容（非文本块序列化为 JSON 文本）
+        images: 图片内容块列表（call_tool 会将其折叠进文本，此接口保留）
+        is_error: 服务器是否标记为错误
+    """
+
+    text: str
+    images: list[McpImageContent] = field(default_factory=list)
+    is_error: bool = False
+
+
 @dataclass(frozen=True)
 class McpToolInfo:
     """

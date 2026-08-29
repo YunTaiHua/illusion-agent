@@ -388,6 +388,12 @@ class WebBackendHost:
         # 必须串行执行，前一个完成释放锁后下一个才能发送 modal_request。
         # modal 锁按会话隔离（跨会话不阻塞；同会话串行防覆盖）
         self._modal_locks: dict[str, asyncio.Lock] = {}
+        # Browser Use 实时画面（web 端右栏用量页签）：
+        # _browser_view_enabled 仅为本连接的展示开关；_browser_view_service 记录
+        # 当前被开启画面采样的服务实例（会话/工作区切换时转移，关闭时归还）
+        self._browser_view_enabled = False
+        self._browser_view_service: Any = None
+        self._last_browser_view: dict[str, Any] | None = None  # 去重：内容变化才推送
         # Web 专属请求分发器（处理 web_* 前缀请求，与 terminal 路径隔离）
         from illusion.ui.web.ws_web_api import WebApiDispatcher
 
@@ -522,6 +528,7 @@ class WebBackendHost:
                 await asyncio.sleep(1.0)
                 if self._running and not self._ws_closed and self._bundle is not None:
                     await self._emit(self._status_snapshot())
+                    await self._push_browser_view_if_due()
 
         self._periodic_task = asyncio.create_task(_periodic_status_update())
 
@@ -2185,6 +2192,79 @@ class WebBackendHost:
         if self._active_session_id and self._active_session_id in self._sessions:
             return self._sessions[self._active_session_id]
         return None
+
+    # --- Browser Use 实时画面（web 端右栏用量页签） ---
+
+    def _active_browser_service(self) -> Any:
+        """返回活跃会话所属工作区 bundle 的 Browser Use 服务（未启用时 None）。"""
+        bundle = self._active_bundle() or self._bundle
+        if bundle is None:
+            return None
+        return getattr(bundle, "browser_service", None)
+
+    async def set_browser_view_enabled(self, enabled: bool) -> None:
+        """设置本连接的浏览器画面展示开关（web_browser_view_toggle 处理入口）。"""
+        self._browser_view_enabled = bool(enabled)
+        await self._push_browser_view_if_due(force=True)
+
+    async def _push_browser_view_if_due(self, *, force: bool = False) -> None:
+        """按需推送 web_browser_view 事件（每秒周期调用 + 开关切换时强制）。
+
+        推送策略：
+        - 开关关闭：归还画面采样标记（避免无人观看时的持续截图），不推送
+        - 开关开启但会话切换到无服务的 bundle：采样标记随会话转移；
+          无 Browser Use 服务时推送一次 available=false 占位
+        - 内容去重：快照对象引用未变（画面无更新）时跳过
+        """
+        if not self._browser_view_enabled:
+            if self._browser_view_service is not None:
+                try:
+                    self._browser_view_service.set_view_streaming(False)
+                except Exception:
+                    log.debug("browser view 采样关闭失败", exc_info=True)
+                self._browser_view_service = None
+            self._last_browser_view = None
+            return
+        service = self._active_browser_service()
+        if service is None:
+            # 当前工作区未启用 Browser Use：占位提示（前端显示"未启用"）
+            if force or self._last_browser_view != {"available": False}:
+                self._last_browser_view = {"available": False}
+                await self._emit(
+                    BackendEvent(
+                        type="web_browser_view",
+                        browser_view={
+                            "available": False,
+                            "reason": "disabled",
+                        },
+                    )
+                )
+            return
+        # 采样标记随会话/工作区切换转移（旧服务关闭采样）
+        if self._browser_view_service is not None and self._browser_view_service is not service:
+            try:
+                self._browser_view_service.set_view_streaming(False)
+            except Exception:
+                log.debug("browser view 采样转移失败", exc_info=True)
+        if not service.view_streaming:
+            service.set_view_streaming(True)
+        self._browser_view_service = service
+        view = service.current_view()
+        if view is None:
+            # 浏览器尚未启动：推送占位（首个 tab 创建后出现画面）
+            if force or self._last_browser_view != {"available": False}:
+                self._last_browser_view = {"available": False}
+                await self._emit(
+                    BackendEvent(
+                        type="web_browser_view",
+                        browser_view={"available": False, "reason": "not_started"},
+                    )
+                )
+            return
+        if view is self._last_browser_view and not force:
+            return  # 快照对象未更新（画面与元数据均无变化）
+        self._last_browser_view = view
+        await self._emit(BackendEvent(type="web_browser_view", browser_view=dict(view)))
 
     async def _handle_goal_action(self, request: FrontendRequest) -> None:
         """处理 GoalBar 的 pause/resume/edit/clear 操作。
@@ -3856,6 +3936,18 @@ class WebBackendHost:
         """
         # 1. resolve 所有 pending permission/question futures
         self._resolve_pending_futures()
+
+        # 1'. 归还 Browser Use 画面采样标记（连接关闭后服务可完全静默）。
+        # getattr 防御：_shutdown 可能作用于部分初始化的 host（异常路径）。
+        browser_service = getattr(self, "_browser_view_service", None)
+        self._browser_view_enabled = False
+        self._browser_view_service = None
+        self._last_browser_view = None
+        if browser_service is not None:
+            try:
+                browser_service.set_view_streaming(False)
+            except Exception:
+                log.debug("browser view 采样归还失败", exc_info=True)
 
         # 2. 取消周期状态更新 task
         if self._periodic_task is not None and not self._periodic_task.done():

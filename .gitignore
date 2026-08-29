@@ -67,6 +67,8 @@ yarn-error.log*
 # Frontend build artifacts
 frontend/terminal/dist/
 frontend/web/dist/
+browser_runtime/node_modules/
+browser_runtime/dist/
 
 # Desktop (Electron)
 desktop/node_modules/

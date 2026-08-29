@@ -119,6 +119,18 @@ def main(
         help="Run the structured backend host for the React terminal UI",
         hidden=True,
     ),
+    browser_use: str | None = typer.Option(
+        None,
+        "--browser-use",
+        help="Browser Use for this session: off, auto (follow settings), headless, or headed",
+        rich_help_panel="Advanced",
+    ),
+    browser_profile: str | None = typer.Option(
+        None,
+        "--browser-profile",
+        help='Browser profile: "blank" (clean, default) or "user" (your real browser data; close the browser first)',
+        rich_help_panel="Advanced",
+    ),
 ) -> None:
     """主入口函数：启动交互式会话或运行单个提示词
 
@@ -142,7 +154,24 @@ def main(
         dangerously_skip_permissions: 跳过权限检查
         cwd: 会话工作目录
         backend_only: 运行结构化后端主机
+        browser_use: 本会话 Browser Use 模式（off/auto/headless/headled）
+        browser_profile: 本会话浏览器档案（blank/user）
     """
+    # Browser Use 会话覆盖（--browser-use / --browser-profile）：经环境变量
+    # 传递给本进程的运行时构建（build_runtime 读取），不持久化到 settings.json
+    if browser_use is not None:
+        browser_use = browser_use.strip().lower()
+        if browser_use not in ("off", "auto", "headless", "headed"):
+            print(_t("browser_use_invalid", value=browser_use), file=sys.stderr)
+            raise typer.Exit(1)
+        os.environ["ILLUSION_BROWSER_USE"] = browser_use
+    if browser_profile is not None:
+        browser_profile = browser_profile.strip().lower()
+        if browser_profile not in ("blank", "user"):
+            print(_t("browser_profile_invalid", value=browser_profile), file=sys.stderr)
+            raise typer.Exit(1)
+        os.environ["ILLUSION_BROWSER_PROFILE"] = browser_profile
+
     # 读取settings.json中的working_directory字段，切换工作目录（子命令也适用）
     from illusion.config import load_settings
     settings = load_settings()
