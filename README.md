@@ -42,7 +42,7 @@ a cron scheduler for unattended automation — spanning Feishu, WeChat, and QQ.
 - 🎯 **Reasoning Effort Control** - low/medium/high/xhigh/max levels
 - 🪟 **Deep Windows Optimization** - Auto-detect Git, PowerShell support
 - 🖥️ **Zero Terminal Flicker** - Stable rendering based on Ink Static component
-- 📦 **Desktop Edition** - Electron shell with bundled Python/Node.js, portable builds for Windows/macOS/Linux, zero environment setup
+- 📦 **Desktop Edition** - Electron shell with bundled Python/Node.js, installers for Windows/macOS/Linux, zero environment setup, in-app auto-update
 
 ### Interface Preview
 

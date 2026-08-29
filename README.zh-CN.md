@@ -39,7 +39,7 @@ IllusionAgent 是一款开源的 AI 智能体平台。它将多模型语言模�
 - 🎯 **推理强度控制** - 支持 low/medium/high/xhigh/max 五种推理强度级别
 - 🪟 **Windows 系统深度优化** - 自动查找 Git、PowerShell 支持
 - 🖥️ **终端渲染零闪烁** - 基于 Ink Static 组件的稳定渲染
-- 📦 **桌面版** - Electron 壳内置 Python/Node.js 运行时，三端便携版分发，解压即用零环境配置
+- 📦 **桌面版** - Electron 壳内置 Python/Node.js 运行时，三端安装包分发，零环境配置，支持应用内自动更新
 
 ### 界面展示
 

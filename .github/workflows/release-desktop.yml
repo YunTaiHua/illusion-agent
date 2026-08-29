@@ -66,6 +66,7 @@ jobs:
           files: |
             desktop/release/*.exe
             desktop/release/*.dmg
+            desktop/release/*.zip
             desktop/release/*.AppImage
             desktop/release/*.deb
             desktop/release/latest*.yml
