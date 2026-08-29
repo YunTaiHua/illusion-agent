@@ -26,8 +26,6 @@ interface DesktopUpdaterState {
 interface IllusionDesktopBridge {
   /** Electron 版本 */
   version: string;
-  /** 应用版本（package.json version） */
-  appVersion: string;
   /** 运行平台：win32 / darwin / linux */
   platform: string;
   /** 最小化窗口 */

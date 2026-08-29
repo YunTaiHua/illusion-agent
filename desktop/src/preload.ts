@@ -13,13 +13,11 @@
  * 浏览器直接访问 Web 端时本脚本不执行，window.illusionDesktop 为 undefined。
  */
 /// <reference lib="dom" />
-import { app, contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('illusionDesktop', {
   /** Electron 版本 */
   version: process.versions.electron,
-  /** 应用版本（package.json version，更新 UI 显示用） */
-  appVersion: app.getVersion(),
   /** 运行平台：win32 / darwin / linux */
   platform: process.platform,
   /** 最小化窗口 */
