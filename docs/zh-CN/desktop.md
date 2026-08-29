@@ -92,10 +92,25 @@ xattr -dr com.apple.quarantine /Applications/IllusionAgent.app
 
 ## 🔄 更新
 
-Windows 走 NSIS 安装包：在现有安装上重新运行新版 `IllusionAgent-Setup-<版本>.exe` 即可原地更新。配置目录 `~/.illusion/` 跨版本保留。
+### 自动更新（推荐）
+
+桌面版在 Windows 与 Linux 内置自动更新（基于 electron-updater + GitHub Releases，点击式：发现新版本仅在顶栏亮出图标，点击图标才开始下载，不打扰使用）：
+
+1. 应用每次启动后自动检查新版本；长期不关程序时每 12 小时复查一次兜底。
+2. 发现新版本时顶栏最小化按钮附近出现更新图标；点击图标开始下载，下载中显示进度环。
+3. 下载完成后图标变为就绪态：点击图标立即重启安装；不点击则关闭程序时自动完成安装（托盘隐藏时会有系统通知提醒）。
+
+更新包经 SHA512 校验保证完整性；更新在现有安装上原地执行，配置目录 `~/.illusion/` 跨版本保留。
+
+> - macOS 因应用未签名，Squirrel.Mac 不支持自动更新，**需手动更新**（下载新 dmg 覆盖 `/Applications`）；签名后此限制解除。
+> - Linux 仅 AppImage 支持自动更新；deb 暂不支持，请手动重新安装。
+> - 自动更新依赖 GitHub Releases 的网络可达性；检查或下载失败时顶栏图标不出现，应用会自动退避重试数次，仍失败则等待下次周期复查，也可从 [Releases 页面](https://github.com/YunTaiHua/illusion-agent/releases) 手动下载新版安装包覆盖安装。
+
+### 手动更新
+
+在现有安装上重新运行新版安装包（Windows 为 `IllusionAgent-Setup-<版本>.exe`，macOS 为挂载新 dmg 覆盖 `/Applications`，Linux 为替换 AppImage 文件）即可原地更新。
 
 ## ⚠️ 注意事项
 
-- **未签名**：三端均无代码签名，Windows 触发 SmartScreen，macOS 触发 Gatekeeper，Linux 无影响。
+- **未签名**：三端均无代码签名，Windows 触发 SmartScreen，macOS 触发 Gatekeeper，Linux 无影响。Windows/Linux 的自动更新不受此影响：更新以静默方式在应用内触发，不会出现额外的系统警告；macOS 因未签名无法自动更新（见上文）。
 - **首次启动较慢**：内置运行时首次初始化需数秒。
-- **macOS 便携**：macOS 无真正"便携版"概念，仅提供未签名 `.app`（dmg 分发）。

@@ -15,6 +15,7 @@
  */
 
 import { t, type UiLanguage } from '../i18n';
+import { isIconVisible, useDesktopUpdater } from '../hooks/useDesktopUpdater';
 
 /** 是否运行在桌面壳内（模块加载时求值一次） */
 const isDesktop = typeof window !== 'undefined' && !!window.illusionDesktop;
@@ -47,6 +48,102 @@ function WindowButton({
   );
 }
 
+/** 进度环几何常量（r=6 的圆周长，供 stroke-dasharray 计算） */
+const RING_RADIUS = 6;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+
+/**
+ * 顶栏更新图标（最小化按钮附近）。
+ * 发现新版本后自动下载：下载中显示环形进度，就绪后点击立即重启安装；
+ * 不点击则关闭程序时自动安装。检查中/无更新/失败时隐藏（失败等下次复查）。
+ */
+function UpdateButton({ lang }: { lang: UiLanguage }) {
+  const { state, startDownload, installNow } = useDesktopUpdater();
+  if (!isIconVisible(state)) return null;
+
+  const readyTitle = state.version
+    ? t(lang, 'updater_ready_desc').replace('{version}', state.version)
+    : t(lang, 'updater_ready_desc_no_version');
+
+  // 发现新版本：点击开始下载
+  if (state.status === 'available') {
+    const availableTitle = state.version
+      ? t(lang, 'updater_available_tooltip').replace('{version}', state.version)
+      : t(lang, 'updater_available_tooltip_no_version');
+    return (
+      <button
+        onClick={startDownload}
+        title={availableTitle}
+        aria-label={availableTitle}
+        className="w-8 h-9 flex items-center justify-center text-content-secondary hover:text-content-primary hover:bg-black/10 dark:hover:bg-white/10 transition-colors cursor-pointer"
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M8 2v7.5" />
+          <path d="M4.8 7l3.2 3.2L11.2 7" />
+          <path d="M2.5 13.5h11" />
+        </svg>
+      </button>
+    );
+  }
+
+  // 就绪态：点击立即重启安装（不点击则应用退出时自动安装）
+  if (state.status === 'downloaded') {
+    return (
+      <button
+        onClick={installNow}
+        title={readyTitle}
+        aria-label={readyTitle}
+        className="w-8 h-9 flex items-center justify-center text-primary hover:bg-black/10 dark:hover:bg-white/10 transition-colors cursor-pointer"
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M8 2v7.5" />
+          <path d="M4.8 7l3.2 3.2L11.2 7" />
+          <path d="M2.5 13.5h11" />
+        </svg>
+      </button>
+    );
+  }
+
+  const downloadingTitle = state.version
+    ? t(lang, 'updater_downloading_desc').replace('{version}', state.version)
+    : t(lang, 'updater_downloading_desc_no_version');
+
+  // 下载中：环形进度（stroke-dasharray 按 percent 截取圆周）
+  if (state.status === 'downloading' && state.progress) {
+    const percent = Math.min(100, Math.max(0, state.progress.percent));
+    return (
+      <span
+        title={`${downloadingTitle} ${percent.toFixed(0)}%`}
+        className="w-8 h-9 flex items-center justify-center text-content-secondary"
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" strokeWidth="1.5" strokeLinecap="round">
+          <circle cx="8" cy="8" r={RING_RADIUS} stroke="currentColor" strokeOpacity="0.25" />
+          <circle
+            cx="8"
+            cy="8"
+            r={RING_RADIUS}
+            stroke="currentColor"
+            strokeDasharray={`${(percent / 100) * RING_CIRCUMFERENCE} ${RING_CIRCUMFERENCE}`}
+            transform="rotate(-90 8 8)"
+          />
+        </svg>
+      </span>
+    );
+  }
+
+  // 下载中但进度事件未到：虚线环旋转占位
+  return (
+    <span
+      title={downloadingTitle}
+      className="w-8 h-9 flex items-center justify-center text-content-secondary"
+    >
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" className="animate-spin">
+        <circle cx="8" cy="8" r={RING_RADIUS} strokeDasharray="8 6" />
+      </svg>
+    </span>
+  );
+}
+
 /**
  * 自定义顶部栏。浏览器端返回 null，仅桌面壳内渲染。
  *
@@ -76,9 +173,17 @@ export default function TitleBar({ lang }: { lang: UiLanguage }) {
 
       <div className="flex-1" />
 
-      {/* Windows/Linux：右侧自定义窗口控制按钮；macOS 使用原生交通灯 */}
+      {/* macOS：原生交通灯在左侧，更新图标置于顶栏右侧 */}
+      {isMac && (
+        <div className="app-region-no-drag pr-3 flex items-center">
+          <UpdateButton lang={lang} />
+        </div>
+      )}
+
+      {/* Windows/Linux：更新图标紧邻最小化按钮，右侧自定义窗口控制按钮 */}
       {!isMac && api && (
         <div className="app-region-no-drag flex items-center">
+          <UpdateButton lang={lang} />
           <WindowButton onClick={api.minimize} variant="normal" title={t(lang, 'window_minimize')}>
             <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round">
               <path d="M1.5 5.5h8" />

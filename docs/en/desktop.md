@@ -96,13 +96,27 @@ The desktop edition bundles an independent Python and Node.js runtime inside the
 
 ## 🔄 Updates
 
-Windows uses the NSIS installer package: reinstalling a newer `IllusionAgent-Setup-<version>.exe` over the current installation updates the app in place. The config directory `~/.illusion/` is preserved across updates.
+### Automatic updates (recommended)
+
+The desktop edition ships with built-in auto-update on Windows and Linux (electron-updater + GitHub Releases, click-first: a title-bar icon appears when a new version is found, and the download starts only after you click it):
+
+1. The app checks for updates after every startup; for long-running sessions it re-checks every 12 hours as a fallback.
+2. When a new version is found, an update icon appears next to the minimize button in the title bar; click it to start the download, with a progress ring shown while downloading.
+3. Once downloaded, the icon turns into a ready state: click it to restart and install immediately, or simply keep working — the update is installed automatically the next time you quit the app (a system notification reminds you while the window is hidden in the tray).
+
+Update packages are verified via SHA512 checksums. Updates run in place over the existing installation, and the `~/.illusion/` config directory is preserved across versions.
+
+> - macOS cannot auto-update while the app is unsigned (Squirrel.Mac requires a signed app) — **update manually** by downloading the new dmg and overwriting `/Applications`; this limitation goes away once signing is in place.
+> - On Linux only AppImage supports auto-update; deb is not supported — reinstall manually.
+> - Auto-update requires access to GitHub Releases. If a check or download fails, the title bar icon simply stays hidden while the app retries with a short backoff before falling back to the next periodic re-check; you can also grab the new installer from the [Releases page](https://github.com/YunTaiHua/illusion-agent/releases) and install it over the current one.
+
+### Manual updates
+
+Run the new installer over the current installation (`IllusionAgent-Setup-<version>.exe` on Windows, mount the new dmg and overwrite `/Applications` on macOS, replace the AppImage file on Linux) to update in place.
 
 ## ⚠️ Notes
 
-* **Unsigned**: no code signing on any platform — Windows triggers SmartScreen, macOS triggers Gatekeeper, Linux is unaffected.
+* **Unsigned**: no code signing on any platform — Windows triggers SmartScreen, macOS triggers Gatekeeper, Linux is unaffected. Auto-update on Windows/Linux is unaffected: updates are triggered from within the app (silent install) and produce no extra system warnings; macOS cannot auto-update while unsigned (see above).
 
 * **Slow first launch**: the bundled runtime takes a few seconds to initialize on first run.
-
-* **macOS portability**: macOS has no true "portable" concept; only an unsigned `.app` (dmg distribution) is provided.
 

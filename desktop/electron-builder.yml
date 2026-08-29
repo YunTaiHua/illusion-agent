@@ -33,7 +33,9 @@ win:
   icon: build/icon.ico
 
 mac:
-  target: dmg
+  target:
+    - dmg
+    - zip
   icon: build/icon.icns
   category: public.app-category.developer-tools
   hardenedRuntime: true

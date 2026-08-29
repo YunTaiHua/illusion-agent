@@ -13,11 +13,13 @@
  * 浏览器直接访问 Web 端时本脚本不执行，window.illusionDesktop 为 undefined。
  */
 /// <reference lib="dom" />
-import { contextBridge, ipcRenderer } from 'electron';
+import { app, contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('illusionDesktop', {
   /** Electron 版本 */
   version: process.versions.electron,
+  /** 应用版本（package.json version，更新 UI 显示用） */
+  appVersion: app.getVersion(),
   /** 运行平台：win32 / darwin / linux */
   platform: process.platform,
   /** 最小化窗口 */
@@ -34,6 +36,23 @@ contextBridge.exposeInMainWorld('illusionDesktop', {
       title: typeof title === 'string' ? title : '',
       body: typeof body === 'string' ? body : '',
     }),
+  /**
+   * 自动更新：主进程自动检查新版本并亮出顶栏更新图标，用户点击图标下载；
+   *   - getState：拉取主进程当前更新状态（挂载兜底同步，避免错过广播）
+   *   - download：用户点击图标开始下载（仅 available 态有效）
+   *   - install：更新就绪后点击图标立即重启安装（不点击则退出时自动安装）
+   *   - onEvent：订阅状态广播（'updater:event'，载荷为主进程 UpdaterState）
+   */
+  updater: {
+    getState: () => ipcRenderer.invoke('updater:get-state'),
+    download: () => ipcRenderer.send('updater:download'),
+    install: () => ipcRenderer.send('updater:install'),
+    onEvent: (cb: (state: unknown) => void) => {
+      const handler = (_event: unknown, state: unknown) => cb(state);
+      ipcRenderer.on('updater:event', handler);
+      return () => ipcRenderer.removeListener('updater:event', handler);
+    },
+  },
 });
 
 /**

@@ -22,6 +22,8 @@ const MESSAGES = {
     err_no_runtime: '未找到可用的 Python 运行时，无法启动后端。',
     err_backend_failed: '后端启动失败：{message}',
     err_backend_crashed: '后端意外退出（退出码 {code}），应用将关闭。',
+    update_downloaded_notify: '新版本 {version} 已就绪，重启应用后安装。',
+    update_downloaded_notify_no_version: '新版本已就绪，重启应用后安装。',
   },
   'en-US': {
     tray_show: 'Show Main Window',
@@ -32,6 +34,8 @@ const MESSAGES = {
     err_no_runtime: 'No usable Python runtime found, cannot start backend.',
     err_backend_failed: 'Backend failed to start: {message}',
     err_backend_crashed: 'Backend exited unexpectedly (exit code {code}), the app will close.',
+    update_downloaded_notify: 'Version {version} is ready and will be installed on next restart.',
+    update_downloaded_notify_no_version: 'The update is ready and will be installed on next restart.',
   },
 } as const;
 

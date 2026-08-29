@@ -22,6 +22,12 @@ import { resolveRuntime } from './runtime';
 import { Backend } from './backend';
 import { createTray } from './tray';
 import { t } from './i18n';
+import {
+  initUpdater,
+  downloadUpdate,
+  quitAndInstall,
+  currentState,
+} from './updater';
 
 // 全局引用，防止被 GC 回收导致窗口/托盘消失
 let mainWindow: BrowserWindow | null = null;
@@ -145,6 +151,18 @@ app.whenReady().then(async () => {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
     }
+  });
+
+  // --- 自动更新 ---
+  // 仅打包版生效（开发模式无 app-update.yml，updater 内部跳过）。
+  // 启动即初始化（30s 后首次检查，不等后端就绪），事件经 webContents
+  // 广播给渲染进程顶栏更新图标；before-quit-for-update 置位 isQuitting，
+  // 放行窗口关闭，否则更新安装会被"关闭最小化到托盘"拦截挂起。
+  initUpdater({
+    getMainWindow: () => mainWindow,
+    onBeforeQuitForUpdate: () => {
+      isQuitting = true;
+    },
   });
 
   const lang: UiLanguage = getUiLanguage();
@@ -315,6 +333,14 @@ ipcMain.on('open-external', (_event, url: string) => {
     shell.openExternal(url).catch(() => {});
   }
 });
+
+// ========== 自动更新 IPC（preload 暴露 updater 桥，渲染进程顶栏图标调用） ==========
+// 检查由主进程自动驱动（启动检查 + 12h 复查）；下载由用户点击顶栏图标
+// 触发；安装可在就绪后点击图标立即执行，或应用退出时自动完成。
+// 开发模式更新器整体跳过，状态恒为 idle，渲染进程图标自然隐藏。
+ipcMain.handle('updater:get-state', () => currentState());
+ipcMain.on('updater:download', () => downloadUpdate());
+ipcMain.on('updater:install', () => quitAndInstall());
 
 // ========== Toast 透传 IPC：系统级通知（渲染进程不可见时转发任务结果/询问/权限提醒） ==========
 // 音效由渲染进程统一播放（Web Audio，受 settings.json notifications.sound 控制），
