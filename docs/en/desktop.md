@@ -101,8 +101,9 @@ The desktop edition bundles an independent Python and Node.js runtime inside the
 The desktop edition ships with built-in auto-update on Windows and Linux (electron-updater + GitHub Releases, click-first: a title-bar icon appears when a new version is found, and the download starts only after you click it):
 
 1. The app checks for updates after every startup; for long-running sessions it re-checks every 12 hours as a fallback.
-2. When a new version is found, an update icon appears next to the minimize button in the title bar; click it to start the download, with a progress ring shown while downloading.
-3. Once downloaded, the icon turns into a ready state: click it to restart and install immediately, or simply keep working — the update is installed automatically the next time you quit the app (a system notification reminds you while the window is hidden in the tray).
+2. When a new version is found, a **blinking download icon** appears next to the minimize button in the title bar (the install icon does not blink); click it to start the download, with a progress ring shown while downloading.
+3. Once downloaded, the icon turns into a **circle-check install-ready state**, clearly distinct from the download icon: click it to quit the app and run an **explicit install** (full installation progress is shown, and the app restarts automatically when done). Quitting the app normally does not trigger installation.
+4. A system notification reminds you when the download finishes while the window is hidden in the tray.
 
 Update packages are verified via SHA512 checksums. Updates run in place over the existing installation, and the `~/.illusion/` config directory is preserved across versions.
 

@@ -9,8 +9,8 @@
  *   - 启动即检查一次新版本；用户不关程序的场景以 12 小时为周期复查兜底
  *   - 发现新版本仅在顶栏最小化按钮附近亮出更新图标，不自动下载；
  *     用户点击图标才开始下载，进度经事件广播渲染为进度环
- *   - 下载完成后点击图标立即重启安装（quitAndInstall）；
- *     不点击则应用正常退出时自动安装（autoInstallOnAppQuit）
+ *   - 下载完成后图标变为安装就绪态，点击图标才退出应用并显式安装
+ *     （无静默、显示安装进度）；正常退出应用不会触发安装
  *
  * 未签名说明：
  *   更新包完整性由 latest.yml 内嵌的 SHA512 校验（electron-updater 内建）。
@@ -36,7 +36,7 @@ export type UpdaterStatus =
   | 'checking'        // 检查中
   | 'available'       // 发现新版本（随即自动进入下载）
   | 'downloading'     // 下载中
-  | 'downloaded'      // 下载完成（退出自动安装 / 点击图标立即重启安装）
+  | 'downloaded'      // 下载完成（等待用户点击图标显式安装）
   | 'error';          // 出错（离线/GitHub 不可达等；图标隐藏，等待下次复查）
 
 /** 下载进度（与 electron-updater ProgressInfo 对齐的字段子集） */
@@ -137,12 +137,15 @@ export function downloadUpdate(): void {
   autoUpdater.downloadUpdate().catch(() => undefined);
 }
 
-/** 退出并安装已下载的更新：静默安装（沿用上次安装目录）后自动重启应用 */
+/** 退出并安装已下载的更新：显式安装（不静默，显示安装进度 UI）并自动重启应用。
+ * 仅由用户点击顶栏安装按钮触发；应用正常退出不会安装。 */
 export function quitAndInstall(): void {
   if (!isUpdateSupported()) return;
   if (state.status !== 'downloaded') return;
-  // 走正常退出链路清理后端进程树（before-quit → quitApp），随后安装器接管
-  autoUpdater.quitAndInstall(true, true);
+  // 走正常退出链路清理后端进程树（before-quit → quitApp），随后安装器接管。
+  // isSilent=false：NSIS 安装器弹出完整安装界面，进度可见，避免用户误以为失败；
+  // isForceRunAfter=true：安装完成后自动重启应用。
+  autoUpdater.quitAndInstall(false, true);
 }
 
 /**
@@ -154,11 +157,13 @@ export function initUpdater(deps_: UpdaterDeps): void {
   if (!isUpdateSupported() || initialized) return;
   initialized = true;
 
-  // electron-updater 层关闭自动下载，由用户点击顶栏更新图标后经
-  // 'updater:download' IPC 显式触发 downloadUpdate()，状态机串起
-  // checking → available → downloading → downloaded 全程广播
+  // electron-updater 层关闭自动下载与退出自动安装：
+  //   自动下载 → 由用户点击顶栏更新图标后经 'updater:download' IPC 显式触发
+  //   退出自动安装 → 关闭，仅当用户点击安装按钮（'updater:install' IPC）时才
+  //                   quitAndInstall 显式安装，避免"点 X 最小化到托盘"或托盘
+  //                   退出时无感知地在后台动系统
   autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = true; // 已下载的更新在应用退出时自动安装
+  autoUpdater.autoInstallOnAppQuit = false; // 已下载的更新不随应用退出自动安装
 
   autoUpdater.on('checking-for-update', () => {
     if (state.status !== 'checking') setState({ status: 'checking' });

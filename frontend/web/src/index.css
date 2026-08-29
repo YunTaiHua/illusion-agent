@@ -744,6 +744,16 @@ pre code.hljs,
   animation: blink 0.8s ease-in-out infinite;
 }
 
+/* 更新下载按钮提醒闪烁：opacity 1↔0.35 柔和呼吸，吸引注意但不刺眼；
+   仅可用于 available（可下载）态，安装就绪（downloaded）态不闪烁 */
+@keyframes updater-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.animate-updater-blink {
+  animation: updater-blink 1.4s ease-in-out infinite;
+}
+
 /* ========== 思考过程的 prose-sm 样式 ========== */
 .prose-sm {
   font-size: 0.875rem;

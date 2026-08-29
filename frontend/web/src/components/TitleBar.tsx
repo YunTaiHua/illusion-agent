@@ -55,7 +55,9 @@ const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 /**
  * 顶栏更新图标（最小化按钮附近）。
  * 发现新版本后自动下载：下载中显示环形进度，就绪后点击立即重启安装；
- * 不点击则关闭程序时自动安装。检查中/无更新/失败时隐藏（失败等下次复查）。
+ * 不点击则应用退出时自动安装。检查中/无更新/失败时隐藏（失败等下次复查）。
+ * 图标语义区分：下载态（available）为箭头向下的下载图标；安装就绪态
+ * （downloaded）为圆圈对勾图标，避免用户误以为仍需再次下载。
  */
 function UpdateButton({ lang }: { lang: UiLanguage }) {
   const { state, startDownload, installNow } = useDesktopUpdater();
@@ -65,7 +67,7 @@ function UpdateButton({ lang }: { lang: UiLanguage }) {
     ? t(lang, 'updater_ready_desc').replace('{version}', state.version)
     : t(lang, 'updater_ready_desc_no_version');
 
-  // 发现新版本：点击开始下载
+  // 发现新版本：点击开始下载（箭头向下，语义"下载"）
   if (state.status === 'available') {
     const availableTitle = state.version
       ? t(lang, 'updater_available_tooltip').replace('{version}', state.version)
@@ -75,7 +77,7 @@ function UpdateButton({ lang }: { lang: UiLanguage }) {
         onClick={startDownload}
         title={availableTitle}
         aria-label={availableTitle}
-        className="w-8 h-9 flex items-center justify-center text-primary hover:text-primary-hover hover:bg-primary-light dark:hover:bg-white/10 transition-colors cursor-pointer"
+        className="w-8 h-9 flex items-center justify-center text-primary hover:text-primary-hover hover:bg-primary-light dark:hover:bg-white/10 transition-colors cursor-pointer animate-updater-blink"
       >
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           <path d="M8 2v7.5" />
@@ -86,19 +88,19 @@ function UpdateButton({ lang }: { lang: UiLanguage }) {
     );
   }
 
-  // 就绪态：点击立即重启安装（不点击则应用退出时自动安装）
+  // 安装就绪态：点击退出应用并显式安装（圆圈对勾，语义"安装就绪，点击安装"；
+  // 不再随应用退出自动安装，避免用户无感知触发安装）
   if (state.status === 'downloaded') {
     return (
       <button
         onClick={installNow}
         title={readyTitle}
         aria-label={readyTitle}
-        className="w-8 h-9 flex items-center justify-center text-primary hover:bg-black/10 dark:hover:bg-white/10 transition-colors cursor-pointer"
+        className="w-8 h-9 flex items-center justify-center text-primary hover:text-primary-hover hover:bg-primary-light dark:hover:bg-white/10 transition-colors cursor-pointer"
       >
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M8 2v7.5" />
-          <path d="M4.8 7l3.2 3.2L11.2 7" />
-          <path d="M2.5 13.5h11" />
+          <circle cx="8" cy="8" r="6.25" />
+          <path d="M5.6 8.2l1.7 1.7 3.1-3.4" />
         </svg>
       </button>
     );
