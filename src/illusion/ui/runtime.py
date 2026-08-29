@@ -251,6 +251,9 @@ def build_session_engine(
         session_id=session_id,
         print_mode=print_mode,
         goal_manager=_build_goal_manager(settings),
+        # 媒体能力惰性解析：每轮查询时现读盘解析当前模型能力，
+        # /model set 后无需重建引擎即可生效
+        capabilities_resolver=lambda: bundle.current_settings().get_model_capabilities(),
     )
     # 将引擎自身与后台代理追踪器加入工具元数据（与 build_runtime 同构）
     engine._tool_metadata["query_engine"] = engine
@@ -708,6 +711,11 @@ async def build_runtime(
         print_mode=print_mode,
         sandbox_permission_prompt=sandbox_permission_prompt,
         goal_manager=_build_goal_manager(settings),
+        # 媒体能力惰性解析：每轮查询时现读盘解析当前模型能力，
+        # /model set 后无需重建引擎即可生效
+        capabilities_resolver=lambda: (
+            load_settings().merge_cli_overrides(**settings_overrides).get_model_capabilities()
+        ),
     )
     # 将引擎自身添加到工具元数据中，供子 agent 使用
     engine._tool_metadata["query_engine"] = engine
@@ -1193,6 +1201,8 @@ async def handle_line(
                 app_state=bundle.app_state,
                 session_id=bundle.session_id,
                 channel_hint=bundle.channel_hint,
+                # TUI 终端支持交互式命令输入（如 /model set 的能力勾选）
+                interactive=True,
             ),
         )
         if result.reset_session:

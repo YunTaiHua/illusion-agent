@@ -73,13 +73,13 @@
   "env_1": {
     "api_format": "anthropic",
     "base_url": null,
-    "model_1": "claude-sonnet-4-6",
-    "model_2": "claude-opus-4-6"
+    "model_1": {"name": "claude-sonnet-4-6", "capabilities": []},
+    "model_2": {"name": "claude-opus-4-6", "capabilities": []}
   },
   "env_2": {
     "api_format": "openai",
     "base_url": "https://api.openai.com/v1",
-    "model_1": "gpt-5.4"
+    "model_1": {"name": "gpt-5.4", "capabilities": []}
   },
   "model": "env_1.model_1",
   "context_window": 200000
@@ -93,8 +93,8 @@
   "env_1": {
     "api_format": "anthropic",
     "base_url": null,
-    "model_1": "claude-sonnet-4-6",
-    "model_2": "claude-opus-4-6"
+    "model_1": {"name": "claude-sonnet-4-6", "capabilities": []},
+    "model_2": {"name": "claude-opus-4-6", "capabilities": []}
   },
   "model": "env_1.model_1",
   "context_window": 200000,
@@ -218,7 +218,32 @@
 | `base_url` | string\|null | 否 | 自定义 API 端点，null 使用默认端点 |
 | `api_key` | string | 否 | API 密钥（标准 x-api-key 认证） |
 | `auth_token` | string | 否 | Bearer Token 认证（用于 LongCat 等使用 `Authorization: Bearer` 的提供商） |
-| `model_N` | string | 否 | 模型名称：`model_1`、`model_2`、... |
+| `model_N` | object | 否 | 模型声明：`{"name": "...", "capabilities": [...]}`，如 `model_1`、`model_2`、... |
+
+### 模型能力声明（多模态）
+
+每个模型可声明多模态能力（图片输入），未声明一律视为无视觉能力（fail-closed）：
+
+```json
+{
+  "env_1": {
+    "api_format": "openai",
+    "model_1": {
+      "name": "gpt-4o",
+      "capabilities": ["image"]
+    },
+    "model_2": { "name": "deepseek-v3" }
+  },
+  "model": "env_1.model_1"
+}
+```
+
+- `capabilities` 合法值：`"image"`（图片输入）
+- 未配置 `capabilities`（或配置为 `[]`）的模型视为不支持图片输入
+- 能力影响两条链路：
+  - **read_file 工具**：无图片能力的模型读取图片时立即返回明确报错（引导切换带能力的模型），不会把无法理解的图片块注入上下文
+  - **请求发送**：切换模型（含同一 env 内 `model_1` → `model_2`）后，历史中已读取的图片会被自动转为文本占位描述，一次请求成功；切回带能力的模型后图片内容自动恢复（历史本身不丢）
+- `/model set` 在终端交互模式下会询问图片支持并写入；Web 设置面板的模型行提供图片勾选
 
 ### 多模型配置
 
@@ -227,9 +252,9 @@
   "env_1": {
     "api_format": "openai",
     "base_url": "https://integrate.api.nvidia.com/v1",
-    "model_1": "stepfun-ai/step-3.5-flash",
-    "model_2": "minimaxai/minimax-m2.7",
-    "model_3": "meta/llama-3.1-405b-instruct"
+    "model_1": {"name": "stepfun-ai/step-3.5-flash", "capabilities": []},
+    "model_2": {"name": "minimaxai/minimax-m2.7", "capabilities": []},
+    "model_3": {"name": "meta/llama-3.1-405b-instruct", "capabilities": []}
   },
   "model": "env_1.model_1"
 }
@@ -252,8 +277,8 @@ illusion -m env_1.model_2       # CLI 参数指定
   "env_1": {
     "api_format": "anthropic",
     "base_url": null,
-    "model_1": "claude-sonnet-4-6",
-    "model_2": "claude-opus-4-6"
+    "model_1": {"name": "claude-sonnet-4-6", "capabilities": []},
+    "model_2": {"name": "claude-opus-4-6", "capabilities": []}
   },
   "model": "env_1.model_1"
 }
@@ -266,7 +291,7 @@ illusion -m env_1.model_2       # CLI 参数指定
   "env_1": {
     "api_format": "openai",
     "base_url": "https://api.openai.com/v1",
-    "model_1": "gpt-5.4"
+    "model_1": {"name": "gpt-5.4", "capabilities": []}
   },
   "model": "env_1.model_1"
 }
@@ -289,7 +314,7 @@ illusion auth login  # 选择 GitHub Copilot
   "env_1": {
     "api_format": "copilot",
     "base_url": "https://api.githubcopilot.com",
-    "model_1": "gpt-5.5"
+    "model_1": {"name": "gpt-5.5", "capabilities": []}
   }
 }
 ```
@@ -307,7 +332,7 @@ illusion auth login   # 选择 OpenAI Codex
   "env_1": {
     "api_format": "codex",
     "base_url": "https://chatgpt.com/backend-api",
-    "model_1": "codex-mini"
+    "model_1": {"name": "codex-mini", "capabilities": []}
   }
 }
 ```
@@ -322,7 +347,7 @@ LongCat 使用 `Authorization: Bearer` 认证方式，需要通过 `auth_token` 
     "api_format": "anthropic",
     "base_url": "https://api.longcat.chat/anthropic",
     "auth_token": "ak_your_longcat_api_key",
-    "model_1": "LongCat-2.0"
+    "model_1": {"name": "LongCat-2.0", "capabilities": []}
   }
 }
 ```
@@ -334,17 +359,17 @@ LongCat 使用 `Authorization: Bearer` 认证方式，需要通过 `auth_token` 
   "env_1": {
     "api_format": "anthropic",
     "base_url": null,
-    "model_1": "claude-sonnet-4-6"
+    "model_1": {"name": "claude-sonnet-4-6", "capabilities": []}
   },
   "env_2": {
     "api_format": "openai",
     "base_url": "https://api.openai.com/v1",
-    "model_1": "gpt-5.4"
+    "model_1": {"name": "gpt-5.4", "capabilities": []}
   },
   "env_3": {
     "api_format": "copilot",
     "base_url": "https://api.githubcopilot.com",
-    "model_1": "gpt-5.5"
+    "model_1": {"name": "gpt-5.5", "capabilities": []}
   },
   "model": "env_1.model_1"
 }

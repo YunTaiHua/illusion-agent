@@ -272,6 +272,13 @@ class AgentTool(BaseTool[AgentToolInput]):
                 effort=query_engine._effort,
                 on_before_tool_execute=getattr(query_engine, "on_before_tool_execute", None),
                 file_state_cache=FileStateCache(),
+                # 媒体能力：继承父引擎当前能力（getattr 防御测试桩
+                # SimpleNamespace 未实现解析方法 → None = fail-closed）
+                capabilities=(
+                    query_engine._resolve_capabilities()
+                    if hasattr(query_engine, "_resolve_capabilities")
+                    else None
+                ),
             )
         else:
             query_context = None

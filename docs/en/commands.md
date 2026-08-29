@@ -17,7 +17,7 @@ The `illusion` main command supports the following options, grouped by function:
 | Option | Short | Description |
 |--------|-------|-------------|
 | `--model <MODEL>` | `-m` | Model ID in `env_N.model_N` format (e.g. `env_1.model_2`), persists to settings.json |
-| `--effort <LEVEL>` | `-e` | Effort level: `low` / `medium` / `high` / `max`, persists to settings.json |
+| `--effort <LEVEL>` | `-e` | Effort level: `low` / `medium` / `high` / `xhigh` / `max`, persists to settings.json |
 | `--max-turns <N>` | `-t` | Maximum agentic turns, persists to settings.json |
 
 ### Output
@@ -172,7 +172,7 @@ Use `-p` / `--print <PROMPT>` to enter non-interactive mode: execute a single pr
 | `--print <PROMPT>` | `-p` | Enter print mode, PROMPT is the prompt text | No |
 | `--output-format <FORMAT>` | - | Output format: `text` (default) / `json` / `stream-json` | No |
 | `--model <MODEL>` | `-m` | Model alias or full model ID | Yes (writes `settings.model`) |
-| `--effort <LEVEL>` | `-e` | Effort level: `low` / `medium` / `high` / `max` | Yes (writes `settings.effort`) |
+| `--effort <LEVEL>` | `-e` | Effort level: `low` / `medium` / `high` / `xhigh` / `max` | Yes (writes `settings.effort`) |
 | `--max-turns <N>` | `-t` | Maximum agentic turns | Yes (writes `settings.max_turns`) |
 | `--permission-mode <MODE>` | - | Permission mode: `default` / `plan` / `full_auto` / `yolo` | Yes (writes `settings.permission.mode`) |
 | `--continue` | `-c` | Continue the most recent session in the current directory (requires `-p`) | No |

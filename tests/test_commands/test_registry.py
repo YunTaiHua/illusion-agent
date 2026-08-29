@@ -80,19 +80,19 @@ async def test_model_command_persists(tmp_path: Path, monkeypatch):
     save_settings(
         Settings().model_copy(
             update={
-                "model": "env_1:model_a",
-                "env_1": {"api_format": "anthropic", "model_a": "claude-opus-4-6", "model_b": "gpt-5.4"},
+                "model": "env_1.model_1",
+                "env_1": {"api_format": "anthropic", "model_1": {"name": "claude-opus-4-6", "capabilities": []}, "model_2": {"name": "gpt-5.4", "capabilities": []}},
             }
         )
     )
     registry = create_default_command_registry()
-    command, args = registry.lookup("/model set env_1:model_a")
+    command, args = registry.lookup("/model set env_1.model_1")
     assert command is not None
 
     result = await command.handler(args, CommandContext(engine=_make_engine(tmp_path), cwd=str(tmp_path)))
 
-    assert "env_1:model_a" in result.message
-    assert load_settings().model == "env_1:model_a"
+    assert "env_1.model_1" in result.message
+    assert load_settings().model == "env_1.model_1"
 
 
 @pytest.mark.asyncio
@@ -102,19 +102,19 @@ async def test_model_command_accepts_direct_value(tmp_path: Path, monkeypatch):
     save_settings(
         Settings().model_copy(
             update={
-                "model": "env_1:model_a",
-                "env_1": {"api_format": "openai", "model_a": "gpt-5.4"},
+                "model": "env_1.model_1",
+                "env_1": {"api_format": "openai", "model_1": {"name": "gpt-5.4", "capabilities": []}},
             }
         )
     )
     registry = create_default_command_registry()
-    command, args = registry.lookup("/model set env_1:model_a")
+    command, args = registry.lookup("/model set env_1.model_1")
     assert command is not None
 
     result = await command.handler(args, CommandContext(engine=_make_engine(tmp_path), cwd=str(tmp_path)))
 
-    assert "env_1:model_a" in result.message
-    assert load_settings().model == "env_1:model_a"
+    assert "env_1.model_1" in result.message
+    assert load_settings().model == "env_1.model_1"
 
 
 @pytest.mark.asyncio
@@ -124,20 +124,20 @@ async def test_model_command_default_clears_profile_override(tmp_path: Path, mon
     save_settings(
         Settings().model_copy(
             update={
-                "model": "env_1.model_a",
-                "env_1": {"api_format": "anthropic", "model_a": "claude-sonnet-4-6"},
-                "env_2": {"api_format": "openai", "model_a": "gpt-5.4"},
+                "model": "env_1.model_1",
+                "env_1": {"api_format": "anthropic", "model_1": {"name": "claude-sonnet-4-6", "capabilities": []}},
+                "env_2": {"api_format": "openai", "model_1": {"name": "gpt-5.4", "capabilities": []}},
             }
         )
     )
     registry = create_default_command_registry()
-    command, args = registry.lookup("/model set env_2.model_a")
+    command, args = registry.lookup("/model set env_2.model_1")
     assert command is not None
 
     result = await command.handler(args, CommandContext(engine=_make_engine(tmp_path), cwd=str(tmp_path)))
 
-    assert "env_2.model_a" in result.message
-    assert load_settings().model == "env_2.model_a"
+    assert "env_2.model_1" in result.message
+    assert load_settings().model == "env_2.model_1"
 
 
 @pytest.mark.asyncio

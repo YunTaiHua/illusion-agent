@@ -80,8 +80,8 @@ Located at `~/.illusion/settings.json`. Loaded by `load_settings()`.
     "api_format": "anthropic",
     "base_url": null,
     "api_key": "",
-    "model_1": "claude-sonnet-4-6",
-    "model_2": "claude-opus-4-6"
+    "model_1": { "name": "claude-sonnet-4-6", "capabilities": ["image"] },
+    "model_2": { "name": "claude-opus-4-6", "capabilities": [] }
   },
   "model": "env_1.model_1",
   "context_window": 200000,
@@ -135,8 +135,13 @@ Located at `~/.illusion/settings.json`. Loaded by `load_settings()`.
   "mcp_servers": {},
   "working_directory": null,
   "ui_language": "en-US",
+  "theme": "light",
   "show_thinking": true,
-  "effort": "medium"
+  "effort": "medium",
+  "title": {
+    "enabled": false,
+    "model": null
+  }
 }
 ```
 
@@ -149,7 +154,8 @@ Located at `~/.illusion/settings.json`. Loaded by `load_settings()`.
 | `context_window` | int | 200000 | Context window size in tokens |
 | `max_tokens` | int | 16384 | Maximum output tokens |
 | `max_turns` | int | 200 | Maximum conversation turns |
-| `ui_language` | string | "en-US" | UI language ("en-US" / "zh-CN") |
+| `ui_language` | string | "" | UI language ("en-US" / "zh-CN"); empty triggers the first-login prompt |
+| `theme` | string | "light" | Web UI theme: light / dark / system |
 | `show_thinking` | bool | true | Show thinking process |
 | `effort` | string | "medium" | Reasoning effort: low/medium/high/xhigh/max |
 | `working_directory` | string\|null | null | Fixed working directory (auto-switch on startup, auto-create if missing) |
@@ -180,24 +186,26 @@ Each `env_N` is an independent API provider config. Models are referenced as `en
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `api_format` | string | Yes | API format: `anthropic` / `openai` / `copilot` / `codex` |
+| `api_format` | string | Yes | API format: `anthropic` / `openai` / `response` / `copilot` / `codex` |
 | `base_url` | string\|null | No | Custom API endpoint, null uses default |
 | `api_key` | string | No | API key (standard `x-api-key` auth) |
 | `auth_token` | string | No | Bearer Token auth (for providers like LongCat using `Authorization: Bearer`) |
-| `model_N` | string | No | Model name: `model_1`, `model_2`, ... |
+| `model_N` | object | No | Model declaration: `{"name": "...", "capabilities": [...]}`, e.g. `model_1`, `model_2`, ... |
+
+`capabilities` declares the model's multimodal (image input) ability; valid value is `"image"`. Models without a declaration are treated as vision-less (fail-closed) — `read_file` on images returns an explicit error for them.
 
 ```json
 {
   "env_1": {
     "api_format": "anthropic",
     "base_url": null,
-    "model_1": "claude-sonnet-4-6",
-    "model_2": "claude-opus-4-6"
+    "model_1": { "name": "claude-sonnet-4-6", "capabilities": ["image"] },
+    "model_2": { "name": "claude-opus-4-6", "capabilities": [] }
   },
   "env_2": {
     "api_format": "openai",
     "base_url": "https://api.openai.com/v1",
-    "model_1": "gpt-5.4"
+    "model_1": { "name": "gpt-5.4", "capabilities": [] }
   },
   "model": "env_1.model_1"
 }

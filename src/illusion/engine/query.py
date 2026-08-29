@@ -45,6 +45,7 @@ from illusion.api.client import (
 from illusion.api.effort import EffortLevel
 from illusion.api.errors import IllusionAgentApiError
 from illusion.api.usage import UsageSnapshot
+from illusion.config.capabilities import ModelCapabilities
 from illusion.engine.messages import (
     ContentBlock,
     ConversationMessage,
@@ -661,6 +662,9 @@ class QueryContext:
     on_before_tool_execute: Callable[[str, dict[str, Any]], None] | None = None
     # 文件状态缓存：用于读写去重和 mtime 检测
     file_state_cache: FileStateCache | None = None
+    # 当前模型媒体能力（查询开始时由 QueryEngine 惰性解析；None = 未声明，
+    # 请求层与工具层按 fail-closed 处理——不支持任何媒体输入）
+    capabilities: ModelCapabilities | None = None
     # 工具进度消息队列：工具执行过程中通过 on_progress 回调上报进度，
     # run_query 主循环 drain 此队列并 yield ToolProgressEvent。
     # 元素为 tuple[str, str, str]，即 (tool_use_id, message, progress_type)，
@@ -832,6 +836,9 @@ async def run_query(
                     tools=context.tool_registry.to_api_schema(),
                     effort=context.effort,
                     prompt_cache_key=context.prompt_cache_key,
+                    # 媒体能力随请求传递：client 发送前据此将不支持的媒体块
+                    # 转为文本占位（切换模型后的历史媒体由此处理）
+                    capabilities=context.capabilities,
                 )
             ):
                 if isinstance(event, ApiTextDeltaEvent):
@@ -1435,6 +1442,9 @@ async def _execute_tool_call(
                 "plan_approval_prompt": context.plan_approval_prompt,
                 "permission_checker": context.permission_checker,
                 "file_state_cache": context.file_state_cache,
+                # 当前模型媒体能力：媒体类工具（read_file 等）据此
+                # 做能力守卫（无能力时明确报错而非注入媒体块）
+                "model_capabilities": context.capabilities,
                 **(context.tool_metadata or {}),
             },
             on_progress=_emit_progress if context.progress_queue is not None else None,

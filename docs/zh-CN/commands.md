@@ -19,7 +19,7 @@
 | 选项 | 简写 | 说明 |
 |------|------|------|
 | `--model <MODEL>` | `-m` | 模型 ID，格式为 `env_N.model_N`（如 `env_1.model_2`），设置后持久化到 settings.json |
-| `--effort <LEVEL>` | `-e` | 推理强度级别：`low` / `medium` / `high` / `max`，设置后持久化到 settings.json |
+| `--effort <LEVEL>` | `-e` | 推理强度级别：`low` / `medium` / `high` / `xhigh` / `max`，设置后持久化到 settings.json |
 | `--max-turns <N>` | `-t` | 最大代理轮次数，设置后持久化到 settings.json |
 
 #### Output（输出）
@@ -174,7 +174,7 @@ illusion update --deps           # 同时更新项目依赖
 | `--print <PROMPT>` | `-p` | 进入打印模式，PROMPT 为提示词 | 否 |
 | `--output-format <FORMAT>` | - | 输出格式：`text`（默认）/ `json` / `stream-json` | 否 |
 | `--model <MODEL>` | `-m` | 指定模型别名或完整模型 ID | 是（写入 `settings.model`） |
-| `--effort <LEVEL>` | `-e` | 推理强度：`low` / `medium` / `high` / `max` | 是（写入 `settings.effort`） |
+| `--effort <LEVEL>` | `-e` | 推理强度：`low` / `medium` / `high` / `xhigh` / `max` | 是（写入 `settings.effort`） |
 | `--max-turns <N>` | `-t` | 最大代理轮次数 | 是（写入 `settings.max_turns`） |
 | `--permission-mode <MODE>` | - | 权限模式：`default` / `plan` / `full_auto` / `yolo` | 是（写入 `settings.permission.mode`） |
 | `--continue` | `-c` | 继续当前目录的最近会话（必须配合 `-p`） | 否 |

@@ -38,7 +38,7 @@ def test_create_env_returns_env_key(client):
         "api_format": "anthropic",
         "base_url": "https://api.anthropic.com",
         "api_key": "sk-test",
-        "model_1": "claude-sonnet-4-6",
+        "model_1": {"name": "claude-sonnet-4-6", "capabilities": []},
     })
     assert resp.status_code == 200
     data = resp.json()
@@ -52,7 +52,7 @@ def test_get_envs_after_create(client):
         "api_format": "anthropic",
         "base_url": "https://api.anthropic.com",
         "api_key": "sk-test",
-        "model_1": "claude-sonnet-4-6",
+        "model_1": {"name": "claude-sonnet-4-6", "capabilities": []},
     })
     resp = client.get("/api/envs")
     assert resp.status_code == 200
@@ -68,7 +68,7 @@ def test_delete_env(client):
         "api_format": "openai",
         "base_url": "https://api.openai.com",
         "api_key": "sk-test2",
-        "model_1": "gpt-4",
+        "model_1": {"name": "gpt-4", "capabilities": []},
     })
     env_key = create_resp.json()["env_key"]
     # 创建第二个 env 并激活，以便删除第一个
@@ -76,7 +76,7 @@ def test_delete_env(client):
         "api_format": "anthropic",
         "base_url": "",
         "api_key": "sk-test3",
-        "model_1": "claude-sonnet-4-6",
+        "model_1": {"name": "claude-sonnet-4-6", "capabilities": []},
     })
     env_key2 = create_resp2.json()["env_key"]
     client.post(f"/api/envs/{env_key2}/activate")
@@ -91,7 +91,7 @@ def test_delete_active_env_rejected(client):
     create_resp = client.post("/api/envs", json={
         "api_format": "anthropic",
         "api_key": "sk-test",
-        "model_1": "claude-sonnet-4-6",
+        "model_1": {"name": "claude-sonnet-4-6", "capabilities": []},
     })
     env_key = create_resp.json()["env_key"]
     # 第一个 env 自动激活
@@ -104,13 +104,13 @@ def test_activate_env(client):
     create_resp1 = client.post("/api/envs", json={
         "api_format": "anthropic",
         "api_key": "sk-test1",
-        "model_1": "claude-sonnet-4-6",
+        "model_1": {"name": "claude-sonnet-4-6", "capabilities": []},
     })
     create_resp1.json()["env_key"]
     create_resp2 = client.post("/api/envs", json={
         "api_format": "openai",
         "api_key": "sk-test2",
-        "model_1": "gpt-4",
+        "model_1": {"name": "gpt-4", "capabilities": []},
     })
     env_key2 = create_resp2.json()["env_key"]
 
@@ -128,7 +128,7 @@ def test_update_env(client):
     create_resp = client.post("/api/envs", json={
         "api_format": "anthropic",
         "api_key": "sk-old",
-        "model_1": "claude-sonnet-4-6",
+        "model_1": {"name": "claude-sonnet-4-6", "capabilities": []},
     })
     env_key = create_resp.json()["env_key"]
 
@@ -206,20 +206,22 @@ def test_update_env_add_models(client):
     create_resp = client.post("/api/envs", json={
         "api_format": "anthropic",
         "api_key": "sk-test",
-        "model_1": "claude-sonnet-4-6",
+        "model_1": {"name": "claude-sonnet-4-6", "capabilities": []},
     })
     env_key = create_resp.json()["env_key"]
 
     resp = client.patch(f"/api/envs/{env_key}", json={
-        "add_models": [{"key": "model_2", "value": "claude-haiku-3-5"}],
+        "add_models": [{"key": "model_2", "value": {"name": "claude-haiku-3-5", "capabilities": ["image"]}}],
     })
     assert resp.status_code == 200
     assert resp.json()["success"] is True
 
-    # 验证模型已添加
+    # 验证模型已添加（含能力声明）
     get_resp = client.get("/api/envs")
     env = next(e for e in get_resp.json()["envs"] if e["env_key"] == env_key)
     assert "model_2" in env["models"]
+    assert env["models"]["model_2"]["name"] == "claude-haiku-3-5"
+    assert env["models"]["model_2"]["capabilities"] == ["image"]
 
 
 def test_update_env_remove_models(client):
@@ -227,8 +229,8 @@ def test_update_env_remove_models(client):
     create_resp = client.post("/api/envs", json={
         "api_format": "anthropic",
         "api_key": "sk-test",
-        "model_1": "claude-sonnet-4-6",
-        "model_2": "claude-haiku-3-5",
+        "model_1": {"name": "claude-sonnet-4-6", "capabilities": []},
+        "model_2": {"name": "claude-haiku-3-5", "capabilities": []},
     })
     env_key = create_resp.json()["env_key"]
 

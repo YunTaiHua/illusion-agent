@@ -641,6 +641,12 @@ async def run_agent_in_process(
         sandbox_permission_prompt=query_context.sandbox_permission_prompt,
         on_before_tool_execute=query_context.on_before_tool_execute,
         file_state_cache=FileStateCache(),
+        # 媒体能力：子代理使用与父级相同模型时继承父级能力（可读图）；
+        # 使用其他模型（如 agent_def.model 跨 env 指定）时无法定位其声明，
+        # 按 fail-closed 处理（无媒体能力）——与 settings 未声明语义一致
+        capabilities=(
+            query_context.capabilities if model == query_context.model else None
+        ),
         # 继承任务上下文提供者：子代理的自动审批同样携带 goal objective /
         # 最近 user 消息。provider 由父级 engine 构造时绑定（捕获父级
         # messages 属性表达式，惰性求值），子代理作为父任务的一部分，

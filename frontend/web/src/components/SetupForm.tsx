@@ -30,7 +30,7 @@ import { CronTab } from './CronTab';
 import type { WebWorkspaceItem } from '../types/protocol';
 import {
   envApi, oauthApi, settingsApi, channelsApi,
-  type EnvInfo, type SettingsResponse, type CreateEnvPayload,
+  type EnvInfo, type ModelConfig, type SettingsResponse, type CreateEnvPayload,
   type SandboxSettings, type PermissionRiskSettings,
   type ChannelRuntimeStatusEntry, type ChannelsRuntimeStatus,
 } from '../api';
@@ -74,8 +74,8 @@ interface EnvDraft {
   api_key: string;
   /** Auth Token（Bearer） */
   auth_token: string;
-  /** 模型列表（至少一个） */
-  models: string[];
+  /** 模型列表（至少一个；name 必填，capabilities 声明图片/视频能力） */
+  models: ModelConfig[];
   /** OAuth 是否已完成（仅 copilot/codex） */
   oauth_authorized: boolean;
 }
@@ -97,7 +97,7 @@ function makeInitialDraft(): EnvDraft {
     auth_type: 'api_key',
     api_key: '',
     auth_token: '',
-    models: [DEFAULT_MODELS['anthropic'] ?? ''],
+    models: [{ name: DEFAULT_MODELS['anthropic'] ?? '', capabilities: [] }],
     oauth_authorized: false,
   };
 }
@@ -307,18 +307,23 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
       ...d,
       api_format: fmt,
       base_url: DEFAULT_ENDPOINTS[fmt] ?? d.base_url,
-      models: d.models.length > 0 ? d.models : [DEFAULT_MODELS[fmt] ?? ''],
+      models: d.models.length > 0 ? d.models : [{ name: DEFAULT_MODELS[fmt] ?? '', capabilities: [] }],
       oauth_authorized: false,
       // openai/response 格式使用 Bearer API Key（无 auth_token 分支），强制切回 api_key
       auth_type: fmt === 'openai' || fmt === 'response' ? 'api_key' : d.auth_type,
     }));
   }, []);
 
-  /** 更新草稿中指定模型 */
-  const updateModel = useCallback((idx: number, value: string) => {
+  /** 更新草稿中指定模型行 */
+  const updateModel = useCallback((idx: number, patch: Partial<ModelConfig>) => {
     setDraft((d) => {
       const next = [...d.models];
-      next[idx] = value;
+      const current = next[idx];
+      if (!current) return d;
+      next[idx] = {
+        name: patch.name ?? current.name,
+        capabilities: patch.capabilities ?? current.capabilities,
+      };
       return { ...d, models: next };
     });
   }, []);
@@ -329,19 +334,19 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
       { value: '', label: t(lang, 'setupFieldMemoryModelInherit') },
     ];
     for (const env of envs) {
-      for (const [key, name] of Object.entries(env.models)) {
+      for (const [key, mc] of Object.entries(env.models)) {
         opts.push({
           value: `${env.env_key}.${key}`,
-          label: name, // 仅显示模型名，不显示 env_N.model_N
+          label: mc.name, // 仅显示模型名，不显示 env_N.model_N
         });
       }
     }
     return opts;
   }, [envs, lang]);
 
-  /** 添加空模型行 */
-  const addModel = useCallback(() => {
-    setDraft((d) => ({ ...d, models: [...d.models, ''] }));
+  /** 添加模型行（名称来自追加输入框） */
+  const addModel = useCallback((name: string) => {
+    setDraft((d) => ({ ...d, models: [...d.models, { name, capabilities: [] }] }));
   }, []);
 
   /** 移除指定模型行 */
@@ -352,7 +357,7 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
   /** 草稿是否可提交（env 校验） */
   const draftValid = useCallback((d: EnvDraft): boolean => {
     if (!d.api_format) return false;
-    if (d.models.filter((m) => m.trim()).length === 0) return false;
+    if (d.models.filter((m) => m.name.trim()).length === 0) return false;
     if (OAUTH_FORMATS.has(d.api_format)) return d.oauth_authorized;
     // anthropic / openai 需要对应认证字段非空
     return d.auth_type === 'api_key' ? d.api_key.trim() !== '' : d.auth_token.trim() !== '';
@@ -360,11 +365,13 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
 
   /** 提交草稿创建 env（处理 model_3+ 通过 add_models 补充） */
   const createEnvFromDraft = useCallback(async (d: EnvDraft): Promise<string> => {
-    const models = d.models.map((m) => m.trim()).filter(Boolean);
+    const models = d.models
+      .map((m) => ({ ...m, name: m.name.trim() }))
+      .filter((m) => m.name);
     const payload: CreateEnvPayload = {
       api_format: d.api_format,
       base_url: d.base_url.trim(),
-      model_1: models[0] ?? '',
+      model_1: models[0] ?? { name: '', capabilities: [] },
     };
     if (models[1]) payload.model_2 = models[1];
     // OAuth 格式不传密钥（token 由后端全局管理）；其余按 auth_type 传
@@ -522,13 +529,25 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
   }, []);
 
   /** 向已有环境追加模型（即时 API，类似 CLI /model add 流程） */
-  const handleAddModel = useCallback(async (envKey: string, modelValue: string) => {
+  const handleAddModel = useCallback(async (envKey: string, modelValue: ModelConfig) => {
     setOpError(null);
     try {
       // key 不由前端计算：本地 envs 快照可能过期（连续快速添加、
       // 删除中间模型导致编号不连续），重复 key 会相互覆盖只留最后一个。
       // 缺省 key 时后端按现有最大编号 +1 自动分配。
       await envApi.update(envKey, { add_models: [{ value: modelValue }] });
+      const e = await envApi.list();
+      setEnvs(e.envs);
+    } catch (err) {
+      setOpError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  /** 切换已有环境模型的媒体能力（即时 API：PATCH add_models 带 key 覆盖写回） */
+  const handleToggleModelCapability = useCallback(async (envKey: string, modelKey: string, modelValue: ModelConfig) => {
+    setOpError(null);
+    try {
+      await envApi.update(envKey, { add_models: [{ key: modelKey, value: modelValue }] });
       const e = await envApi.list();
       setEnvs(e.envs);
     } catch (err) {
@@ -684,6 +703,7 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
               onDeleteEnv={handleDeleteEnv}
               onAddModelToEnv={handleAddModel}
               onRemoveModelFromEnv={handleRemoveModel}
+              onToggleModelCapability={handleToggleModelCapability}
               showAddEnv={showAddEnv}
               onToggleAddEnv={() => setShowAddEnv(!showAddEnv)}
               draft={draft}
@@ -749,9 +769,11 @@ interface EnvSelectorProps {
   activeEnvKey: string | null;
   onDelete: (key: string) => void;
   /** 向已有环境追加模型 */
-  onAddModel: (envKey: string, modelValue: string) => void;
+  onAddModel: (envKey: string, modelValue: ModelConfig) => void;
   /** 从已有环境移除模型（envKey, modelKey） */
   onRemoveModel: (envKey: string, modelKey: string) => void;
+  /** 切换已有环境模型的图片能力 */
+  onToggleCapability: (envKey: string, modelKey: string, modelValue: ModelConfig) => void;
   opError: string | null;
 }
 
@@ -768,7 +790,7 @@ function EnvSelector(p: EnvSelectorProps) {
       <div className={labelClass}>{t(lang, 'setupEnvListTitle')}</div>
       <div className="space-y-1.5">
         {p.envs.map((env) => (
-          <EnvTriggerCard key={env.env_key} lang={lang} env={env} isActive={env.env_key === p.activeEnvKey} onDelete={p.onDelete} onAddModel={p.onAddModel} onRemoveModel={p.onRemoveModel} />
+          <EnvTriggerCard key={env.env_key} lang={lang} env={env} isActive={env.env_key === p.activeEnvKey} onDelete={p.onDelete} onAddModel={p.onAddModel} onRemoveModel={p.onRemoveModel} onToggleCapability={p.onToggleCapability} />
         ))}
       </div>
       {p.opError && <div className="text-xs text-danger mt-1">{p.opError}</div>}
@@ -782,12 +804,13 @@ interface EnvTriggerCardProps {
   env: EnvInfo;
   isActive: boolean;
   onDelete: (key: string) => void;
-  onAddModel: (envKey: string, modelValue: string) => void;
+  onAddModel: (envKey: string, modelValue: ModelConfig) => void;
   onRemoveModel: (envKey: string, modelKey: string) => void;
+  onToggleCapability: (envKey: string, modelKey: string, modelValue: ModelConfig) => void;
 }
 
 /** 单个环境触发卡片：触发器显示 base_url，点击展开配置和模型编辑 */
-function EnvTriggerCard({ lang, env, isActive, onDelete, onAddModel, onRemoveModel }: EnvTriggerCardProps) {
+function EnvTriggerCard({ lang, env, isActive, onDelete, onAddModel, onRemoveModel, onToggleCapability }: EnvTriggerCardProps) {
   /** 是否展开 */
   const [expanded, setExpanded] = useState(false);
   /** 新增模型输入值 */
@@ -822,14 +845,26 @@ function EnvTriggerCard({ lang, env, isActive, onDelete, onAddModel, onRemoveMod
               <div className="text-xs text-content-disabled italic">{t(lang, 'setupEnvModelsHint')}</div>
             ) : (
               <div className="space-y-1">
-                {modelEntries.map(([modelKey, modelValue]) => (
+                {modelEntries.map(([modelKey, mc]) => (
                   <div key={modelKey} className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      value={modelValue}
-                      readOnly
-                      className="flex-1 px-2 py-1 rounded text-xs bg-surface-card-alt border border-border-light text-content-primary font-mono"
-                    />
+                    <div className="flex-1 min-w-0 px-2 py-1 rounded-md text-xs bg-surface-card-alt border border-border-light text-content-primary">
+                      <span className="block truncate font-mono">{mc.name}</span>
+                    </div>
+                    {/* 图片能力勾选：位于名称卡片外层，随时勾选/取消，即时 PATCH 落盘 */}
+                    <label className="shrink-0 flex items-center gap-1 text-[11px] text-content-secondary cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={mc.capabilities?.includes('image') ?? false}
+                        onChange={(e) => onToggleCapability(env.env_key, modelKey, {
+                          name: mc.name,
+                          capabilities: e.target.checked
+                            ? Array.from(new Set([...(mc.capabilities ?? []), 'image']))
+                            : (mc.capabilities ?? []).filter((c) => c !== 'image'),
+                        })}
+                        className="w-3.5 h-3.5 accent-[var(--primary)] cursor-pointer"
+                      />
+                      {t(lang, 'setupCapabilityImage')}
+                    </label>
                     <button
                       onClick={() => onRemoveModel(env.env_key, modelKey)}
                       className="shrink-0 w-5 h-5 flex items-center justify-center rounded text-content-disabled hover:text-danger hover:bg-surface-hover transition-colors cursor-pointer"
@@ -855,7 +890,7 @@ function EnvTriggerCard({ lang, env, isActive, onDelete, onAddModel, onRemoveMod
             <button
               onClick={() => {
                 if (newModel.trim()) {
-                  onAddModel(env.env_key, newModel.trim());
+                  onAddModel(env.env_key, { name: newModel.trim(), capabilities: [] });
                   setNewModel('');
                 }
               }}
@@ -945,7 +980,9 @@ interface SettingsTabProps {
   activeEnvKey: string | null;
   onDeleteEnv: (k: string) => void;
   /** 向已有环境追加模型（envKey, modelValue） */
-  onAddModelToEnv: (envKey: string, modelValue: string) => void;
+  onAddModelToEnv: (envKey: string, modelValue: ModelConfig) => void;
+  /** 切换已有环境模型的图片能力（即时 PATCH 落盘） */
+  onToggleModelCapability: (envKey: string, modelKey: string, modelValue: ModelConfig) => void;
   /** 从已有环境移除模型（envKey, modelKey） */
   onRemoveModelFromEnv: (envKey: string, modelKey: string) => void;
   showAddEnv: boolean;
@@ -953,8 +990,9 @@ interface SettingsTabProps {
   draft: EnvDraft;
   onDraftChange: (d: EnvDraft) => void;
   onFormatChange: (f: string) => void;
-  onUpdateModel: (i: number, v: string) => void;
-  onAddModel: () => void;
+  /** 更新草稿中指定模型行（name / capabilities 局部更新） */
+  onUpdateModel: (i: number, patch: Partial<ModelConfig>) => void;
+  onAddModel: (name: string) => void;
   onRemoveModel: (i: number) => void;
   opError: string | null;
 }
@@ -1127,6 +1165,7 @@ function SettingsTab(p: SettingsTabProps) {
           onDelete={p.onDeleteEnv}
           onAddModel={p.onAddModelToEnv}
           onRemoveModel={p.onRemoveModelFromEnv}
+          onToggleCapability={p.onToggleModelCapability}
           opError={p.opError}
         />
       )}
@@ -1157,7 +1196,7 @@ function SettingsTab(p: SettingsTabProps) {
       )}
 
       {/* 首次模式未配置 env 提示 */}
-      {p.firstLogin && p.envs.length === 0 && !p.draft.models.some((m) => m.trim()) && (
+      {p.firstLogin && p.envs.length === 0 && !p.draft.models.some((m) => m.name.trim()) && (
         <div className="text-xs text-content-disabled">{t(lang, 'setupEnvAtLeastOne')}</div>
       )}
 
@@ -1332,14 +1371,17 @@ interface EnvEditorProps {
   draft: EnvDraft;
   onDraftChange: (d: EnvDraft) => void;
   onFormatChange: (f: string) => void;
-  onUpdateModel: (i: number, v: string) => void;
-  onAddModel: () => void;
+  /** 更新草稿中指定模型行（name / capabilities 局部更新） */
+  onUpdateModel: (i: number, patch: Partial<ModelConfig>) => void;
+  onAddModel: (name: string) => void;
   onRemoveModel: (i: number) => void;
 }
 
 /** 环境编辑器：api_format / base_url / 认证 / 模型列表 / OAuth */
 function EnvEditor({ lang, draft, onDraftChange, onFormatChange, onUpdateModel, onAddModel, onRemoveModel }: EnvEditorProps) {
   const isOauth = OAUTH_FORMATS.has(draft.api_format);
+  /** 追加模型输入值（与已有环境卡片的追加行同布局） */
+  const [newModel, setNewModel] = useState('');
   /** OAuth 流程状态 */
   const [oauth, setOauth] = useState<OauthState>({ status: 'idle', user_code: '', verification_uri: '', device_code: '', error: '' });
   /** 轮询计数 ref */
@@ -1474,11 +1516,26 @@ function EnvEditor({ lang, draft, onDraftChange, onFormatChange, onUpdateModel, 
             <div key={idx} className="flex items-center gap-2">
               <input
                 type="text"
-                value={m}
-                onChange={(e) => onUpdateModel(idx, e.target.value)}
+                value={m.name}
+                onChange={(e) => onUpdateModel(idx, { name: e.target.value })}
                 className={inputClass}
                 placeholder={t(lang, 'setupFieldModel')}
               />
+              {/* 媒体能力勾选（图片） */}
+              <label className="shrink-0 flex items-center gap-1 text-[11px] text-content-secondary cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={m.capabilities.includes('image')}
+                  onChange={(e) => {
+                    const caps = e.target.checked
+                      ? [...m.capabilities, 'image']
+                      : m.capabilities.filter((c) => c !== 'image');
+                    onUpdateModel(idx, { capabilities: caps });
+                  }}
+                  className="w-3.5 h-3.5 accent-[var(--primary)] cursor-pointer"
+                />
+                {t(lang, 'setupCapabilityImage')}
+              </label>
               {draft.models.length > 1 && (
                 <button onClick={() => onRemoveModel(idx)} className="shrink-0 w-7 h-7 flex items-center justify-center rounded text-content-disabled hover:text-danger hover:bg-surface-hover transition-colors cursor-pointer" title={t(lang, 'setupFieldRemoveModel')}>
                   <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M2 6h8" /></svg>
@@ -1486,7 +1543,28 @@ function EnvEditor({ lang, draft, onDraftChange, onFormatChange, onUpdateModel, 
               )}
             </div>
           ))}
-          <button onClick={onAddModel} className="text-xs text-primary hover:underline cursor-pointer">+ {t(lang, 'setupFieldAddModel')}</button>
+          {/* 追加模型行：与已有环境卡片的追加行同布局同风格 */}
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={newModel}
+              onChange={(e) => setNewModel(e.target.value)}
+              className={inputClass}
+              placeholder={t(lang, 'setupFieldModel')}
+            />
+            <button
+              onClick={() => {
+                if (newModel.trim()) {
+                  onAddModel(newModel.trim());
+                  setNewModel('');
+                }
+              }}
+              disabled={!newModel.trim()}
+              className="shrink-0 px-2 py-1.5 rounded-md text-xs text-primary border border-primary/30 hover:bg-primary/10 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              + {t(lang, 'setupFieldAddModel')}
+            </button>
+          </div>
         </div>
       </div>
     </div>

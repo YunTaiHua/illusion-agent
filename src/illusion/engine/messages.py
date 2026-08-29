@@ -161,27 +161,41 @@ def _messages_have_media(messages: list[ConversationMessage]) -> bool:
     return False
 
 
+def _media_placeholder(block: MediaBlock) -> str:
+    """生成图片块被降级为文本时的占位描述。
+
+    无能力的模型看到的是文件元信息占位而非图片内容本身，
+    避免模型误以为看到了媒体内容。
+    """
+    # MediaBlock.metadata 的键为 "size"——由 _build_tool_result_content 从
+    # ToolResult 侧的 media_size 转码而来（file_read_tool 写入）
+    size_str = f" ({block.metadata['size']} bytes)" if "size" in block.metadata else ""
+    return (
+        f"[image file: {block.file_path}{size_str}, {block.media_type}] "
+        "This model does not support image input"
+    )
+
+
 def _strip_media_from_messages(messages: list[ConversationMessage]) -> list[ConversationMessage]:
-    """将消息中的 MediaBlock 替换为文本描述，用于不支持图片的模型优雅降级"""
+    """将消息中的 MediaBlock 替换为文本描述（用于不支持图片的模型优雅降级）。
+
+    Args:
+        messages: 原始消息列表（不修改）
+
+    Returns:
+        转换后的消息列表
+    """
     result: list[ConversationMessage] = []
     for msg in messages:
         new_blocks: list[Any] = []
         for block in msg.content:
             if isinstance(block, MediaBlock):
-                size_str = f" ({block.metadata['size']} bytes)" if "size" in block.metadata else ""
-                new_blocks.append(TextBlock(
-                    text=f"[image file: {block.file_path}{size_str}, {block.media_type}] "
-                         "This model does not support image input",
-                ))
+                new_blocks.append(TextBlock(text=_media_placeholder(block)))
             elif isinstance(block, ToolResultBlock) and isinstance(block.content, list):
                 stripped: list[Any] = []
                 for b in block.content:
                     if isinstance(b, MediaBlock):
-                        size_str = f" ({b.metadata['size']} bytes)" if "size" in b.metadata else ""
-                        stripped.append(TextBlock(
-                            text=f"[image file: {b.file_path}{size_str}, {b.media_type}] "
-                                 "This model does not support image input",
-                        ))
+                        stripped.append(TextBlock(text=_media_placeholder(b)))
                     else:
                         stripped.append(b)
                 new_blocks.append(ToolResultBlock(
@@ -193,6 +207,29 @@ def _strip_media_from_messages(messages: list[ConversationMessage]) -> list[Conv
                 new_blocks.append(block)
         result.append(ConversationMessage(role=msg.role, content=new_blocks))
     return result
+
+
+def strip_media_if_unsupported(
+    messages: list[ConversationMessage],
+    capabilities: Any,
+) -> list[ConversationMessage] | None:
+    """模型无图片能力时，将消息中的图片块转为文本占位。
+
+    capabilities 为 None（未声明）视为无图片能力（fail-closed）。
+
+    Args:
+        messages: 原始消息列表（不修改）
+        capabilities: ModelCapabilities 或 None
+
+    Returns:
+        需要替换时返回转换后的消息列表；无需任何修改时返回 None
+        （调用方直接复用原列表，避免无谓深拷贝）。
+    """
+    if bool(getattr(capabilities, "supports_images", False)):
+        return None
+    if not _messages_have_media(messages):
+        return None
+    return _strip_media_from_messages(messages)
 
 
 # 内容块联合类型
@@ -347,7 +384,7 @@ def _serialize_media_block(block: MediaBlock, provider_type: str) -> dict[str, A
             "type": "input_image",
             "image_url": f"data:{block.media_type};base64,{block.data}",
         }
-    # openai_compat
+    # openai_compat 图片
     return {
         "type": "image_url",
         "image_url": {"url": f"data:{block.media_type};base64,{block.data}"},

@@ -73,8 +73,8 @@ async def test_extract_subagent_uses_configured_model(tmp_path: Path, monkeypatc
                 "env_1": {
                     "api_format": "openai",
                     "base_url": "https://api.example.com",
-                    "model_1": "gpt-5.4",
-                    "model_2": "deepseek-v4-flash",
+                    "model_1": {"name": "gpt-5.4", "capabilities": []},
+                    "model_2": {"name": "deepseek-v4-flash", "capabilities": []},
                 },
                 "memory": {
                     "enabled": True,
@@ -182,14 +182,14 @@ async def test_extract_subagent_cross_env_builds_client(tmp_path: Path, monkeypa
                     "api_format": "openai",
                     "base_url": "https://api.a.com",
                     "api_key": "key-a",
-                    "model_1": "gpt-5.4",
-                    "model_2": "deepseek-v4-flash",
+                    "model_1": {"name": "gpt-5.4", "capabilities": []},
+                    "model_2": {"name": "deepseek-v4-flash", "capabilities": []},
                 },
                 "env_2": {
                     "api_format": "anthropic",
                     "base_url": "https://api.b.com",
                     "api_key": "key-b",
-                    "model_1": "claude-x",
+                    "model_1": {"name": "claude-x", "capabilities": []},
                 },
                 "model": "env_2.model_1",
                 "memory": {
@@ -262,14 +262,14 @@ async def test_extract_subagent_cross_env_build_failure_falls_back(tmp_path: Pat
                     "api_format": "openai",
                     "base_url": "https://api.a.com",
                     "api_key": "key-a",
-                    "model_1": "gpt-5.4",
-                    "model_2": "deepseek-v4-flash",
+                    "model_1": {"name": "gpt-5.4", "capabilities": []},
+                    "model_2": {"name": "deepseek-v4-flash", "capabilities": []},
                 },
                 "env_2": {
                     "api_format": "anthropic",
                     "base_url": "https://api.b.com",
                     "api_key": "key-b",
-                    "model_1": "claude-x",
+                    "model_1": {"name": "claude-x", "capabilities": []},
                 },
                 "model": "env_2.model_1",
                 "memory": {

@@ -629,6 +629,7 @@ async def test_openai_self_heal_stage2_disables_thinking(monkeypatch):
 @pytest.mark.asyncio
 async def test_passback_error_not_mistaken_for_media(monkeypatch):
     """回传 400 优先于 media 降级：带图片的对话不丢图片、直接走自愈"""
+    from illusion.config.capabilities import ModelCapabilities
     from illusion.engine.messages import MediaBlock
 
     media = MediaBlock(file_path="a.png", media_type="image/png", data="QUJD")
@@ -640,6 +641,8 @@ async def test_passback_error_not_mistaken_for_media(monkeypatch):
         model="some-alias-model",
         messages=[user_with_media, _assistant_no_thinking()],
         max_tokens=64,
+        # 声明图片能力：媒体不被事前降级，走回传自愈路径
+        capabilities=ModelCapabilities(supports_images=True),
     )
     async for _ in client.stream_message(request):
         pass

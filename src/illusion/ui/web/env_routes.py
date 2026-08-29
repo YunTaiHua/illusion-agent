@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from illusion.auth.manager import AuthManager
 from illusion.config.i18n import t as _t
-from illusion.config.settings import Settings, load_settings, save_settings
+from illusion.config.settings import ModelConfig, Settings, load_settings, save_settings
 
 
 def _next_model_key(env_data: dict[str, Any]) -> str:
@@ -46,8 +46,8 @@ class CreateEnvRequest(BaseModel):
     base_url: str | None = None
     api_key: str = ""
     auth_token: str = ""
-    model_1: str
-    model_2: str | None = None
+    model_1: ModelConfig
+    model_2: ModelConfig | None = None
 
 
 class ModelEntry(BaseModel):
@@ -59,7 +59,7 @@ class ModelEntry(BaseModel):
         description="模型键名（如 model_3）。缺省时由后端按现有最大编号 +1 自动分配，"
         "避免前端用过期快照计算 key 导致连续添加时相互覆盖",
     )
-    value: str = Field(..., min_length=1, description="模型名称")
+    value: ModelConfig = Field(..., description="模型声明（name + capabilities）")
 
 
 class UpdateEnvRequest(BaseModel):
@@ -278,12 +278,15 @@ def register_env_routes(app: FastAPI, host_config: Any | None = None) -> None:
                     "models": [],
                 }
             )
-        # 从 settings 读取 models
+        # 从 settings 读取 models（包含能力声明）
         settings = load_settings()
         for env in envs:
             env_config = settings.list_envs().get(env["env_key"])
             if env_config:
-                env["models"] = env_config.list_models()
+                env["models"] = {
+                    key: config.model_dump()
+                    for key, config in env_config.list_model_configs().items()
+                }
         active_key = manager.get_active_env_key() if envs else None
         return {"envs": envs, "active_env_key": active_key}
 
@@ -301,10 +304,10 @@ def register_env_routes(app: FastAPI, host_config: Any | None = None) -> None:
         env_data: dict[str, Any] = {
             "api_format": req.api_format,
             "base_url": req.base_url or "",
-            "model_1": req.model_1,
+            "model_1": req.model_1.model_dump(),
         }
         if req.model_2:
-            env_data["model_2"] = req.model_2
+            env_data["model_2"] = req.model_2.model_dump()
         # 合并到 settings 的 model_extra 中
         extras = dict(settings.model_extra or {})
         extras[env_key] = env_data
@@ -356,7 +359,7 @@ def register_env_routes(app: FastAPI, host_config: Any | None = None) -> None:
                 if req.add_models:
                     for m in req.add_models:
                         key = m.key or _next_model_key(env_data)
-                        env_data[key] = m.value
+                        env_data[key] = m.value.model_dump()
                 if req.remove_models:
                     for key in req.remove_models:
                         env_data.pop(key, None)

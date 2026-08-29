@@ -29,7 +29,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
 from anthropic import APIError, APIStatusError, AsyncAnthropic
@@ -55,12 +55,14 @@ from illusion.api.errors import (
     RequestFailure,
 )
 from illusion.api.usage import UsageSnapshot
+from illusion.config.capabilities import ModelCapabilities
 from illusion.engine.messages import (
     ConversationMessage,
     ThinkingBlock,
     _messages_have_media,
     _strip_media_from_messages,
     assistant_message_from_api,
+    strip_media_if_unsupported,
 )
 
 # 模块级日志记录器
@@ -88,6 +90,8 @@ class ApiMessageRequest:
         effort: 推理强度级别（可选，支持 low/medium/high/xhigh/max）
         prompt_cache_key: 提示缓存路由键（可选，通常为会话 ID）。仅 Kimi
             （Moonshot）消费该字段——稳定同一会话的前缀缓存命中
+        capabilities: 当前模型的媒体能力。None 表示未声明（fail-closed，
+            视为无任何媒体能力）；发送前按此决定媒体块转文本占位
     """
 
     model: str
@@ -98,6 +102,7 @@ class ApiMessageRequest:
     effort: EffortLevel | None = None
     extra_body: dict[str, Any] | None = None
     prompt_cache_key: str | None = None
+    capabilities: ModelCapabilities | None = None
 
 
 @dataclass(frozen=True)
@@ -349,6 +354,17 @@ class AnthropicApiClient:
         Yields:
             ApiStreamEvent: 流式事件（文本增量或完整消息）
         """
+        # 事前降级：按当前模型能力将不支持的媒体块转为文本占位。
+        # 切换模型（含同 env 内 model_1→model_2）后历史中的图片由
+        # request.capabilities 驱动，一次请求成功，无需等 API 报错重试。
+        stripped = strip_media_if_unsupported(request.messages, request.capabilities)
+        if stripped is not None:
+            log.info(
+                "Model %s lacks media capability; sending text placeholders instead of media.",
+                request.model,
+            )
+            request = replace(request, messages=stripped)
+
         last_error: Exception | None = None
         media_stripped = False
         # 思考回传自愈状态：先补齐占位 thinking 块重试，仍失败则降级关闭思考
@@ -390,16 +406,7 @@ class AnthropicApiClient:
                                 max_attempts=MAX_RETRIES + 1,
                                 delay_seconds=0.0,
                             )
-                            request = ApiMessageRequest(
-                                model=request.model,
-                                messages=repaired_messages,
-                                system_prompt=request.system_prompt,
-                                tools=request.tools,
-                                max_tokens=request.max_tokens,
-                                effort=request.effort,
-                                extra_body=request.extra_body,
-                                prompt_cache_key=request.prompt_cache_key,
-                            )
+                            request = replace(request, messages=repaired_messages)
                             continue
                     if not thinking_disabled:
                         thinking_disabled = True
@@ -413,16 +420,7 @@ class AnthropicApiClient:
                             max_attempts=MAX_RETRIES + 1,
                             delay_seconds=0.0,
                         )
-                        request = ApiMessageRequest(
-                            model=request.model,
-                            messages=request.messages,
-                            system_prompt=request.system_prompt,
-                            tools=request.tools,
-                            max_tokens=request.max_tokens,
-                            effort=None,
-                            extra_body=request.extra_body,
-                            prompt_cache_key=request.prompt_cache_key,
-                        )
+                        request = replace(request, effort=None)
                         continue
                     # 两级自愈都已生效仍失败：直接抛出
                     raise
@@ -437,15 +435,9 @@ class AnthropicApiClient:
                         "Request failed, possibly due to unsupported image content. "
                         "Retrying with text descriptions instead of images.",
                     )
-                    request = ApiMessageRequest(
-                        model=request.model,
+                    request = replace(
+                        request,
                         messages=_strip_media_from_messages(request.messages),
-                        system_prompt=request.system_prompt,
-                        tools=request.tools,
-                        max_tokens=request.max_tokens,
-                        effort=request.effort,
-                        extra_body=request.extra_body,
-                        prompt_cache_key=request.prompt_cache_key,
                     )
                     media_stripped = True
                     continue
@@ -462,15 +454,9 @@ class AnthropicApiClient:
                         "Request failed, possibly due to unsupported image content. "
                         "Retrying with text descriptions instead of images.",
                     )
-                    request = ApiMessageRequest(
-                        model=request.model,
+                    request = replace(
+                        request,
                         messages=_strip_media_from_messages(request.messages),
-                        system_prompt=request.system_prompt,
-                        tools=request.tools,
-                        max_tokens=request.max_tokens,
-                        effort=request.effort,
-                        extra_body=request.extra_body,
-                        prompt_cache_key=request.prompt_cache_key,
                     )
                     media_stripped = True
                     continue

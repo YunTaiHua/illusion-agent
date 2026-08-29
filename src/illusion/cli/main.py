@@ -70,7 +70,7 @@ def main(
     effort: str | None = typer.Option(
         None,
         "-e", "--effort",
-        help="Effort level (low, medium, high, max). Persists to settings.",
+        help="Effort level (low, medium, high, xhigh, max). Persists to settings.",
         rich_help_panel="Model & Effort",
     ),
     max_turns: int | None = typer.Option(

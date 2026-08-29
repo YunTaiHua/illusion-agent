@@ -7,6 +7,11 @@
 主要组件：
     - FileReadTool: 读取文本文件和图片文件的工具
 
+图片读取受模型能力约束：通过 ToolExecutionContext.metadata 注入的
+``model_capabilities``（ModelCapabilities）决定图片是否可读；无能力的
+模型读取图片时返回明确报错（引导切换带能力的模型），而不是把无法
+被模型理解的图片块注入上下文。
+
 使用示例：
     >>> from illusion.tools import FileReadTool
     >>> tool = FileReadTool()
@@ -23,6 +28,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
+from illusion.config.capabilities import ModelCapabilities
 from illusion.config.paths import resolve_relative_path
 from illusion.tools.base import BaseTool, ToolExecutionContext, ToolResult
 from illusion.utils.file_state_cache import FileState, FileStateCache
@@ -52,6 +58,18 @@ def _get_media_type(path: Path) -> str:
     return fallback.get(path.suffix.lower(), "application/octet-stream")
 
 
+def _supports_images(capabilities: ModelCapabilities | None) -> bool:
+    """模型是否支持图片输入（未注入能力一律视为不支持，fail-closed）。
+
+    Args:
+        capabilities: 注入的模型能力（None = 未声明）
+
+    Returns:
+        bool: 是否支持
+    """
+    return capabilities is not None and capabilities.supports_images
+
+
 class FileReadToolInput(BaseModel):
     """文件读取参数。
 
@@ -77,9 +95,12 @@ class FileReadToolInput(BaseModel):
 
 
 class FileReadTool(BaseTool[FileReadToolInput]):
-    """读取文本文件和图片文件。
+    """读取文本文件和图片/视频文件。
 
-    支持图片（PNG, JPG, GIF, WebP 等），通过 base64 编码传递给多模态模型。
+    支持图片（PNG, JPG, GIF, WebP 等）与视频（MP4, WebM 等），通过
+    base64 编码传递给多模态模型。媒体读取受模型能力约束：工具执行上下文
+    metadata["model_capabilities"] 声明当前模型能力，缺失或未声明能力的
+    媒体类别直接返回明确报错（fail-closed）。
     """
 
     name = "read_file"
@@ -121,19 +142,35 @@ Usage:
         # 获取文件状态缓存
         cache: FileStateCache | None = context.metadata.get("file_state_cache")
 
-        # 检测是否为图片文件
+        # 检测是否为图片文件，并按模型能力守卫
         if _is_image_file(path):
+            capabilities: ModelCapabilities | None = context.metadata.get("model_capabilities")
+            if not _supports_images(capabilities):
+                return self._unsupported_image_result()
             return await self._read_image_file(path)
 
         # 读取文本文件
         return await self._read_text_file(path, arguments, cache)
 
+    @staticmethod
+    def _unsupported_image_result() -> ToolResult:
+        """当前模型不支持图片输入时的明确报错。
+
+        明确告知模型该能力缺失并引导切换到带能力的模型，而不是把
+        无法理解的图片块注入上下文后由 API 报错兜底。
+        """
+        return ToolResult(
+            output=(
+                "The current model does not support image input. "
+                "Tell the user to use a model with image input capability."
+            ),
+            is_error=True,
+        )
+
     async def _read_image_file(self, path: Path) -> ToolResult:
         """读取图片文件并返回 base64 编码数据。"""
-        raw = await asyncio.to_thread(path.read_bytes)
-        file_size = len(raw)
-
-        # 检查文件大小限制
+        # 先 stat 校验大小再读取，超限文件不进入内存
+        file_size = (await asyncio.to_thread(path.stat)).st_size
         if file_size > _IMAGE_SIZE_LIMIT:
             limit_mb = _IMAGE_SIZE_LIMIT // (1024 * 1024)
             return ToolResult(
@@ -141,6 +178,7 @@ Usage:
                 is_error=True,
             )
 
+        raw = await asyncio.to_thread(path.read_bytes)
         media_type = _get_media_type(path)
         encoded = base64.b64encode(raw).decode("ascii")
 

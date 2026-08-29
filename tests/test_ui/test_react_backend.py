@@ -263,7 +263,7 @@ async def test_backend_host_command_does_not_reset_cli_overrides(tmp_path, monke
         Settings().model_copy(
             update={
                 "model": "env_1.model_1",
-                "env_1": {"api_format": "openai", "model_1": "gpt-5.4"},
+                "env_1": {"api_format": "openai", "model_1": {"name": "gpt-5.4", "capabilities": []}},
             }
         )
     )

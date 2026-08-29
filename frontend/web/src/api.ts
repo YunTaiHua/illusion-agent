@@ -9,6 +9,14 @@
  * @module api
  */
 
+/** 模型声明（settings.json 中 model_N 的对象格式） */
+export interface ModelConfig {
+  /** 模型名称（API 调用使用的标识） */
+  name: string;
+  /** 多模态能力列表：合法值 "image"，空 = 无媒体能力 */
+  capabilities: string[];
+}
+
 /** 环境配置信息（GET /api/envs 返回的单个 env 条目） */
 export interface EnvInfo {
   /** 环境键名，如 env_1 */
@@ -21,8 +29,8 @@ export interface EnvInfo {
   has_credential: boolean;
   /** 是否为当前活跃环境 */
   active: boolean;
-  /** 模型字典：{model_1: "claude-sonnet-4-5", model_2: "..."} */
-  models: Record<string, string>;
+  /** 模型字典：{model_1: {name: "claude-sonnet-4-5", capabilities: ["image"]}, ...} */
+  models: Record<string, ModelConfig>;
 }
 
 /** GET /api/envs 响应 */
@@ -401,8 +409,8 @@ export interface CreateEnvPayload {
   base_url?: string | null;
   api_key?: string;
   auth_token?: string;
-  model_1: string;
-  model_2?: string | null;
+  model_1: ModelConfig;
+  model_2?: ModelConfig | null;
 }
 
 /** 更新 env 请求体 */
@@ -412,7 +420,7 @@ export interface UpdateEnvPayload {
   api_key?: string;
   auth_token?: string;
   /** key 缺省时后端按现有最大编号 +1 自动分配 */
-  add_models?: { key?: string; value: string }[];
+  add_models?: { key?: string; value: ModelConfig }[];
   remove_models?: string[];
 }
 

@@ -35,6 +35,11 @@ from typing import Any  # 导入 Any 类型用于泛型
 
 from pydantic import BaseModel, Field, field_validator  # 导入 pydantic 模型基类和验证器
 
+from illusion.config.capabilities import (
+    ModelCapabilities,
+    is_valid_capability,
+    parse_capabilities,
+)
 from illusion.mcp.types import McpServerConfig, _normalize_server_config_type  # 导入 MCP 服务器配置
 from illusion.permissions.modes import PermissionMode  # 导入权限模式
 from illusion.utils.atomic_write import atomic_write_text  # 导入原子写入工具
@@ -285,6 +290,34 @@ class ResolvedAuth:
     state: str = "configured"  # 配置状态
 
 
+class ModelConfig(BaseModel):
+    """单个模型的声明式配置（settings.json 中 model_N 的对象格式）。
+
+    Attributes:
+        name: 模型名称（API 调用使用的标识）
+        capabilities: 多模态能力列表，合法值 "image"；
+            未配置视为无媒体能力（fail-closed）
+    """
+
+    name: str
+    capabilities: list[str] = Field(default_factory=list)
+
+    @field_validator("capabilities")
+    @classmethod
+    def _validate_capabilities(cls, values: list[str]) -> list[str]:
+        for value in values:
+            if not is_valid_capability(value):
+                raise ValueError(
+                    f"unknown model capability {value!r}; valid values: 'image'"
+                )
+        return list(dict.fromkeys(values))  # 去重保持顺序
+
+    @property
+    def media_capabilities(self) -> ModelCapabilities:
+        """解析后的媒体能力对象（未声明全部关闭）。"""
+        return parse_capabilities(self.capabilities)
+
+
 class EnvConfig(BaseModel):
     """环境/提供商组配置"""
 
@@ -296,17 +329,54 @@ class EnvConfig(BaseModel):
     model_config = {"extra": "allow"}  # 允许 model_N 动态字段
 
     def get_model(self, model_key: str) -> str | None:
-        """获取指定的模型名称，如 model_1, model_2"""
-        return getattr(self, model_key, None)
+        """获取指定的模型名称，如 model_1, model_2。"""
+        config = self._raw_model_field(model_key)
+        if isinstance(config, dict):
+            name = config.get("name")
+            return name if isinstance(name, str) and name else None
+        return None
+
+    def get_model_config(self, model_key: str) -> ModelConfig | None:
+        """获取指定模型的完整声明配置（含能力）。"""
+        config = self._raw_model_field(model_key)
+        if not isinstance(config, dict):
+            return None
+        try:
+            return ModelConfig.model_validate(config)
+        except (ValueError, TypeError):
+            return None
 
     def list_models(self) -> dict[str, str]:
-        """列出所有 model_N 字段"""
+        """列出所有 model_N 字段的模型名称。"""
         result = {}
-        extras = self.model_extra or {}
-        for key, value in extras.items():
-            if key.startswith("model_") and isinstance(value, str):
-                result[key] = value
+        for key in self._model_keys():
+            name = self.get_model(key)
+            if name:
+                result[key] = name
         return result
+
+    def list_model_configs(self) -> dict[str, ModelConfig]:
+        """列出所有 model_N 字段的完整模型配置（含能力）。"""
+        result = {}
+        for key in self._model_keys():
+            config = self.get_model_config(key)
+            if config is not None:
+                result[key] = config
+        return result
+
+    def _model_keys(self) -> list[str]:
+        """收集所有 model_N 字段键。"""
+        keys: list[str] = []
+        for key in (self.model_extra or {}):
+            if key.startswith("model_"):
+                keys.append(key)
+        return keys
+
+    def _raw_model_field(self, model_key: str) -> Any:
+        """读取 model_N 字段的原始值。"""
+        if hasattr(self, model_key):
+            return getattr(self, model_key)
+        return (self.model_extra or {}).get(model_key)
 
 
 class NotificationSettings(BaseModel):
@@ -478,6 +548,58 @@ class Settings(BaseModel):
         if env is None:
             return None, None
         return env_key, env.get_model(model_key)
+
+    def get_model_capabilities(self, ref: str | None = None) -> ModelCapabilities:
+        """解析模型引用的媒体能力（未声明一律无能力，fail-closed）。
+
+        用于发送前判断媒体块是否需要转换为文本描述、以及工具层（如
+        read_file）的能力守卫。ref 为 None 时按当前激活模型解析；跨 env
+        调用方传 ``env_N.model_M`` 引用。
+
+        Args:
+            ref: 模型引用字符串；None 表示当前激活模型
+
+        Returns:
+            ModelCapabilities: 模型媒体能力（默认全关闭）
+        """
+        env_key, model_key = self._resolve_ref_parts(ref)
+        if env_key is None or model_key is None:
+            return ModelCapabilities()
+        env = self.get_env(env_key)
+        if env is None:
+            return ModelCapabilities()
+        config = env.get_model_config(model_key)
+        if config is None:
+            return ModelCapabilities()
+        return config.media_capabilities
+
+    def set_model_config(self, env_key: str, model_key: str, config: ModelConfig) -> None:
+        """写入模型声明到指定 env（含能力）。
+
+        直接操作 model_extra 中的 env 字典（get_env 每次从该字典重建
+        EnvConfig 实例，setattr 到 get_env 返回值不会持久化）。
+
+        Args:
+            env_key: 环境键名（env_N）
+            model_key: 模型键名（model_N）
+            config: 模型声明
+
+        Raises:
+            TypeError: env 不存在或不是字典形态
+        """
+        extras = self.__pydantic_extra__ or {}
+        env_data = extras.get(env_key)
+        if not isinstance(env_data, dict):
+            raise TypeError(f"env {env_key} does not exist or is not a dict")
+        env_data[model_key] = config.model_dump()
+
+    def _resolve_ref_parts(self, ref: str | None) -> tuple[str | None, str | None]:
+        """将模型引用拆为 (env_key, model_key)；None 用当前激活模型。"""
+        if ref:
+            parts = ref.split(".", 1)
+            if len(parts) == 2 and parts[0].startswith("env_"):
+                return parts[0], parts[1]
+        return self._active_env_key, self._active_model_key
 
     # --- 兼容性属性 ---
 

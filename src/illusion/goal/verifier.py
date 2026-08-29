@@ -298,6 +298,13 @@ async def _spawn_verifier(
         effort=engine._effort,
         on_before_tool_execute=getattr(engine, "on_before_tool_execute", None),
         file_state_cache=getattr(engine, "_file_state_cache", None),
+        # 媒体能力：继承父引擎当前能力（验证子代理经 agent_executor
+        # 继承同模型 QueryContext 的能力）
+        capabilities=(
+            engine._resolve_capabilities()
+            if hasattr(engine, "_resolve_capabilities")
+            else None
+        ),
     )
     config = AgentSpawnConfig(
         name=f"goal-verifier-{attempt}",

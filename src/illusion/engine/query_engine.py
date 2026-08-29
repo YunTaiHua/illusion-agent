@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 from illusion.api.client import SupportsStreamingMessages
 from illusion.api.effort import EffortLevel
 from illusion.api.usage import UsageSnapshot
+from illusion.config.capabilities import ModelCapabilities
 from illusion.engine.cost_tracker import CostTracker
 from illusion.engine.messages import ConversationMessage, ToolResultBlock
 from illusion.engine.query import (
@@ -166,6 +167,7 @@ class QueryEngine:
         print_mode: bool = False,
         sandbox_permission_prompt: PermissionPrompt | None = None,
         goal_manager: GoalManager | None = None,
+        capabilities_resolver: Callable[[], ModelCapabilities] | None = None,
     ) -> None:
         self._api_client = api_client  # API客户端
         self._tool_registry = tool_registry  # 工具注册表
@@ -196,6 +198,25 @@ class QueryEngine:
         self._file_state_cache = FileStateCache()  # 文件状态缓存（用于读写去重）
         self._checkpoint_store: CheckpointStore | None = None  # 持久化存储
         self._goal_manager = goal_manager  # goal 域管理器（None = 未启用）
+        # 媒体能力解析器：每次查询开始（_build_query_context）时调用一次，
+        # 从 settings 现查当前激活模型的能力——/model set 后无需任何同步
+        # 即可让后续请求生效（同 env 内切换模型亦是如此）
+        self._capabilities_resolver = capabilities_resolver
+
+    def _resolve_capabilities(self) -> ModelCapabilities | None:
+        """解析当前模型的媒体能力（未提供解析器返回 None = fail-closed）。
+
+        getattr 防御轻量桩/旧版子类（如测试中的 _FakeEngine）未设置
+        解析器属性的场景。
+        """
+        resolver = getattr(self, "_capabilities_resolver", None)
+        if resolver is None:
+            return None
+        try:
+            return resolver()
+        except Exception:
+            logger.exception("Failed to resolve model capabilities")
+            return None
 
     @property
     def effort(self) -> EffortLevel | None:
@@ -818,6 +839,9 @@ class QueryEngine:
             last_api_usage_message_count=self._last_api_usage_message_count,
             on_before_tool_execute=self.on_before_tool_execute,
             file_state_cache=self._file_state_cache,
+            # 当前模型媒体能力（惰性求值：查询开始时解析一次，跟随 /model set
+            # 与 settings 变更；请求与工具层据此决定媒体块处理）
+            capabilities=self._resolve_capabilities(),
             # 权限自动审批任务上下文：goal objective 优先，否则最近三条真实
             # user 消息（过滤口径与 turn_count 一致）
             task_context_provider=lambda: _collect_task_context(

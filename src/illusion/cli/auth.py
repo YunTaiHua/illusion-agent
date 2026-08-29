@@ -25,18 +25,11 @@ from illusion.config.i18n import MESSAGES as _I18N
 from illusion.config.i18n import t as _t
 
 _FORMAT_OPTIONS: list[tuple[str, dict[str, str]]] = [
-    ("custom", _I18N["custom_format"]),
     ("anthropic", _I18N["anthropic_label"]),
     ("openai", _I18N["openai_label"]),
     ("response", _I18N["response_label"]),
     ("copilot", _I18N["copilot_label"]),
     ("codex", _I18N["codex_label"]),
-]
-
-_API_FORMAT_OPTIONS: list[tuple[str, str]] = [
-    ("openai", "OpenAI"),
-    ("anthropic", "Anthropic"),
-    ("response", "Responses"),
 ]
 
 _DEFAULT_ENDPOINTS: dict[str, str] = {
@@ -83,9 +76,11 @@ def _prompt_models_and_create_env(
         str: 最终保存的 env_key
     """
     from illusion.auth.storage import store_env_credential
+    from illusion.commands.model import _ask_capabilities
 
-    # 1. model 名循环输入
-    models_to_add: list[str] = []
+    # 1. model 名循环输入：每个 model 询问图片能力（对象格式声明，
+    #    未勾选视为无图片能力，fail-closed）
+    models_to_add: list[tuple[str, list[str]]] = []
     default_model = _DEFAULT_MODELS.get(format_choice, "")
     while True:
         if default_model:
@@ -98,7 +93,8 @@ def _prompt_models_and_create_env(
             if not model_input:
                 print(_t("model_required"), file=sys.stderr)
                 continue
-        models_to_add.append(model_input)
+        capabilities = _ask_capabilities()
+        models_to_add.append((model_input, capabilities))
         # 询问是否继续（直接回车默认退出）
         cont = input(f"{_t('add_another_model')} ").strip().lower()
         if cont != "y":
@@ -121,8 +117,8 @@ def _prompt_models_and_create_env(
     }
     if extra_env_fields:
         env_config.update(extra_env_fields)
-    for i, model_name in enumerate(models_to_add):
-        env_config[f"model_{i + 1}"] = model_name
+    for i, (model_name, capabilities) in enumerate(models_to_add):
+        env_config[f"model_{i + 1}"] = {"name": model_name, "capabilities": capabilities}
     setattr(manager.settings, target_env_key, env_config)
     if credential is not None:
         store_env_credential(target_env_key, auth_field, credential)
@@ -180,53 +176,25 @@ def auth_login() -> None:
 
     # --- 其他提供商走 API 密钥流程 ---
 
-    # 2. 确定 API 格式
+    # 2. 确定 API 格式：所选格式即协议；第三方/自建端点在下一步端点中
+    #    直接填入即可（不单设"自定义"选项）
     auth_field = "api_key"  # 默认使用 api_key
-    if format_choice == "anthropic":
-        api_format = "anthropic"
-    elif format_choice == "openai":
-        api_format = "openai"
-    elif format_choice == "response":
-        api_format = "response"
-    else:
-        # 自定义提供商：让用户选择 API 格式
-        print(_t("select_api_format"))
-        for i, (fmt, label) in enumerate(_API_FORMAT_OPTIONS, 1):
-            print(f"  {i}. {label}")
+    api_format = format_choice
+    if api_format == "anthropic":
+        # anthropic 协议支持 api_key 与 auth_token（Bearer）两种认证
+        print(_t("select_auth_type"))
+        print(f"  1. api_key ({_t('auth_type_api_key')})")
+        print(f"  2. auth_token ({_t('auth_type_auth_token')})")
         raw = typer.prompt(_t("enter_number"), default="1")
-        try:
-            idx = int(raw.strip()) - 1
-            if 0 <= idx < len(_API_FORMAT_OPTIONS):
-                api_format = _API_FORMAT_OPTIONS[idx][0]
-            else:
-                print(_t("invalid_selection"), file=sys.stderr)
-                raise typer.Exit(1)
-        except ValueError:
-            print(_t("invalid_selection"), file=sys.stderr)
-            raise typer.Exit(1)
+        if raw.strip() == "2":
+            auth_field = "auth_token"
 
-        # 自定义格式+anthropic 时，选择认证方式
-        auth_field = "api_key"
-        if api_format == "anthropic":
-            print(_t("select_auth_type"))
-            print(f"  1. api_key ({_t('auth_type_api_key')})")
-            print(f"  2. auth_token ({_t('auth_type_auth_token')})")
-            raw = typer.prompt(_t("enter_number"), default="1")
-            if raw.strip() == "2":
-                auth_field = "auth_token"
-
-    # 3. 输入端点
-    default_ep = _DEFAULT_ENDPOINTS.get(format_choice, "")
-    if default_ep:
-        prompt_text = f"{_t('enter_endpoint')} ({_t('default_endpoint')}: {default_ep}): "
-        endpoint = input(prompt_text).strip()
-        if not endpoint:
-            endpoint = default_ep
-    else:
-        endpoint = input(f"{_t('enter_endpoint')}: ").strip()
-        if not endpoint:
-            print(_t("endpoint_required"), file=sys.stderr)
-            raise typer.Exit(1)
+    # 3. 输入端点（默认端点兜底；直接输入即自定义端点）
+    default_ep = _DEFAULT_ENDPOINTS[format_choice]
+    prompt_text = f"{_t('enter_endpoint')} ({_t('default_endpoint')}: {default_ep}): "
+    endpoint = input(prompt_text).strip()
+    if not endpoint:
+        endpoint = default_ep
 
     # 4. 输入 API 密钥 / Auth Token
     if auth_field == "auth_token":
@@ -526,6 +494,7 @@ def add_model(
         env_key: 环境键名，如 env_1；省略则交互式选择
     """
     from illusion.auth.manager import AuthManager
+    from illusion.commands.model import _ask_capabilities
 
     _ensure_language()
     manager = AuthManager()
@@ -580,8 +549,9 @@ def add_model(
         if not model_input:
             print(_t("model_required"), file=sys.stderr)
             continue
+        capabilities = _ask_capabilities()
         model_key = f"model_{next_num}"
-        env_config[model_key] = model_input
+        env_config[model_key] = {"name": model_input, "capabilities": capabilities}
         added_models.append((model_key, model_input))
         next_num += 1
         # 询问是否继续（直接回车默认退出）

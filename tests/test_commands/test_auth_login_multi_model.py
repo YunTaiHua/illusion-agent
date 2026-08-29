@@ -16,7 +16,7 @@ def _make_env_config(api_format="anthropic", base_url="https://api.anthropic.com
     env.list_models.return_value = models
     base: dict = {"api_format": api_format, "base_url": base_url}
     for i, m in enumerate(models.values()):
-        base[f"model_{i + 1}"] = m
+        base[f"model_{i + 1}"] = {"name": m, "capabilities": []}
     env.model_dump.return_value = base
     return env
 
@@ -33,7 +33,7 @@ def _make_manager(envs=None):
 def test_multiple_models_new_env_no_existing():
     """无已有 env 时，循环输入多个 model 并创建 env_1"""
     manager = _make_manager(envs={})
-    inputs = ["claude-sonnet-4-6", "y", "claude-opus-4", "n"]
+    inputs = ["claude-sonnet-4-6", "y", "y", "claude-opus-4", "", "n"]
     with patch("builtins.input", side_effect=inputs):
         result = _prompt_models_and_create_env(
             manager=manager,
@@ -46,8 +46,9 @@ def test_multiple_models_new_env_no_existing():
     assert result == "env_1"
     env_config = manager.settings.env_1
     assert isinstance(env_config, dict)
-    assert env_config["model_1"] == "claude-sonnet-4-6"
-    assert env_config["model_2"] == "claude-opus-4"
+    # 模型以对象格式写入：勾选图片能力的与未勾选的并列
+    assert env_config["model_1"] == {"name": "claude-sonnet-4-6", "capabilities": ["image"]}
+    assert env_config["model_2"] == {"name": "claude-opus-4", "capabilities": []}
     assert manager.settings.model == "env_1.model_1"
     manager.save_settings.assert_called_once()
 
@@ -56,7 +57,7 @@ def test_multiple_models_new_env_with_existing():
     """已有 env_1 时，新建 env_2（auth login 始终新建，不询问选择）"""
     existing_env = _make_env_config(models={"model_1": "existing-model"})
     manager = _make_manager(envs={"env_1": existing_env})
-    inputs = ["claude-sonnet-4-6", "y", "claude-opus-4", "n"]
+    inputs = ["claude-sonnet-4-6", "n", "y", "claude-opus-4", "n", "n"]
     with patch("builtins.input", side_effect=inputs):
         result = _prompt_models_and_create_env(
             manager=manager,
@@ -69,15 +70,15 @@ def test_multiple_models_new_env_with_existing():
     assert result == "env_2"
     env_config = manager.settings.env_2
     assert isinstance(env_config, dict)
-    assert env_config["model_1"] == "claude-sonnet-4-6"
-    assert env_config["model_2"] == "claude-opus-4"
+    assert env_config["model_1"]["name"] == "claude-sonnet-4-6"
+    assert env_config["model_2"]["name"] == "claude-opus-4"
     assert manager.settings.model == "env_2.model_1"
 
 
 def test_default_enter_exits_loop():
     """回车默认退出 model 循环"""
     manager = _make_manager(envs={})
-    inputs = ["claude-sonnet-4-6", ""]
+    inputs = ["claude-sonnet-4-6", "n", ""]
     with patch("builtins.input", side_effect=inputs):
         result = _prompt_models_and_create_env(
             manager=manager,
@@ -97,7 +98,7 @@ def test_default_enter_exits_loop():
 def test_credential_stored_for_new_env():
     """新建 env 时存储凭据"""
     manager = _make_manager(envs={})
-    inputs = ["claude-sonnet-4-6", "n"]
+    inputs = ["claude-sonnet-4-6", "n", "n"]
     with (
         patch("builtins.input", side_effect=inputs),
         patch("illusion.auth.storage.store_env_credential") as mock_store,
@@ -116,7 +117,7 @@ def test_credential_stored_for_new_env():
 def test_credential_none_skips_storage():
     """credential 为 None 时跳过凭据存储（copilot/codex）"""
     manager = _make_manager(envs={})
-    inputs = ["gpt-4o", "n"]
+    inputs = ["gpt-4o", "n", "n"]
     with (
         patch("builtins.input", side_effect=inputs),
         patch("illusion.auth.storage.store_env_credential") as mock_store,
@@ -138,7 +139,7 @@ def test_credential_none_skips_storage():
 def test_default_model_used_when_empty():
     """有默认 model 时，空输入使用默认 model"""
     manager = _make_manager(envs={})
-    inputs = ["", "n"]  # 空输入 → 使用默认 model
+    inputs = ["", "n", "n"]  # 空输入 → 使用默认 model
     with patch("builtins.input", side_effect=inputs):
         result = _prompt_models_and_create_env(
             manager=manager,
@@ -164,7 +165,7 @@ def test_add_model_to_existing_env_interactive():
     existing_env = _make_env_config(models={"model_1": "claude-sonnet-4-6"})
     manager = _make_manager(envs={"env_1": existing_env})
 
-    inputs = ["claude-opus-4", "y", "claude-haiku", "n"]
+    inputs = ["claude-opus-4", "n", "y", "claude-haiku", "n", "n"]
     with (
         patch("builtins.input", side_effect=inputs),
         patch("illusion.auth.manager.AuthManager", return_value=manager),
@@ -178,9 +179,9 @@ def test_add_model_to_existing_env_interactive():
 
     mock_prompt.assert_called_once()
     env_config = manager.settings.env_1
-    assert env_config["model_1"] == "claude-sonnet-4-6"
-    assert env_config["model_2"] == "claude-opus-4"
-    assert env_config["model_3"] == "claude-haiku"
+    assert env_config["model_1"]["name"] == "claude-sonnet-4-6"
+    assert env_config["model_2"]["name"] == "claude-opus-4"
+    assert env_config["model_3"]["name"] == "claude-haiku"
     manager.save_settings.assert_called_once()
 
 
@@ -191,7 +192,7 @@ def test_add_model_with_env_key_arg():
     existing_env = _make_env_config(models={"model_1": "existing-model"})
     manager = _make_manager(envs={"env_1": existing_env})
 
-    inputs = ["new-model", "n"]
+    inputs = ["new-model", "y", "n"]
     with (
         patch("builtins.input", side_effect=inputs),
         patch("illusion.auth.manager.AuthManager", return_value=manager),
@@ -203,8 +204,8 @@ def test_add_model_with_env_key_arg():
             pass
 
     env_config = manager.settings.env_1
-    assert env_config["model_1"] == "existing-model"
-    assert env_config["model_2"] == "new-model"
+    assert env_config["model_1"]["name"] == "existing-model"
+    assert env_config["model_2"] == {"name": "new-model", "capabilities": ["image"]}
 
 
 def test_add_model_env_not_exist():

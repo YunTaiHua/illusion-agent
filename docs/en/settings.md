@@ -73,13 +73,13 @@ Uses `env_N` grouped format. Each `env_N` is an independent environment config (
   "env_1": {
     "api_format": "anthropic",
     "base_url": null,
-    "model_1": "claude-sonnet-4-6",
-    "model_2": "claude-opus-4-6"
+    "model_1": {"name": "claude-sonnet-4-6", "capabilities": []},
+    "model_2": {"name": "claude-opus-4-6", "capabilities": []}
   },
   "env_2": {
     "api_format": "openai",
     "base_url": "https://api.openai.com/v1",
-    "model_1": "gpt-5.4"
+    "model_1": {"name": "gpt-5.4", "capabilities": []}
   },
   "model": "env_1.model_1",
   "context_window": 200000
@@ -93,8 +93,8 @@ Uses `env_N` grouped format. Each `env_N` is an independent environment config (
   "env_1": {
     "api_format": "anthropic",
     "base_url": null,
-    "model_1": "claude-sonnet-4-6",
-    "model_2": "claude-opus-4-6"
+    "model_1": {"name": "claude-sonnet-4-6", "capabilities": []},
+    "model_2": {"name": "claude-opus-4-6", "capabilities": []}
   },
   "model": "env_1.model_1",
   "context_window": 200000,
@@ -217,7 +217,32 @@ Fixed working directory. If set, illusion-agent will automatically switch to thi
 | `base_url` | string\|null | No | Custom API endpoint, null uses default |
 | `api_key` | string | No | API key (standard `x-api-key` auth) |
 | `auth_token` | string | No | Bearer Token auth (for providers like LongCat using `Authorization: Bearer`) |
-| `model_N` | string | No | Model name: `model_1`, `model_2`, ... |
+| `model_N` | object | No | Model declaration: `{"name": "...", "capabilities": [...]}`, e.g. `model_1`, `model_2`, ... |
+
+### Model Capability Declaration (Multimodal)
+
+Each model can declare multimodal capabilities (image input). Models without a declaration are treated as vision-less (fail-closed):
+
+```json
+{
+  "env_1": {
+    "api_format": "openai",
+    "model_1": {
+      "name": "gpt-4o",
+      "capabilities": ["image"]
+    },
+    "model_2": { "name": "deepseek-v3" }
+  },
+  "model": "env_1.model_1"
+}
+```
+
+- Valid `capabilities` values: `"image"` (image input)
+- Models without `capabilities` (or with `[]`) are treated as not supporting image input
+- Capabilities affect two paths:
+  - **read_file tool**: reading an image with a model lacking the capability returns an explicit error immediately (guiding the user to switch to a capable model) instead of injecting a media block the model cannot understand
+  - **Request sending**: after switching models (including `model_1` → `model_2` within the same env), images already read in history are automatically converted to text placeholders and the request succeeds in one try; switching back to a capable model restores the media (history itself is never mutated)
+- `/model set` interactively asks about image support in terminal mode; the Web settings panel provides an image checkbox per model row
 
 ### Multi-Model Configuration
 
@@ -226,9 +251,9 @@ Fixed working directory. If set, illusion-agent will automatically switch to thi
   "env_1": {
     "api_format": "openai",
     "base_url": "https://integrate.api.nvidia.com/v1",
-    "model_1": "stepfun-ai/step-3.5-flash",
-    "model_2": "minimaxai/minimax-m2.7",
-    "model_3": "meta/llama-3.1-405b-instruct"
+    "model_1": {"name": "stepfun-ai/step-3.5-flash", "capabilities": []},
+    "model_2": {"name": "minimaxai/minimax-m2.7", "capabilities": []},
+    "model_3": {"name": "meta/llama-3.1-405b-instruct", "capabilities": []}
   },
   "model": "env_1.model_1"
 }
@@ -251,8 +276,8 @@ illusion -m env_1.model_2       # CLI parameter
   "env_1": {
     "api_format": "anthropic",
     "base_url": null,
-    "model_1": "claude-sonnet-4-6",
-    "model_2": "claude-opus-4-6"
+    "model_1": {"name": "claude-sonnet-4-6", "capabilities": []},
+    "model_2": {"name": "claude-opus-4-6", "capabilities": []}
   },
   "model": "env_1.model_1"
 }
@@ -265,7 +290,7 @@ illusion -m env_1.model_2       # CLI parameter
   "env_1": {
     "api_format": "openai",
     "base_url": "https://api.openai.com/v1",
-    "model_1": "gpt-5.4"
+    "model_1": {"name": "gpt-5.4", "capabilities": []}
   },
   "model": "env_1.model_1"
 }
@@ -288,7 +313,7 @@ After GitHub authorization in browser, auto-configured. Auth stored in `~/.illus
   "env_1": {
     "api_format": "copilot",
     "base_url": "https://api.githubcopilot.com",
-    "model_1": "gpt-5.5"
+    "model_1": {"name": "gpt-5.5", "capabilities": []}
   }
 }
 ```
@@ -306,7 +331,7 @@ Uses ChatGPT subscription auth via Device Code flow. Auth stored in `~/.illusion
   "env_1": {
     "api_format": "codex",
     "base_url": "https://chatgpt.com/backend-api",
-    "model_1": "codex-mini"
+    "model_1": {"name": "codex-mini", "capabilities": []}
   }
 }
 ```
@@ -321,7 +346,7 @@ LongCat uses `Authorization: Bearer` authentication, configured via the `auth_to
     "api_format": "anthropic",
     "base_url": "https://api.longcat.chat/anthropic",
     "auth_token": "ak_your_longcat_api_key",
-    "model_1": "LongCat-2.0"
+    "model_1": {"name": "LongCat-2.0", "capabilities": []}
   }
 }
 ```
@@ -333,17 +358,17 @@ LongCat uses `Authorization: Bearer` authentication, configured via the `auth_to
   "env_1": {
     "api_format": "anthropic",
     "base_url": null,
-    "model_1": "claude-sonnet-4-6"
+    "model_1": {"name": "claude-sonnet-4-6", "capabilities": []}
   },
   "env_2": {
     "api_format": "openai",
     "base_url": "https://api.openai.com/v1",
-    "model_1": "gpt-5.4"
+    "model_1": {"name": "gpt-5.4", "capabilities": []}
   },
   "env_3": {
     "api_format": "copilot",
     "base_url": "https://api.githubcopilot.com",
-    "model_1": "gpt-5.5"
+    "model_1": {"name": "gpt-5.5", "capabilities": []}
   },
   "model": "env_1.model_1"
 }

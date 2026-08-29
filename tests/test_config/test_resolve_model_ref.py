@@ -12,8 +12,8 @@ def _settings_with_env() -> Settings:
             "env_1": {
                 "api_format": "openai",
                 "base_url": "https://api.example.com",
-                "model_1": "gpt-5.4",
-                "model_2": "deepseek-v4-flash",
+                "model_1": {"name": "gpt-5.4", "capabilities": ["image"]},
+                "model_2": {"name": "deepseek-v4-flash", "capabilities": []},
             },
             "model": "env_1.model_1",
         }

@@ -652,11 +652,10 @@ export default function App() {
    * 处理设置表单保存成功
    *
    * 配置已通过即时 REST API 写入 settings.json / channels.json / credentials.json，
-   * 前端 state 已同步更新，无需整页刷新。静默关闭表单即可。
+   * 前端 state 已同步更新，无需整页刷新。保存后表单保持打开，由用户自行关闭。
    */
   const handleSetupSaved = useCallback(() => {
     session.clearFirstLogin();
-    setShowSetupForm(false);
     // 设置保存后主动向后端请求一次状态刷新（context_window/max_tokens/max_turns
     // 热应用到运行中主机并推送快照），保证右栏上下文窗口与后续请求参数立即生效
     session.sendRequest({ type: 'web_refresh_status' });

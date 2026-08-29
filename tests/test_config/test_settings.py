@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from illusion.config.capabilities import ModelCapabilities
 from illusion.config.settings import (
     Settings,
     load_settings,
@@ -71,7 +72,7 @@ class TestSettings:
     def test_active_model_name_from_env(self):
         s = Settings(
             model="env_1.model_1",
-            env_1={"api_format": "anthropic", "model_1": "claude-opus-4-20250514"},
+            env_1={"api_format": "anthropic", "model_1": {"name": "claude-opus-4-20250514", "capabilities": []}},
         )
         assert s.active_model_name == "claude-opus-4-20250514"
 
@@ -93,7 +94,7 @@ class TestLoadSaveSettings:
         path = tmp_path / "settings.json"
         path.write_text(json.dumps({
             "model": "env_1.model_1",
-            "env_1": {"api_format": "anthropic", "model_1": "claude-opus-4-20250514"},
+            "env_1": {"api_format": "anthropic", "model_1": {"name": "claude-opus-4-20250514", "capabilities": []}},
         }))
         s = load_settings(path)
         assert s.active_model_name == "claude-opus-4-20250514"
@@ -102,7 +103,7 @@ class TestLoadSaveSettings:
     def test_save_and_load_roundtrip(self, tmp_path: Path):
         path = tmp_path / "settings.json"
         original = Settings(
-            env_1={"api_format": "anthropic", "api_key": "sk-roundtrip", "model_1": "claude-opus-4-20250514"},
+            env_1={"api_format": "anthropic", "api_key": "sk-roundtrip", "model_1": {"name": "claude-opus-4-20250514", "capabilities": []}},
         )
         save_settings(original, path)
         loaded = load_settings(path)
@@ -161,8 +162,8 @@ class TestLoadSaveSettings:
                     "env_1": {
                         "api_format": "anthropic",
                         "api_key": "sk-test",
-                        "model_1": "claude-sonnet-4-6",
-                        "model_2": "claude-opus-4-6",
+                        "model_1": {"name": "claude-sonnet-4-6", "capabilities": []},
+                        "model_2": {"name": "claude-opus-4-6", "capabilities": []},
                     },
                 }
             )
@@ -180,13 +181,15 @@ class TestLoadSaveSettings:
             env_1={
                 "api_format": "openai",
                 "api_key": "sk-test",
-                "model_1": "gpt-4",
-                "model_2": "gpt-5.4",
+                "model_1": {"name": "gpt-4", "capabilities": []},
+                "model_2": {"name": "gpt-5.4", "capabilities": ["image"]},
             },
         )
         save_settings(original, path)
         loaded = load_settings(path)
         assert loaded.active_model_name == "gpt-5.4"
         assert loaded.api_key == "sk-test"
+        # 能力随模型声明持久化
+        assert loaded.get_model_capabilities() == ModelCapabilities(supports_images=True)
 
 
