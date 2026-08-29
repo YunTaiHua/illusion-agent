@@ -48,6 +48,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from typing import Any
 
 import httpx
@@ -87,6 +88,7 @@ from illusion.engine.messages import (
     ThinkingBlock,
     ToolResultBlock,
     ToolUseBlock,
+    strip_media_if_unsupported,
 )
 from illusion.utils.http import create_async_client
 
@@ -317,7 +319,6 @@ class ResponsesApiClient:
         self._base_url = base_url
         self._url = _resolve_responses_url(base_url)
         self._prefer_store = False
-
     def _resolve_auth_token(self) -> str:
         """解析当前 Bearer 令牌（auth_token 优先，其次 api_key）
 
@@ -347,6 +348,16 @@ class ResponsesApiClient:
         Yields:
             ApiStreamEvent: 流式事件
         """
+        # 事前降级：按当前模型能力将不支持的媒体块转为文本占位，
+        # 避免模型不支持时先失败一次再重试（切换模型后的历史媒体同理）
+        stripped = strip_media_if_unsupported(request.messages, request.capabilities)
+        if stripped is not None:
+            log.info(
+                "Model %s lacks media capability; sending text placeholders instead of media.",
+                request.model,
+            )
+            request = replace(request, messages=stripped)
+
         last_error: Exception | None = None
         # 思考回传自愈状态：降级 store: true 重试一次
         reasoning_fallback_tried = False

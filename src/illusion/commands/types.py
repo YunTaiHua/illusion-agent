@@ -59,6 +59,10 @@ class CommandContext:
         cwd: 当前工作目录
         tool_registry: 工具注册表
         app_state: 应用状态存储
+        session_id: 当前会话ID
+        channel_hint: 渠道感知提示词（重建系统提示词时复用）
+        interactive: 是否运行在可交互终端（TUI）。交互式命令（如模型能力
+            勾选引导）仅在 True 时询问；Web 会话为 False，跳过询问
     """
 
     engine: QueryEngine  # 查询引擎
@@ -70,6 +74,7 @@ class CommandContext:
     app_state: AppStateStore | None = None  # 应用状态
     session_id: str = ""  # 当前会话ID
     channel_hint: str | None = None  # 渠道感知提示词（重建系统提示词时复用）
+    interactive: bool = False  # 是否支持交互式输入（TUI 终端）
 
 
 # 命令处理器类型别名

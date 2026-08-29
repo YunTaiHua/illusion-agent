@@ -28,6 +28,7 @@ import json
 import logging
 import re as _re
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -67,6 +68,7 @@ from illusion.engine.messages import (
     ToolUseBlock,
     _messages_have_media,
     _strip_media_from_messages,
+    strip_media_if_unsupported,
 )
 
 # 模块级日志记录器
@@ -79,7 +81,7 @@ MAX_DELAY = 30.0  # 最大延迟（秒）
 
 
 def _serialize_media_for_openai(block: MediaBlock) -> dict[str, Any]:
-    """将图片 MediaBlock 转换为 OpenAI 消息内容部分。"""
+    """将图片 MediaBlock 转换为 OpenAI 兼容消息内容部分（image_url data URL）。"""
     return {
         "type": "image_url",
         "image_url": {"url": f"data:{block.media_type};base64,{block.data}"},
@@ -720,6 +722,16 @@ class OpenAICompatibleClient:
         Yields:
             ApiStreamEvent: 流式事件
         """
+        # 事前降级：按当前模型能力将不支持的媒体块转为文本占位，
+        # 避免模型不支持时先失败一次再重试（切换模型后的历史媒体同理）
+        stripped = strip_media_if_unsupported(request.messages, request.capabilities)
+        if stripped is not None:
+            log.info(
+                "Model %s lacks media capability; sending text placeholders instead of media.",
+                request.model,
+            )
+            request = replace(request, messages=stripped)
+
         last_error: Exception | None = None
         media_stripped = False
 
@@ -738,13 +750,9 @@ class OpenAICompatibleClient:
                         "Request failed, possibly due to unsupported image content. "
                         "Retrying with text descriptions instead of images.",
                     )
-                    request = ApiMessageRequest(
-                        model=request.model,
+                    request = replace(
+                        request,
                         messages=_strip_media_from_messages(request.messages),
-                        system_prompt=request.system_prompt,
-                        tools=request.tools,
-                        max_tokens=request.max_tokens,
-                        extra_body=request.extra_body,
                     )
                     media_stripped = True
                     continue
@@ -805,15 +813,9 @@ class OpenAICompatibleClient:
                         "Request failed, possibly due to unsupported image content. "
                         "Retrying with text descriptions instead of images.",
                     )
-                    request = ApiMessageRequest(
-                        model=request.model,
+                    request = replace(
+                        request,
                         messages=_strip_media_from_messages(request.messages),
-                        system_prompt=request.system_prompt,
-                        tools=request.tools,
-                        max_tokens=request.max_tokens,
-                        effort=request.effort,
-                        extra_body=request.extra_body,
-                        prompt_cache_key=request.prompt_cache_key,
                     )
                     media_stripped = True
                     continue

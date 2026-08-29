@@ -56,6 +56,7 @@ from illusion.engine.messages import (
     ThinkingBlock,
     ToolResultBlock,
     ToolUseBlock,
+    _media_placeholder,
 )
 from illusion.utils.http import create_async_client
 
@@ -160,10 +161,9 @@ def _convert_messages_to_codex(messages: list[ConversationMessage]) -> list[dict
                 # Codex 上下文窗口有限（272K token），input_image 的 base64
                 # 数据会被计算为海量 token，因此统一用文本描述替代
                 for mb in media_blocks:
-                    size_str = f" ({mb.metadata['size']} bytes)" if "size" in mb.metadata else ""
                     parts.append({
                         "type": "input_text",
-                        "text": f"[image file: {mb.file_path}{size_str}, {mb.media_type}] This model does not support image input",
+                        "text": _media_placeholder(mb),
                     })
                 result.append({
                     "role": "user",
