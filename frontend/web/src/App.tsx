@@ -1111,8 +1111,9 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen">
-      {/* Electron 桌面壳自定义顶部栏（浏览器端返回 null） */}
-      <TitleBar lang={lang} />
+      {/* 桌面壳自定义顶部栏：与主内容同门控——遮罩期不渲染，避免品牌图标/字体
+          浮在遮罩层上方（浏览器端 TitleBar 本身返回 null） */}
+      {revealReady && !session.bootstrapping && <TitleBar lang={lang} />}
       {/* 首帧引导（bootstrapping）未结束 / 遮罩未褪去（revealReady）期间
           不渲染主界面，只保留全屏遮罩覆盖，避免"主界面先露出、遮罩后淡入"
           的翻转闪烁；首个会话内容呈现完成后一次性渲染主界面。 */}
@@ -1128,7 +1129,7 @@ export default function App() {
         collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
         width={sidebarWidth} restoringSessionId={session.restoringSessionId}
         onOpenSettings={() => { setSetupInitialTab('settings'); setShowSetupForm(true); }} />
-      <div className="flex flex-col flex-1 min-w-0 min-h-0 relative">
+      <div className="flex flex-col flex-1 min-w-0 min-h-0 relative mt-2">
         <ChatArea lang={lang} staticItems={session.staticItems} assistantBuffer={session.assistantBuffer}
           streamingReasoning={session.streamingReasoning} pendingToolCalls={session.pendingToolCalls}
           reasoningStreaming={session.reasoningStreaming}

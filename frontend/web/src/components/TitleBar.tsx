@@ -173,6 +173,15 @@ export default function TitleBar({ lang }: { lang: UiLanguage }) {
         paddingLeft: isMac ? '80px' : '12px',
       }}
     >
+      {/* 品牌展示（仅 Win/Linux）：图标 + 标语，纯展示无交互；mac 交由原生交通灯区 */}
+      {!isMac && (
+        <div className="flex items-center gap-2 mr-3">
+          <img src="/icon.png" alt="" width={20} height={20} draggable={false} className="select-none" />
+          <span className="font-body font-bold text-content-primary text-xs tracking-wider whitespace-nowrap">
+            {t(lang, 'titlebar_slogan')}
+          </span>
+        </div>
+      )}
       <div className="flex-1" />
 
       {/* macOS：原生交通灯在左侧，更新图标置于顶栏右侧 */}

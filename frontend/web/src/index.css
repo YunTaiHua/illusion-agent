@@ -1,10 +1,13 @@
-/* 嵌入字体（Inter 正文 / JetBrains Mono 等宽），随前端一起打包，不依赖系统安装 */
+/* 嵌入字体（Inter 正文 / JetBrains Mono 等宽 / Playfair Display 展示衬线），
+   随前端一起打包，不依赖系统安装；Playfair 用于顶栏品牌标语（700 欢迎屏同款 / 900 加粗） */
 @import '@fontsource/inter/400.css';
 @import '@fontsource/inter/500.css';
 @import '@fontsource/inter/600.css';
 @import '@fontsource/inter/700.css';
 @import '@fontsource/jetbrains-mono/400.css';
 @import '@fontsource/jetbrains-mono/500.css';
+@import '@fontsource/playfair-display/700.css';
+@import '@fontsource/playfair-display/900.css';
 
 @tailwind base;
 @tailwind components;
@@ -734,17 +737,17 @@ pre code.hljs,
   background: var(--bg-card, #ffffff);
   border: 1px solid var(--border-light, #e8ebf0);
   border-radius: 12px;
-  /* 单边边距由各栏修饰类控制；高度为 100% - 底部 8px，避免裁掉底部圆角 */
-  height: calc(100% - 8px);
+  /* 单边边距由各栏修饰类控制；高度为 100% - 上下边距（8+8），避免溢出被裁 */
+  height: calc(100% - 16px);
   overflow: hidden;
 }
-/* 左栏：左侧/底部留边距，右侧与聊天区紧贴 */
+/* 左栏：四边留边距（上/左/下），右侧与聊天区紧贴 */
 .panel-card-sidebar {
-  margin: 0 0 8px 8px;
+  margin: 8px 0 8px 8px;
 }
-/* 右栏/预览：左侧不留边距（间隔由右栏右侧 8px 承担），右侧/底部留边距 */
+/* 右栏/预览：四边留边距（右侧与预览的间隔由右栏右侧 8px 承担，左侧不留） */
 .panel-card-right-stack {
-  margin: 0 8px 8px 0;
+  margin: 8px 8px 8px 0;
 }
 
 /* 文件预览卡：去线框，与其他卡片风格一致 */
