@@ -33,11 +33,13 @@ def web_start(
     ] = None,
 ) -> None:
     """启动 Illusion Agent Web UI / Launch Illusion Agent Web UI"""
+    # working_directory 已由主回调统一切换（见 cli/main.py）
+    import sys
     import threading
 
     import uvicorn
 
-    # working_directory 已由主回调统一切换（见 cli/main.py）
+    from illusion.ui.web.auth import create_web_auth
     from illusion.ui.web.security import (
         assert_trusted_authority,
         derive_lan_hosts,
@@ -118,10 +120,16 @@ def web_start(
         trusted_hosts=trusted_hosts,
     )
 
-    app = create_app(dev=dev, host_config=config)
+    # Web 访问认证：每次启动生成新的 launch token（进程生命周期有效），
+    # cookie 签名 secret 持久化于配置目录——后端重启后浏览器已登录的会话
+    # 依旧有效，无需重新打开打印的 URL。生产与 dev 一致启用（fail-closed）。
+    auth = create_web_auth()
 
-    url = f"http://{host}:{port}"
+    app = create_app(dev=dev, host_config=config, auth=auth)
+
+    url = auth.authenticated_url(f"http://{host}:{port}")
     typer.echo(f"Illusion Agent Web UI: {url}")
+    typer.echo(_t("web_auth_enabled"))
     # 信任栅栏状态（栅栏非认证层；REST /api 特权平面仅限回环，
     # 受信主机仅可接入 /ws 会话平面）
     typer.echo(_t("web_trust_enabled"))
@@ -129,6 +137,12 @@ def web_start(
         typer.echo(_t("web_trusted_hosts", hosts=", ".join(trusted_hosts)))
     if host in ("0.0.0.0", "::"):
         typer.echo(_t("web_bind_all_hint"))
+        typer.echo(_t("web_lan_hint"))
+    if dev:
+        typer.echo(_t("web_dev_host_hint"))
+    # 立即刷出访问 URL：桌面壳（Electron）从 stdout 解析该行以拿到带
+    # token 的完整地址（pipe 下 Python 默认块缓冲，须显式 flush）
+    sys.stdout.flush()
     if not dev:
         import os
 

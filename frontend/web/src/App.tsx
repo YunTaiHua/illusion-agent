@@ -35,10 +35,17 @@ import { GoalBar } from './components/GoalBar';
 import { ToastMarkdown } from './components/ToastMarkdown';
 import type { GoalStatus } from './types/protocol';
 import { isAppSupervised, notificationNeedsPriming, notifyDesktop, playToastSound, primeNotificationPermission, type NotifyLevel } from './utils/notify';
+import { authQueryString } from './utils/launchToken';
 import { FolderClosedIcon, FolderOpenIcon } from './components/icons';
 
-/** WebSocket 连接地址 */
-const WS_URL = `ws://${window.location.host}/ws`;
+/** WebSocket 连接地址（附带 launch token：启动时 URL 携带，后续靠
+ *  sessionStorage 恢复 / 后端签名 cookie 兜底） */
+const WS_URL = (() => {
+  const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  const base = `${scheme}://${window.location.host}/ws`;
+  const tokenQuery = authQueryString();
+  return tokenQuery ? `${base}${tokenQuery}` : base;
+})();
 
 /** Toast 通知显示时长（毫秒） */
 const TOAST_DURATION = 5000;
@@ -119,6 +126,9 @@ export default function App() {
   const [overlayMounted, setOverlayMounted] = useState(overlayVisible);
   const [overlayFading, setOverlayFading] = useState(false);
   const handleOverlayFaded = useCallback(() => setOverlayMounted(false), []);
+  // 遮罩错误「重新连接」：整页重载（WebSocket 会话重建；token 来自
+  // sessionStorage / URL，cookie 由后端自动携带）
+  const handleOverlayRetry = useCallback(() => window.location.reload(), []);
   useEffect(() => {
     if (overlayVisible) {
       setOverlayMounted(true);
@@ -1439,7 +1449,13 @@ export default function App() {
           会话时整屏闪烁。避免"连接 → 欢迎 → 恢复 → 欢迎"的时序翻转在未就绪时
           露出主界面。 */}
       {overlayMounted && (
-        <ConnectingOverlay lang={lang} fading={overlayFading} onFaded={handleOverlayFaded} />
+        <ConnectingOverlay
+          lang={lang}
+          fading={overlayFading}
+          onFaded={handleOverlayFaded}
+          connectionError={session.connectionError}
+          onRetry={handleOverlayRetry}
+        />
       )}
       {/* 应用内图片预览（Lightbox）：点击 markdown 图片/图片链接时打开 */}
       <ImagePreview lang={lang} />

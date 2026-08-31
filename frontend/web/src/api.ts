@@ -9,6 +9,8 @@
  * @module api
  */
 
+import { attachAuthHeaders } from './utils/launchToken';
+
 /** 模型声明（settings.json 中 model_N 的对象格式） */
 export interface ModelConfig {
   /** 模型名称（API 调用使用的标识） */
@@ -433,11 +435,13 @@ export interface UpdateEnvPayload {
  * @throws Error 当 HTTP 状态非 2xx 时，抛出包含 detail 的错误
  */
 async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
+  const authHeaders = attachAuthHeaders({});
   const res = await fetch(url, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
       ...(options.headers ?? {}),
+      ...authHeaders,
     },
   });
   if (!res.ok) {

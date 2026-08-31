@@ -133,6 +133,12 @@ const ZH: Record<string, string> = {
   collapse_panel: '收起侧栏',
   expand_panel: '展开侧栏',
   context_window: '上下文窗口',
+  overlay_error_title: '无法连接到后端',
+  overlay_error_auth_desc:
+    '当前访问缺少有效凭据或凭据已失效。请在终端重新运行 `illusion web`，使用其打印的完整访问地址（含 token）打开本页面；若使用桌面版，请重新启动应用。',
+  overlay_error_unreachable_desc:
+    '后端服务未就绪。请确认已启动 `illusion web`（桌面版会自动启动后端），稍候片刻后点击下方的重新连接。',
+  overlay_retry: '重新连接',
   question_submit: '提交',
   question_skip: '跳过',
   question_placeholder: '输入你的回答...',
@@ -637,6 +643,12 @@ const EN: Record<string, string> = {
   collapse_panel: 'Collapse',
   expand_panel: 'Expand',
   context_window: 'Context Window',
+  overlay_error_title: 'Cannot connect to the backend',
+  overlay_error_auth_desc:
+    'This access has no valid credential, or it has expired. Re-run `illusion web` in the terminal and open the full URL it prints (it includes the token); if you use the desktop app, restart it.',
+  overlay_error_unreachable_desc:
+    'The backend is not ready. Make sure `illusion web` is running (the desktop app starts it automatically), wait a moment, then click Retry below.',
+  overlay_retry: 'Retry',
   question_submit: 'Submit',
   question_skip: 'Skip',
   question_placeholder: 'Type your answer...',

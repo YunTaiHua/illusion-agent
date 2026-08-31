@@ -19,6 +19,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { attachAuthHeaders } from '../utils/launchToken';
+
 import type {
   AgentTaskItem,
   BackendEvent,
@@ -89,6 +91,42 @@ const SESSION_STATUS_KEYS = new Set<string>([
   // 注意：context_window 是全局设置，由 state_snapshot 权威驱动，
   // 不放入会话键——否则恢复快照会影子化用户后续的窗口调整
 ]);
+
+/**
+ * 遮罩层连接错误分类。
+ * - auth：认证失败（凭据缺失 / 无效 / 后端重启后 token 过期且 cookie 失效）；
+ * - unreachable：后端不可达（未启动 / 崩溃 / 网络中断）。
+ */
+export interface WebConnectionError {
+  kind: 'auth' | 'unreachable';
+}
+
+/**
+ * 连接失败时探测后端可达性（REST 轻量探测，携带 launch token）。
+ *
+ * WS 握手失败拿不到状态码（浏览器规范所限），只能靠 REST 旁路区分
+ * 「认证失败」与「服务不可达」，遮罩据此展示不同的解决方式。
+ *
+ * @returns 认证失败 / 不可达；后端实际可达（瞬间抖动）时为 null
+ */
+async function probeBackendError(): Promise<WebConnectionError | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 4000);
+  let res: Response;
+  try {
+    res = await fetch('/api/envs', {
+      headers: attachAuthHeaders({}),
+      signal: controller.signal,
+    });
+  } catch {
+    return { kind: 'unreachable' };
+  } finally {
+    clearTimeout(timer);
+  }
+  if (res.status === 401 || res.status === 403) return { kind: 'auth' };
+  if (res.ok) return null; // 后端可达：可能是瞬断，遮罩继续等待重连
+  return { kind: 'unreachable' };
+}
 
 /**
  * 工具调用行匹配正则表达式
@@ -283,6 +321,8 @@ export interface WebSocketSessionState {
   swarmNotifications: SwarmNotificationSnapshot[];
   bgAgentLabel: string | null;
   connected: boolean;
+  /** 遮罩层连接错误（认证失败 / 后端不可达），连接后自动清空 */
+  connectionError: WebConnectionError | null;
   /** 模型是否正在切换中 */
   modelSwitching: boolean;
   /** 设置模型切换状态 */
@@ -478,6 +518,18 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   const [swarmNotifications, setSwarmNotifications] = useState<SwarmNotificationSnapshot[]>([]);
   const [bgAgentLabel, setBgAgentLabel] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
+  /** 遮罩层连接错误（认证失败 / 后端不可达），onopen 与探测到可达时清空 */
+  const [connectionError, setConnectionError] = useState<WebConnectionError | null>(null);
+  /** 探测在途标记：onerror/onclose 双触发只探测一次 */
+  const connectionProbeRef = useRef(false);
+  const probeConnectionError = useCallback((): void => {
+    if (connectionProbeRef.current) return;
+    connectionProbeRef.current = true;
+    void probeBackendError().then((err) => {
+      connectionProbeRef.current = false;
+      setConnectionError(err);
+    });
+  }, []);
   /** 首次登录标识（后端 ready 事件携带，无 env_N 且无 working_directory 时为 true） */
   const [firstLogin, setFirstLogin] = useState(false);
   // 模型切换中（用于 Toolbar 显示加载动画）
@@ -1137,11 +1189,16 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
-    ws.onopen = () => setConnected(true);
+    ws.onopen = () => {
+      setConnected(true);
+      setConnectionError(null);
+    };
     ws.onclose = () => {
       setConnected(false);
       setReady(false);
       setFirstLogin(false);
+      // 断线时探测后端：区分「认证失败」与「服务不可达」，遮罩展示解决方式
+      probeConnectionError();
       // 断线时清除新建会话等待态，避免加载卡永久挂起
       if (awaitingNewTimerRef.current) {
         clearTimeout(awaitingNewTimerRef.current);
@@ -1156,7 +1213,11 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       viewsRef.current = next;
       setSessionViews(next);
     };
-    ws.onerror = () => setConnected(false);
+    ws.onerror = () => {
+      setConnected(false);
+      // onerror 与 onclose 常成对触发，探测在 ref 层幂等
+      probeConnectionError();
+    };
     ws.onmessage = (event) => {
       let parsed: BackendEvent;
       try { parsed = JSON.parse(event.data as string) as BackendEvent; } catch { return; }
@@ -1908,7 +1969,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       requestFileTree, requestGitStatus, openFilePreview, openFileDiff, closeFilePreview,
       requestAgentTasks, viewAgentSummary, requestSessionFiles, openSessionFile,
       ready, firstLogin, showThinking,
-      swarmTeammates, swarmNotifications, bgAgentLabel, connected,
+      swarmTeammates, swarmNotifications, bgAgentLabel, connected, connectionError,
       bootstrapping,
       awaitingNewSession,
       modelSwitching, setModelSwitching,
@@ -1962,7 +2023,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     requestFileTree, requestGitStatus, openFilePreview, openFileDiff, closeFilePreview,
     requestAgentTasks, viewAgentSummary, requestSessionFiles, openSessionFile,
     ready, firstLogin, showThinking, swarmTeammates, swarmNotifications,
-    bgAgentLabel, connected, sessionViews, sessionList, activeSessionId,
+    bgAgentLabel, connected, connectionError, sessionViews, sessionList, activeSessionId,
     workspaces, resourcesCwd, awaitingNewSession,
     activateSession, newSession, setInlineOptions, patchView,
     requestWorkspaces, addWorkspace, removeWorkspace, requestResources,

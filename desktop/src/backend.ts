@@ -17,6 +17,7 @@
 import * as child_process from 'node:child_process';
 import * as http from 'node:http';
 import * as net from 'node:net';
+import * as readline from 'node:readline';
 import { EventEmitter } from 'node:events';
 
 /** 后端启动选项 */
@@ -101,11 +102,10 @@ export class Backend extends EventEmitter {
     };
   }
 
-  /** 启动后端，resolve 的值即为应加载的 URL */
+  /** 启动后端，resolve 的值即为应加载的 URL（含访问 token） */
   async start(): Promise<string> {
     const port = await allocatePort();
     this.port = port;
-    const url = `http://${this.opts.host}:${port}`;
 
     // spawn python -m illusion web --port <port> --host <host>
     const args = [
@@ -123,8 +123,10 @@ export class Backend extends EventEmitter {
     this.proc = child_process.spawn(this.opts.pythonPath, args, {
       cwd: this.opts.cwd,
       env,
-      // stdio 全 ignore：桌面壳不需要后端 stdout/stderr，避免 pipe 缓冲区满导致后端 hang
-      stdio: 'ignore',
+      // stdout 走 pipe：Web 启动后 launch token 随机生成并打印在访问 URL 中，
+      // 桌面壳须从 stdout 解析该 URL 才能加载认证后的页面
+      // （stderr 仍忽略，避免 uvicorn 日志混入解析流）
+      stdio: ['ignore', 'pipe', 'ignore'],
       windowsHide: true,
     });
 
@@ -132,8 +134,32 @@ export class Backend extends EventEmitter {
       this.emit('exit', code);
     });
 
+    // 等待后端打印访问 URL（web.py 输出 "Illusion Agent Web UI: http://...?token=..."）。
+    // 该行为后端就绪的前置信号：URL 行出现后再轮询 HTTP 直至可服务。
+    const urlPromise = new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error('后端未在 30s 内输出访问 URL')),
+        30000,
+      );
+      if (!this.proc?.stdout) {
+        clearTimeout(timer);
+        reject(new Error('后端 stdout 不可用'));
+        return;
+      }
+      const rl = readline.createInterface({ input: this.proc.stdout });
+      rl.on('line', (line) => {
+        const match = /(https?:\/\/\S+)/.exec(line);
+        if (match) {
+          clearTimeout(timer);
+          rl.close();
+          resolve(match[1]);
+        }
+      });
+    });
+
     // 等待就绪
     try {
+      const url = await urlPromise;
       await waitUntilReady(this.opts.host, port);
       this.emit('ready', url);
       return url;

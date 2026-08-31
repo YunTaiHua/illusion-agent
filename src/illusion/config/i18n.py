@@ -199,6 +199,11 @@ MESSAGES: dict[str, dict[str, str]] = {
     "web_trust_enabled": {"zh-CN": "浏览器信任栅栏已启用：Host 校验 + Sec-Fetch-Site + Origin 同源", "en-US": "Browser-trust fence enabled: Host check + Sec-Fetch-Site + same-origin Origin"},
     "web_trusted_hosts": {"zh-CN": "受信主机（可接入 /ws）：{hosts}", "en-US": "Trusted hosts (may connect to /ws): {hosts}"},
     "web_bind_all_hint": {"zh-CN": "提示: 已绑定所有接口，REST /api 仅限本机访问", "en-US": "Note: bound to all interfaces; REST /api is restricted to this machine"},
+    "web_auth_enabled": {"zh-CN": "访问认证已启用：请使用上方带 token 的完整 URL 打开界面", "en-US": "Access authentication enabled: open the UI with the full URL above (it includes the token)"},
+    "web_auth_required": {"zh-CN": "需要认证：请使用启动时打印的完整访问 URL（含 token）重新打开本页面", "en-US": "Authentication required: reopen this page with the full access URL (with token) printed at startup"},
+    "web_auth_success": {"zh-CN": "认证成功，可关闭本页并返回原页面继续使用", "en-US": "Authenticated. You may close this page and return to the original page"},
+    "web_dev_host_hint": {"zh-CN": "提示: 开发模式请保持浏览器主机名与上方访问地址一致（localhost 与 127.0.0.1 视为不同域）", "en-US": "Note: in dev mode keep the hostname in your browser consistent with the URL above (localhost and 127.0.0.1 are distinct domains)"},
+    "web_lan_hint": {"zh-CN": "局域网设备接入：使用 http://<本机局域网IP>:<port>/?token=<token> 的完整地址，由本机将 IP 段替换后发给设备", "en-US": "LAN access: send devices the full URL http://<this machine's LAN IP>:<port>/?token=<token> (replace the host part with the LAN IP)"},
     # --- session ---
     "session_not_found_prev": {"zh-CN": "未找到之前的会话", "en-US": "No previous session found"},
     "session_continuing": {"zh-CN": "继续会话: {summary}", "en-US": "Continuing session: {summary}"},
