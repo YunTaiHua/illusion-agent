@@ -37,13 +37,16 @@ function WindowButton({
       onClick={onClick}
       title={title}
       aria-label={title}
-      className={`w-11 h-9 flex items-center justify-center transition-colors ${
-        variant === 'close'
-          ? 'hover:bg-danger hover:text-white text-content-secondary'
-          : 'hover:bg-black/10 dark:hover:bg-white/10 text-content-secondary'
-      }`}
+      className="w-11 h-9 group flex items-center justify-center text-content-secondary"
     >
-      {children}
+      {/* 悬停态为居中圆角小圆片填充 */}
+      <span className={`flex items-center justify-center w-7 h-7 rounded-full transition-colors ${
+        variant === 'close'
+          ? 'group-hover:bg-danger group-hover:text-white'
+          : 'group-hover:bg-black/10 dark:group-hover:bg-white/15 dark:group-hover:text-white'
+      }`}>
+        {children}
+      </span>
     </button>
   );
 }
@@ -77,13 +80,15 @@ function UpdateButton({ lang }: { lang: UiLanguage }) {
         onClick={startDownload}
         title={availableTitle}
         aria-label={availableTitle}
-        className="w-8 h-9 flex items-center justify-center text-primary hover:text-primary-hover hover:bg-primary-light dark:hover:bg-white/10 transition-colors cursor-pointer animate-updater-blink"
+        className="w-8 h-9 group flex items-center justify-center text-primary cursor-pointer animate-updater-blink"
       >
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M8 2v7.5" />
-          <path d="M4.8 7l3.2 3.2L11.2 7" />
-          <path d="M2.5 13.5h11" />
-        </svg>
+        <span className="flex items-center justify-center w-7 h-7 rounded-full transition-colors group-hover:bg-primary-light group-hover:text-primary-hover dark:group-hover:bg-white/10">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M8 2v7.5" />
+            <path d="M4.8 7l3.2 3.2L11.2 7" />
+            <path d="M2.5 13.5h11" />
+          </svg>
+        </span>
       </button>
     );
   }
@@ -96,12 +101,14 @@ function UpdateButton({ lang }: { lang: UiLanguage }) {
         onClick={installNow}
         title={readyTitle}
         aria-label={readyTitle}
-        className="w-8 h-9 flex items-center justify-center text-primary hover:text-primary-hover hover:bg-primary-light dark:hover:bg-white/10 transition-colors cursor-pointer"
+        className="w-8 h-9 group flex items-center justify-center text-primary cursor-pointer"
       >
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="8" cy="8" r="6.25" />
-          <path d="M5.6 8.2l1.7 1.7 3.1-3.4" />
-        </svg>
+        <span className="flex items-center justify-center w-7 h-7 rounded-full transition-colors group-hover:bg-primary-light group-hover:text-primary-hover dark:group-hover:bg-white/10">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="8" cy="8" r="6.25" />
+            <path d="M5.6 8.2l1.7 1.7 3.1-3.4" />
+          </svg>
+        </span>
       </button>
     );
   }
@@ -161,18 +168,11 @@ export default function TitleBar({ lang }: { lang: UiLanguage }) {
 
   return (
     <div
-      className="app-region-drag flex items-center h-9 shrink-0 select-none border-b border-border-medium relative z-50"
+      className="app-region-drag app-titlebar flex items-center h-9 shrink-0 select-none relative z-50"
       style={{
-        background: 'var(--glass-bg-panel)',
-        backdropFilter: 'blur(var(--glass-blur-panel)) saturate(var(--glass-saturate))',
         paddingLeft: isMac ? '80px' : '12px',
       }}
     >
-      {/* 应用名（居中偏左，简约标识） */}
-      <span className="text-xs font-medium text-content-secondary tracking-wide">
-        Illusion Agent
-      </span>
-
       <div className="flex-1" />
 
       {/* macOS：原生交通灯在左侧，更新图标置于顶栏右侧 */}

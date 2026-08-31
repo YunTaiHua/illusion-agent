@@ -405,14 +405,33 @@ export default function Sidebar({
   const activeCwd = activeWorkspaceCwd ?? workspaces.find((w) => w.is_default)?.path ?? '';
   const activeGroupName = basenameOf(activeCwd);
 
-  if (collapsed) {
-    // 折叠态与右栏一致：侧栏整体隐藏（不保留竖条），控制项由顶部左侧的
-    // SidebarControls 浮出按钮组承载，见文件底部导出
-    return null;
-  }
+  // 推入推出动画状态：expanded→collapsing（淡出+宽过渡）→collapsed（卸载）
+  // →expanding（淡入+宽推出）→expanded
+  const [phase, setPhase] = useState<'expanded' | 'collapsing' | 'collapsed' | 'expanding'>(
+    () => (collapsed ? 'collapsed' : 'expanded'),
+  );
 
+  useEffect(() => {
+    if (collapsed) {
+      // 折叠：内容淡出 150ms，宽过渡 300ms 后卸载
+      setPhase((p) => (p === 'expanded' ? 'collapsing' : p));
+      const t = setTimeout(() => setPhase('collapsed'), 300);
+      return () => clearTimeout(t);
+    }
+    // 展开：重挂内容淡入 200ms，宽度同步推出
+    setPhase((p) => (p === 'collapsing' || p === 'collapsed' ? 'expanding' : p));
+    const t = setTimeout(() => setPhase('expanded'), 320);
+    return () => clearTimeout(t);
+  }, [collapsed]);
+
+  // 折叠态宽度/边距归零；内容冻结展开宽度由卡片裁剪，滑动不重排
   return (
-    <aside className="glass-panel panel-below-titlebar flex flex-col h-full shrink-0 select-none transition-[width] duration-300 ease-in-out" style={{ width: `${width}px` }}>
+    <aside
+      className={`panel-card panel-card-sidebar flex h-full shrink-0 select-none transition-[width,margin] duration-300 ease-in-out ${phase === 'collapsing' ? 'panel-fading' : ''}`}
+      style={{ width: collapsed ? 0 : width, margin: collapsed ? 0 : undefined }}
+    >
+      {phase !== 'collapsed' && (
+      <div className={`h-full flex flex-col ${phase === 'expanding' ? 'panel-expanding' : ''}`} style={{ width: `${width}px` }}>
       <div className="flex items-center justify-between px-5 pt-4 pb-3">
         <button
           onClick={onToggle}
@@ -485,6 +504,8 @@ export default function Sidebar({
           <span className="text-[11px] font-medium">{t(lang, 'settings')}</span>
         </button>
       </div>
+      </div>
+      )}
     </aside>
   );
 }

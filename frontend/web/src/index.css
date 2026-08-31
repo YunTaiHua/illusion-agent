@@ -375,6 +375,13 @@ pre code.hljs,
 .preview-scroll::-webkit-scrollbar-thumb:hover { background-color: var(--text-secondary, #999); background-clip: content-box; }
 .preview-scroll::-webkit-scrollbar-corner { background: var(--bg-card, transparent); }
 
+/* 主聊天区滚动条：顶部活动范围截断（132px），与右栏折叠时的顶部按钮区不重叠。
+   132 与按钮列几何绑定（3×32 + 2×8 间隙 + top-3 12 + 呼吸 8），改按钮需同步。
+   注意：::-webkit-scrollbar-track 仅 Chromium 生效（Electron/Chromium 可接受）。 */
+.chat-scroll-cap::-webkit-scrollbar-track {
+  margin-top: 132px;
+}
+
 /* ========== 暗色模式代码高亮覆盖 ==========
    基础主题是 highlight.js 的 github.css（浅色配色，如 #0550ae 深蓝），
    在深色背景上对比度严重不足（注释/字符串/数字几乎融入背景）。
@@ -712,6 +719,51 @@ pre code.hljs,
   -webkit-app-region: no-drag;
 }
 
+/* 顶栏：与页面主体同源渐变（fixed 附着，坐标对齐 body），视觉融为一体；无分隔线 */
+.app-titlebar {
+  background-color: var(--body-bg, #e9ecf2);
+  background-image: linear-gradient(135deg,
+    var(--body-bg-highlight, #f5f6f9) 0%,
+    var(--body-bg, #e9ecf2) 45%,
+    var(--body-bg-shadow, #cbd1dc) 100%);
+  background-attachment: fixed;
+}
+
+/* ========== 三栏卡片（左栏/右栏/文件预览） ========== */
+.panel-card {
+  background: var(--bg-card, #ffffff);
+  border: 1px solid var(--border-light, #e8ebf0);
+  border-radius: 12px;
+  /* 单边边距由各栏修饰类控制；高度为 100% - 底部 8px，避免裁掉底部圆角 */
+  height: calc(100% - 8px);
+  overflow: hidden;
+}
+/* 左栏：左侧/底部留边距，右侧与聊天区紧贴 */
+.panel-card-sidebar {
+  margin: 0 0 8px 8px;
+}
+/* 右栏/预览：左侧不留边距（间隔由右栏右侧 8px 承担），右侧/底部留边距 */
+.panel-card-right-stack {
+  margin: 0 8px 8px 0;
+}
+
+/* 文件预览卡：去线框，与其他卡片风格一致 */
+.panel-card.preview-card {
+  border: none;
+}
+
+/* 左栏推入推出动画（内容冻结宽度淡出、列宽滑动裁剪；展开内容淡入） */
+.panel-fading > * {
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+.panel-expanding {
+  animation: panel-wide-in 200ms ease;
+}
+@keyframes panel-wide-in {
+  from { opacity: 0; }
+}
+
 /* ========== 动画 ========== */
 @keyframes pulse-scale {
   0%, 100% { transform: scale(1); opacity: 1; }
@@ -811,12 +863,6 @@ pre code.hljs,
   -webkit-backdrop-filter: blur(var(--glass-blur-panel)) saturate(var(--glass-saturate));
   border: 1px solid var(--glass-border);
   box-shadow: var(--glass-highlight);
-}
-
-/* 顶栏下方面板：顶部不渲染玻璃边框，避免与 TitleBar 底部
-   border-medium 分割线叠加成双重线（深色下尤其明显） */
-.glass-panel.panel-below-titlebar {
-  border-top: none;
 }
 
 /* 居中大弹窗：删除确认等 */

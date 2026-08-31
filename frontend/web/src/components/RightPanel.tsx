@@ -149,7 +149,7 @@ export default function RightPanel({
   if (collapsed) return null;
 
   return (
-    <aside className="glass-panel panel-below-titlebar flex flex-col h-full shrink-0 select-none" style={{ width: `${width}px` }}>
+    <aside className="panel-card panel-card-right-stack flex flex-col h-full shrink-0 select-none" style={{ width: `${width}px` }}>
       {/* 标题行：tab 切换按钮 + 居中标题 + 折叠按钮（3 列 grid 严格居中） */}
       <div className="grid grid-cols-3 items-center px-5 pt-4 pb-3 shrink-0">
         <button

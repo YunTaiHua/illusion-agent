@@ -191,7 +191,7 @@ function CodeView({ content, path, truncated, truncatedLabel }: {
   return (
     <div className="h-full preview-scroll overflow-auto">
       <div className="flex min-w-max min-h-full">
-        {/* 行号列：sticky 固定在左侧，随内容纵向同步滚动（字号/行高与代码严格一致） */}
+        {/* 行号列：sticky 固定左侧；左缘与卡片边缘对齐 */}
         <div
           className="sticky left-0 z-10 shrink-0 select-none text-right py-3 pl-3 pr-3 text-content-disabled bg-surface-card border-r border-border-light font-mono text-[13px] leading-[1.7]"
           aria-hidden="true"
@@ -294,9 +294,10 @@ function DiffView({ content, emptyHint, truncated, truncatedLabel }: {
     <div className="h-full preview-scroll overflow-auto">
       {hunks.map((h, hi) => (
         <div key={hi} className={`min-w-max ${hi > 0 ? 'mt-3' : ''}`}>
-          <div className="border border-border-light">
+          {/* hunk 不带左边框，保证行号列左缘与卡片边缘对齐 */}
+          <div className="border-y border-r border-border-light">
             <div className="flex font-mono text-[13px] leading-[1.7]">
-              {/* 行号列：sticky 固定；删除行旧号、新增/上下文行新号 */}
+              {/* 行号列：sticky 固定；左缘与卡片边缘对齐 */}
               <div className="sticky left-0 z-10 shrink-0 select-none text-right bg-surface-card border-r border-border-light" aria-hidden="true">
                 {h.lines.map((r, i) => (
                   <div key={i} className="pl-3 pr-3 tabular-nums text-content-disabled">

@@ -1164,8 +1164,7 @@ export default function App() {
             {composer}
           </div>
         )}
-        {/* 顶部右侧按钮组（展开右栏/主题/上下文占比）：仅右栏折叠态且非欢迎/非恢复中显示；
-            展开后不再显示，控制回归右栏面板头部；right=[20px] 避开内移后的主视图滚动条 */}
+        {/* 顶部右侧按钮组（展开右栏/主题/上下文占比）：右栏折叠时显示；right=[20px] 避开滚动条 */}
         {rightPanelCollapsed && !welcomeVisible && !session.restoringSessionId && (
           <RightPanelControls lang={lang} status={session.status} onToggle={toggleRightPanel} />
         )}
@@ -1180,37 +1179,39 @@ export default function App() {
         )}
       </div>
       {!rightPanelCollapsed && !welcomeVisible && (
-        <div className="w-1 cursor-col-resize hover:bg-primary/20 active:bg-primary/30 transition-colors shrink-0"
+      <div className="relative shrink-0">
+        {/* 右侧（聊天区|右栏）拉伸热区：透明、不占布局、无视觉条（置于卡片外避免裁剪） */}
+        <div className="absolute inset-y-0 -left-2 w-4 cursor-col-resize z-10"
           onMouseDown={(e) => handleResizeStart('right', e)} />
-      )}
-      {!rightPanelCollapsed && !welcomeVisible && (
-      <RightPanel lang={lang} status={session.status}
-        collapsed={rightPanelCollapsed} onToggle={toggleRightPanel}
-        onRefreshResources={handleRefreshResources}
-        todoItems={session.todoItems}
-        agentTasks={session.agentTasks}
-        onRequestAgentTasks={() => session.requestAgentTasks()}
-        onViewAgentTask={(id) => session.viewAgentSummary(id)}
-        fileTree={session.fileTree} fileTreeLoadingPaths={session.fileTreeLoadingPaths}
-        gitStatus={session.gitStatus} gitLoading={session.gitLoading}
-        sessionFiles={session.sessionFiles}
-        sessionFilesLoading={session.sessionFilesLoading}
-        onRequestSessionFiles={handleRequestSessionFiles}
-        onOpenSessionFile={(path) => session.openSessionFile(path)}
-        onRequestFileTree={handleRequestFileTree}
-        onRequestGitStatus={handleRequestGitStatus}
-        onOpenFile={(path) => session.openFilePreview(path)}
-        onOpenFileDiff={(path) => session.openFileDiff(path)}
-        skills={session.skills} plugins={session.plugins}
-        rules={session.rules} mcpServers={session.mcpServers}
-        width={rightPanelWidth} />
+        <RightPanel lang={lang} status={session.status}
+          collapsed={rightPanelCollapsed} onToggle={toggleRightPanel}
+          onRefreshResources={handleRefreshResources}
+          todoItems={session.todoItems}
+          agentTasks={session.agentTasks}
+          onRequestAgentTasks={() => session.requestAgentTasks()}
+          onViewAgentTask={(id) => session.viewAgentSummary(id)}
+          fileTree={session.fileTree} fileTreeLoadingPaths={session.fileTreeLoadingPaths}
+          gitStatus={session.gitStatus} gitLoading={session.gitLoading}
+          sessionFiles={session.sessionFiles}
+          sessionFilesLoading={session.sessionFilesLoading}
+          onRequestSessionFiles={handleRequestSessionFiles}
+          onOpenSessionFile={(path) => session.openSessionFile(path)}
+          onRequestFileTree={handleRequestFileTree}
+          onRequestGitStatus={handleRequestGitStatus}
+          onOpenFile={(path) => session.openFilePreview(path)}
+          onOpenFileDiff={(path) => session.openFileDiff(path)}
+          skills={session.skills} plugins={session.plugins}
+          rules={session.rules} mcpServers={session.mcpServers}
+          width={rightPanelWidth} />
+      </div>
       )}
 
       {/* 文件预览停靠列：右栏右侧独立显示（右栏折叠时仍在）；
           与右栏逻辑一致——欢迎界面时隐藏，回到会话视图自动恢复 */}
       {session.filePreview && !previewPopOut && !welcomeVisible && (
-        <>
-          <div className="w-1 cursor-col-resize hover:bg-primary/20 active:bg-primary/30 transition-colors shrink-0"
+        <div className="relative shrink-0">
+          {/* 预览列拉伸热区：透明、不占布局、无视觉条 */}
+          <div className="absolute inset-y-0 -left-2 w-4 cursor-col-resize z-10"
             onMouseDown={(e) => handleResizeStart('preview', e)} />
           <FilePreviewPanel
             lang={lang}
@@ -1222,7 +1223,7 @@ export default function App() {
             onOpenDiff={(path) => session.openFileDiff(path)}
             onPopOut={() => setPreviewPopOut(true)}
             onClose={() => { session.closeFilePreview(); setPreviewPopOut(false); }} />
-        </>
+        </div>
       )}
       </div>
       )}

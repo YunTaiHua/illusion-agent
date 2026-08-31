@@ -1,5 +1,7 @@
 /** @type {import('tailwindcss').Config} */
 export default {
+  // 主题以 <html> 的 .dark 类切换，dark: 需按 class 匹配（否则跟随系统 media 不生效）
+  darkMode: 'class',
   content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
   theme: {
     extend: {
