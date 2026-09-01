@@ -38,6 +38,18 @@ def test_count_diff_lines_headers_and_empty() -> None:
     assert count_diff_lines("") == (0, 0)
 
 
+def test_count_diff_lines_removed_line_starting_with_dashes() -> None:
+    # hunk 内删除行的内容以 -- 开头时,渲染为 "---…",不能误判为文件头
+    diff = (
+        "--- a/x\n"
+        "+++ b/x\n"
+        "@@ -1,2 +1,2 @@\n"
+        "---flag\n"
+        "+-flag\n"
+    )
+    assert count_diff_lines(diff) == (1, 1)
+
+
 def test_count_diff_lines_plus_minus_prefix_content_not_miscounted() -> None:
     # +++ / --- 开头是文件头不是增删行；@@ 块头同样跳过
     ins, dele = count_diff_lines(

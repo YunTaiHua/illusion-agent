@@ -38,8 +38,15 @@ function statFromText(result: string): DiffStatParts | null {
 	if (/^Updated\s/.test(first)) {
 		let insertions = 0;
 		let deletions = 0;
+		let inHunk = false;
 		for (const line of body) {
-			if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@')) continue;
+			// 文件头（+++ / ---）只出现在首个 @@ 之前；hunk 内以 --- 开头
+			// 的行是"内容以 -- 开头的删除行"，不能误判为文件头
+			if (line.startsWith('@@')) {
+				inHunk = true;
+				continue;
+			}
+			if (!inHunk && (line.startsWith('+++') || line.startsWith('---'))) continue;
 			if (line.startsWith('+')) insertions++;
 			else if (line.startsWith('-')) deletions++;
 		}

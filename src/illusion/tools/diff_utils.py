@@ -33,8 +33,14 @@ def count_diff_lines(diff_text: str) -> tuple[int, int]:
     """
     insertions = 0
     deletions = 0
+    in_hunk = False
     for line in diff_text.splitlines():
-        if line.startswith(("+++", "---", "@@")):
+        if line.startswith("@@"):
+            in_hunk = True
+            continue
+        # 文件头（+++ / ---）只出现在首个 @@ 之前；hunk 内以 --- 开头
+        # 的行是"内容以 -- 开头的删除行"，不能误判为文件头（±1 误差）
+        if not in_hunk and line.startswith(("+++", "---")):
             continue
         if line.startswith("+"):
             insertions += 1
