@@ -5,22 +5,19 @@
  * 文件列表：类似右栏 CollapsibleSection 的区块折叠样式，但带明显的卡片
  * 背景色与边框。默认折叠，点击头部展开文件列表。
  *
- * 展示统一绝对路径；每行附增删行数着色数字（+N 绿 / -N 红）。点击行为：
- * Git 内 added/modified 打开 diff 变更视图；deleted / 工作区外 / 非 Git
- * 降级为内容预览（deleted 收到 file_deleted 错误码展示"文件已被删除"，
- * 覆盖文件被用户手动删除或会话中被删除的场景）；统计未到达时用原始串
- * 兜底预览（后端白名单校验兜底安全性）。
- *
- * 数据流：挂载时按原始路径串批量请求行数统计（web_request_file_stats，
- * hook 内去重），响应合并进 fileStats 缓存后本组件随引用变化重渲染。
- * 增删行数语义为"该文件当前相对 Git HEAD 的差异"，非严格单轮增量。
+ * 展示统一绝对路径；每行附增删行数着色数字（+N 绿 / -N 红）。增减行数
+ * 语义为"本轮对话的增量"：由 computeTurnFileStats 从该轮转录的工具结果
+ * 本地累计（同一文件多次编辑求和；直播条目优先用工具 structured_output
+ * 的精确值，恢复条目回退 diff 文本解析），与 Git 状态无关。点击行为：
+ * added/modified 打开 diff 变更视图（后端按会话白名单校验）；其余降级为
+ * 内容预览（后端收到 file_deleted 错误码时展示"文件已被删除"）。
  *
  * @module TurnFilesBar
  */
 
-import { memo, useCallback, useEffect, useState } from 'react';
+import { memo, useCallback, useState } from 'react';
 import { t, type UiLanguage } from '../i18n';
-import type { FileStatItem } from '../types/protocol';
+import { normalizePathKey, type TurnFileStat } from '../utils/turnGrouping';
 import { ChevronRightIcon, ModifiedFileIcon } from './icons';
 
 /**
@@ -31,11 +28,9 @@ interface TurnFilesBarProps {
   lang: UiLanguage;
   /** 该轮变更工具修改的原始路径串列表（TurnView useMemo 提供，引用稳定） */
   rawPaths: string[];
-  /** 行数统计缓存：原始路径串 → 统计条目（未到达的条目缺失） */
-  stats: Map<string, FileStatItem>;
-  /** 批量拉取统计（hook 内已缓存/在途去重） */
-  onRequestStats: (paths: string[]) => void;
-  /** 点击文件打开预览：Git 内传绝对路径 + 'diff'，否则 + 'content' */
+  /** 本轮累计增减统计：原始路径串 → 条目（computeTurnFileStats 本地计算） */
+  stats: Map<string, TurnFileStat>;
+  /** 点击文件打开预览：added/modified 传 'diff'，否则 + 'content' */
   onOpenFile: (path: string, kind: 'content' | 'diff') => void;
 }
 
@@ -48,15 +43,9 @@ interface TurnFilesBarProps {
  * @param props - 组件属性
  * @returns 返回变更条 JSX 元素
  */
-const TurnFilesBar = memo(function TurnFilesBar({ lang, rawPaths, stats, onRequestStats, onOpenFile }: TurnFilesBarProps) {
+const TurnFilesBar = memo(function TurnFilesBar({ lang, rawPaths, stats, onOpenFile }: TurnFilesBarProps) {
   // 默认折叠：与右栏区块一致的浏览习惯，展开看增量细节
   const [open, setOpen] = useState(false);
-
-  // 缺失统计时批量拉取：以拼接 key 为依赖避免 rawPaths 数组引用抖动重复触发
-  const statsKey = rawPaths.join('\u0000');
-  useEffect(() => {
-    if (statsKey) onRequestStats(statsKey.split('\u0000'));
-  }, [statsKey, onRequestStats]);
 
   return (
     /* 明显背景色 + 边框的卡片容器：区别于透明底的正文章节 */
@@ -90,7 +79,7 @@ const TurnFilesBar = memo(function TurnFilesBar({ lang, rawPaths, stats, onReque
         <div className="animate-fade overflow-y-auto max-h-56 scrollbar-hidden">
           <div className="flex flex-col border-t border-border-light">
             {rawPaths.map((raw) => (
-              <TurnFileRow key={raw} raw={raw} stat={stats.get(raw)} onOpenFile={onOpenFile} />
+              <TurnFileRow key={raw} raw={raw} stat={stats.get(normalizePathKey(raw))} onOpenFile={onOpenFile} />
             ))}
           </div>
         </div>
@@ -102,46 +91,37 @@ const TurnFilesBar = memo(function TurnFilesBar({ lang, rawPaths, stats, onReque
 /**
  * 单个变更文件行
  *
- * 展示绝对路径（目录弱化 + 文件名正常）+ 增删行数着色数字；统计未到达
- * 时仍可点击（内容预览兜底，后端白名单校验保证安全）。前缀以与触发器
- * 图标槽位同宽的空占位缩进，文字与触发器文本左对齐。
+ * 展示路径（目录弱化 + 文件名正常）+ 增删行数着色数字（本轮对话内该
+ * 文件的累计增量）。前缀以与触发器图标槽位同宽的空占位缩进，文字与
+ * 触发器文本左对齐。
  *
  * @param props.raw - 原始路径串（缓存键）
- * @param props.stat - 统计条目（可选，null 表示尚未到达）
+ * @param props.stat - 本轮累计统计（可选，缺失时不显示数字）
  * @param props.onOpenFile - 打开预览回调（path + 视图类型）
  */
-function TurnFileRow({ raw, stat, onOpenFile }: { raw: string; stat?: FileStatItem; onOpenFile: (path: string, kind: 'content' | 'diff') => void }) {
-  // 展示路径：优先后端回填的绝对路径；统计未到达时退化为原始串
-  const display = stat?.display || raw;
+function TurnFileRow({ raw, stat, onOpenFile }: { raw: string; stat?: TurnFileStat; onOpenFile: (path: string, kind: 'content' | 'diff') => void }) {
+  const display = raw;
   const sep = display.lastIndexOf('/');
-  const dir = sep >= 0 ? display.slice(0, sep + 1) : '';
-  const name = sep >= 0 ? display.slice(sep + 1) : display;
+  const winSep = display.lastIndexOf('\\');
+  const cut = Math.max(sep, winSep);
+  const dir = cut >= 0 ? display.slice(0, cut + 1) : '';
+  const name = cut >= 0 ? display.slice(cut + 1) : display;
 
   const handleClick = useCallback(() => {
-    if (!stat) {
-      // 统计未到达的兜底：直接内容预览（后端 web_read_session_file 白名单校验兜底安全性）
-      onOpenFile(raw, 'content');
-      return;
-    }
-    if (stat.status === 'added' || stat.status === 'modified') {
-      // Git 内 added/modified：diff 变更视图（后端支持绝对路径）
-      onOpenFile(stat.path, 'diff');
+    if (stat && (stat.status === 'added' || stat.status === 'modified')) {
+      // 本轮创建/修改：diff 变更视图（后端按会话白名单校验安全性，
+      // 文件已被删除时收到 file_deleted 错误码由 FileViewerModal 本地化展示）
+      onOpenFile(raw, 'diff');
     } else {
-      // deleted/工作区外/非 Git/解析失败：内容视图（deleted 会收到 file_deleted
-      // 错误码由 FileViewerModal 本地化展示"文件已被删除"）
-      onOpenFile(stat.path, 'content');
+      // 统计缺失的兜底：内容预览（后端 web_read_session_file 白名单校验兜底安全性）
+      onOpenFile(raw, 'content');
     }
   }, [stat, raw, onOpenFile]);
-
-  // added/modified 可开 diff（需 path）；其余需有效绝对路径；统计未到达用原串兜底
-  const canOpen =
-    !stat || (stat.status === 'added' || stat.status === 'modified' ? !!stat.display : !!stat.path);
 
   return (
     <button
       onClick={handleClick}
-      disabled={!canOpen}
-      className="w-full flex items-center gap-1.5 py-2.5 px-3 text-sm transition-colors glass-option-hover disabled:cursor-default disabled:hover:bg-transparent"
+      className="w-full flex items-center gap-1.5 py-2.5 px-3 text-sm transition-colors glass-option-hover cursor-pointer"
       title={display}
     >
       {/* 空占位：与触发器图标槽位同宽，文件名缩进对齐触发器文本 */}
@@ -150,12 +130,12 @@ function TurnFileRow({ raw, stat, onOpenFile }: { raw: string; stat?: FileStatIt
         {dir && <span className="text-content-disabled">{dir}</span>}
         <span className="text-content-primary">{name}</span>
       </span>
-      {/* 增删行数着色（无法统计时不显示数字） */}
+      {/* 增删行数着色加粗（本轮对话累计增量；无法统计时不显示数字） */}
       {typeof stat?.insertions === 'number' && stat.insertions > 0 && (
-        <span className="shrink-0 font-mono text-xs text-diff-add">+{stat.insertions}</span>
+        <span className="shrink-0 font-mono text-xs font-bold text-diff-add">+{stat.insertions}</span>
       )}
       {typeof stat?.deletions === 'number' && stat.deletions > 0 && (
-        <span className="shrink-0 font-mono text-xs text-diff-del">-{stat.deletions}</span>
+        <span className="shrink-0 font-mono text-xs font-bold text-diff-del">-{stat.deletions}</span>
       )}
     </button>
   );

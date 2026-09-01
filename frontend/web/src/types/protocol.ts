@@ -44,6 +44,8 @@ export interface TranscriptItem {
   progress_messages?: Array<{message: string; type?: string}>;
   /** 命令产物标记：命令选择器产生的转录（如 /compact 压缩历史），非真实用户输入 */
   is_command?: boolean;
+  /** 工具结构化输出（tool_completed 携带；变更工具含增减行数等统计） */
+  structured_output?: Record<string, unknown>;
 }
 
 // ---- 任务快照 ----
@@ -308,25 +310,38 @@ export interface SessionFileItem {
 }
 
 /**
- * 文件增删行数统计条目接口
+ * 轮次大纲条目接口
  *
- * web_file_stats 推送的单个条目（单轮变更条数据源）。
- * 数值语义为"该文件当前相对 Git HEAD 的差异"；非 Git 环境 / 工作区外 /
- * 二进制文件降级为 null（前端只显示文件名）；文件不存在标记 deleted。
+ * web_restore_completed 的 turn_outline 携带的全量轮次摘要（含未载入
+ * 轮次），左侧轮次导航据此提供预览与跳转。turn 与已载入轮次（本地
+ * turns + firstLoadedTurn 偏移）共用同一 1-based 序号空间。
  */
-export interface FileStatItem {
-  /** 变更工具输入的原始路径串（前端映射键，与请求 paths 一一对应） */
-  input: string;
-  /** 文件绝对路径（预览请求参数；占位条目为空串） */
-  path: string;
-  /** 展示路径（统一绝对路径，/ 分隔；占位条目回显原始串） */
-  display: string;
-  /** 变更状态：'added'（未跟踪新文件）| 'modified' | 'deleted' | null（无法判定） */
-  status?: 'added' | 'modified' | 'deleted' | null;
-  /** 新增行数（null 表示无法统计） */
-  insertions?: number | null;
-  /** 删除行数（null 表示无法统计） */
-  deletions?: number | null;
+export interface TurnOutlineEntry {
+  /** 轮号（1-based，会话内全序） */
+  turn: number;
+  /** 该轮首条用户消息预览（后端折叠空白并截断） */
+  prompt: string;
+  /** 该轮最后一条助手回复预览（进行中/无回复为空串） */
+  response: string;
+}
+
+/**
+ * 历史轮次分页接口
+ *
+ * web_history 事件载荷：紧邻 before_turn 之前的一页轮次条目，前端
+ * 前插到当前转录并更新 firstLoadedTurn。
+ */
+export interface WebHistoryPage {
+  /** 该页条目（无更多历史或出错时为空数组） */
+  items: TranscriptItem[];
+  /** 该页起始轮号（1-based；无条目时为 null） */
+  first_turn: number | null;
+  /** 是否还有更早的轮次 */
+  has_more: boolean;
+  /** 会话总轮数（含未载入） */
+  total_turns?: number;
+  /** 出错信息（会话不存在/物化失败等） */
+  error?: string;
 }
 
 /**
@@ -412,6 +427,8 @@ export type FrontendRequest =
   // === Web 前端专属通道（web_* 命名空间）===
   | { type: 'web_new_session'; cwd?: string }
   | { type: 'web_restore_session'; session_id: string; cwd?: string }
+  | { type: 'web_fork_session'; session_id?: string; turns?: number; cwd?: string }
+  | { type: 'web_request_history'; before_turn: number; session_id?: string; cwd?: string }
   | { type: 'web_delete_sessions'; session_ids?: string[]; delete_all?: boolean; cwd?: string }
   | { type: 'web_set_setting'; setting_key: string; setting_value: string | number | boolean }
   | { type: 'web_request_sessions'; limit?: number; offset?: number }
@@ -502,6 +519,8 @@ export interface BackendEvent {
   output?: string;
   /** 是否为错误（可选） */
   is_error?: boolean;
+  /** 工具结构化输出（tool_completed 携带；变更工具含 insertions/deletions 等统计） */
+  structured_output?: Record<string, unknown> | null;
   /** 工具数量（可选） */
   tool_count?: number;
   /** tool_progress 事件的进度类型（可选，如 'stdout'/'status'/'custom'） */
@@ -561,8 +580,14 @@ export interface BackendEvent {
   web_agent_op?: string;
   /** web_session_files 推送的会话内修改文件列表（可选，会话文件区块数据源） */
   web_session_files?: SessionFileItem[];
-  /** web_file_stats 推送的文件增删行数统计（可选，单轮变更条数据源） */
-  web_file_stats?: FileStatItem[];
+  /** web_restore_completed 携带的全量轮次大纲（可选，含未载入轮次预览；null 清空导航） */
+  turn_outline?: TurnOutlineEntry[] | null;
+  /** web_restore_completed 携带的已载入最小轮号（可选，1-based） */
+  first_loaded_turn?: number | null;
+  /** web_restore_completed / web_history 携带的总轮数（可选） */
+  total_turns?: number | null;
+  /** web_history 推送的更早轮次分页（可选；items 前插到当前转录） */
+  web_history?: WebHistoryPage;
   /** web_models 推送的模型选项（可选） */
   web_models?: SelectOption[];
   /** web_setting_changed 的键名（可选） */

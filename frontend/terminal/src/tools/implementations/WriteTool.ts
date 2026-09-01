@@ -8,6 +8,40 @@
 
 import type {Tool} from '../ToolInterface.js';
 
+/**
+ * 解析创建场景的真实写入行数
+ *
+ * 优先级：工具入参 content（权威，直播/恢复均可用）→ structured_output
+ * 的 line_count → 结果文本回算。文本回算须排除 "Created {path}" 首行，
+ * 且截断预览的尾行 "... +N lines" 需补足剩余行数——直接按总行数会
+ * 恒等于预览上限（表现为固定 "Wrote 12 lines"）。
+ */
+function resolveCreateLineCount(
+	result: string,
+	input?: Record<string, unknown>,
+	metadata?: Record<string, unknown>,
+): number {
+	if (typeof input?.content === 'string') {
+		return countLines(input.content);
+	}
+	if (typeof metadata?.line_count === 'number') {
+		return metadata.line_count;
+	}
+	const body = result.split('\n').slice(1);
+	const tail = body[body.length - 1]?.match(/\.\.\. \+(\d+) lines$/);
+	if (tail) {
+		return body.length - 1 + Number(tail[1]);
+	}
+	return body.filter((l) => l.trim() !== '').length;
+}
+
+function countLines(text: string): number {
+	if (!text) return 0;
+	return text.split('\n').reduce((n, line, i, arr) => (
+		n + (line !== '' || i < arr.length - 1 ? 1 : 0)
+	), 0);
+}
+
 export const writeTool: Tool = {
 	name: 'write_file',
 
@@ -22,17 +56,16 @@ export const writeTool: Tool = {
 
 	renderToolResultMessage(
 		result: string,
-		_input?: Record<string, unknown>,
+		input?: Record<string, unknown>,
 		_isBrief?: boolean,
 		structuredOutput?: Record<string, unknown>,
 	): string {
 		const metadata = structuredOutput as Record<string, unknown> | undefined;
-		const isCreate = metadata?.is_create !== false;
-		const lineCount = metadata?.line_count ?? result.split('\n').length;
-		const filePath = metadata?.file_path ?? '';
+		const isCreate = metadata?.is_create !== false && !/^Updated\s/.test(result.split('\n')[0] ?? '');
+		const filePath = metadata?.file_path ?? input?.path ?? input?.file_path ?? '';
 
 		if (isCreate) {
-			return `Wrote ${lineCount} lines to ${filePath}`;
+			return `Wrote ${resolveCreateLineCount(result, input, metadata)} lines to ${filePath}`;
 		}
 
 		// 更新：显示 diff 行

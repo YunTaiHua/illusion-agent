@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from illusion.config.paths import resolve_relative_path
 from illusion.tools.base import BaseTool, ToolExecutionContext, ToolResult
+from illusion.tools.diff_utils import change_metadata
 from illusion.utils.atomic_write import atomic_write_text
 from illusion.utils.file_state_cache import FileState, FileStateCache
 
@@ -157,7 +158,10 @@ Usage:
                     pass
             # 生成新文件内容预览
             preview = _generate_create_preview(str(path), arguments.new_string)
-            return ToolResult(output=f"Created {path}\n{preview}")
+            return ToolResult(
+                output=f"Created {path}\n{preview}",
+                metadata=change_metadata(str(path), is_create=True, content=arguments.new_string),
+            )
 
         # 已存在文件编辑：加文件级互斥锁，防止并发读-改-写竞争
         abs_path = str(path)
@@ -249,7 +253,12 @@ Usage:
                 except OSError:
                     pass
             diff_text = _generate_diff(str(path), original, arguments.new_string)
-            return ToolResult(output=f"Updated {path}\n{diff_text}")
+            return ToolResult(
+                output=f"Updated {path}\n{diff_text}",
+                metadata=change_metadata(
+                    str(path), is_create=False, diff_text=diff_text, content=arguments.new_string
+                ),
+            )
 
         # 检查 old_string 是否存在于文件中
         if arguments.old_string not in original:
@@ -296,7 +305,12 @@ Usage:
 
         # 生成差异文本
         diff_text = _generate_diff(str(path), original, updated)
-        return ToolResult(output=f"Updated {path}\n{diff_text}")
+        return ToolResult(
+            output=f"Updated {path}\n{diff_text}",
+            metadata=change_metadata(
+                str(path), is_create=False, diff_text=diff_text, content=updated
+            ),
+        )
 
 
 def _generate_diff(file_path: str, original: str, updated: str, context_lines: int = 3) -> str:

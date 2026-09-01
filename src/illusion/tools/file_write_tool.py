@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from illusion.config.paths import resolve_relative_path
 from illusion.tools.base import BaseTool, ToolExecutionContext, ToolResult
+from illusion.tools.diff_utils import change_metadata
 from illusion.utils.atomic_write import atomic_write_text
 from illusion.utils.file_state_cache import FileState, FileStateCache
 
@@ -165,10 +166,18 @@ Usage:
         # 生成差异或预览
         if is_update:
             diff_text = _generate_diff(str(path), original, arguments.content)
-            return ToolResult(output=f"Updated {path}\n{diff_text}")
+            return ToolResult(
+                output=f"Updated {path}\n{diff_text}",
+                metadata=change_metadata(
+                    str(path), is_create=False, diff_text=diff_text, content=arguments.content
+                ),
+            )
         else:
             preview = _generate_create_preview(str(path), arguments.content)
-            return ToolResult(output=f"Created {path}\n{preview}")
+            return ToolResult(
+                output=f"Created {path}\n{preview}",
+                metadata=change_metadata(str(path), is_create=True, content=arguments.content),
+            )
 
 
 def _generate_diff(file_path: str, original: str, updated: str, context_lines: int = 3) -> str:

@@ -103,40 +103,127 @@ export function buildToolInputMap(items: TranscriptItem[]): Map<string, Record<s
 /** 变更类工具名单（单轮变更条追踪范围；bash/powershell 不追踪） */
 const CHANGE_TOOLS = new Set(['edit_file', 'write_file']);
 
+/** 单文件本轮累计增减统计 */
+export interface TurnFileStat {
+  /** 原始路径串（变更工具输入，首次出现原样，供展示与预览请求） */
+  raw: string;
+  /** 变更状态：'added'（该轮首次出现即创建）| 'modified' */
+  status: 'added' | 'modified';
+  /** 累计新增行数（同轮多次编辑求和） */
+  insertions: number;
+  /** 累计删除行数 */
+  deletions: number;
+}
+
 /**
- * 提取单轮内被变更工具成功修改的文件路径列表
+ * 路径归一化键：同一文件在同轮内以相对/绝对、不同大小写、不同分隔符
+ * 出现时合并为一条统计（Windows 路径大小写不敏感）。
+ */
+export function normalizePathKey(raw: string): string {
+  return raw.trim().replace(/\\/g, '/').toLowerCase();
+}
+
+/** 创建预览尾行的截断标记（"... +N lines"）：解析创建场景的真实行数 */
+const TRUNCATED_TAIL_RE = /\.\.\. \+(\d+) lines$/;
+
+/**
+ * 统计统一差异文本的增删行数
  *
- * 扫描该轮转录项：role='tool' 且 tool_name 属于变更类工具的条目取其
- * file_path/path 输入；对应 tool_result 标记 is_error=true 的调用剔除。
- * 按原始输入串去重保序（后端按原始串解析并回填绝对路径与统计）。
- * 仅在轮次完成后调用（流式期间 tool_result 未到齐，失败判定不完整）。
+ * 跳过 +++/--- 文件头与 @@ 块头；+ 开头计增行、- 开头计删行
+ * （unified diff 的格式标记即行首第一个字符，不能 trimStart 后再判断）。
+ * 与后端 illusion.tools.diff_utils.count_diff_lines 口径一致。
+ */
+function countDiffLines(diffText: string): { insertions: number; deletions: number } {
+  let insertions = 0;
+  let deletions = 0;
+  for (const line of diffText.split('\n')) {
+    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@')) continue;
+    if (line.startsWith('+')) insertions += 1;
+    else if (line.startsWith('-')) deletions += 1;
+  }
+  return { insertions, deletions };
+}
+
+/**
+ * 从单次变更工具的结果文本解析该次编辑的增删行数
+ *
+ * 结果文本形态（见 FileEditTool/FileWriteTool）：
+ * - 更新："Updated {path}\n{unified diff}" → 数 diff 行；
+ * - 创建："Created {path}\n{内容预览}" → 预览即全文（截断时尾行
+ *   "... +N lines" 补足真实行数），全部计为增行。
+ * 直播场景优先使用条目携带的 structured_output（工具 metadata 的
+ * 精确值），恢复场景无该字段，回退文本解析——两条路径口径一致。
+ */
+export function parseToolResultStat(text: string, structured?: Record<string, unknown>): { insertions: number; deletions: number } | null {
+  const metaIns = structured?.insertions;
+  const metaDel = structured?.deletions;
+  if (typeof metaIns === 'number' && typeof metaDel === 'number') {
+    return { insertions: metaIns, deletions: metaDel };
+  }
+  const lines = text.split('\n');
+  const first = (lines[0] ?? '').trim();
+  const body = lines.slice(1).join('\n');
+  if (/^Created\s/.test(first)) {
+    // 创建：预览全文行数（截断尾行补足剩余行数），全部计为增行
+    let count = body ? body.split('\n').length : 0;
+    const tail = body.match(TRUNCATED_TAIL_RE);
+    if (tail) count = count - 1 + Number(tail[1]);
+    return { insertions: count, deletions: 0 };
+  }
+  if (/^Updated\s/.test(first)) {
+    return countDiffLines(body);
+  }
+  return null;
+}
+
+/**
+ * 计算单轮对话内各文件的累计增减行数（文件变更卡片数据源）
+ *
+ * 遍历该轮的变更工具条目（edit_file/write_file，失败调用剔除），
+ * 按原始路径串累计每次编辑的增删行——一份文件在同轮被多次编辑时
+ * 逐次求和；该轮首次出现即为创建（old_string 为空 / write 新建）时
+ * 状态标为 added。语义为"本轮对话的增量"，与 Git 无关。
  *
  * @param turn - 单轮转录项列表（useStableTurns 切分的一轮）
- * @returns 原始路径串列表（可能为空）
+ * @returns 原始路径串 → 累计统计（保持首次出现顺序）
  */
-export function buildTurnChangedFiles(turn: TranscriptItem[]): string[] {
-  const failedUseIds = new Set<string>();
+export function computeTurnFileStats(turn: TranscriptItem[]): Map<string, TurnFileStat> {
+  const result = new Map<string, TurnFileStat>();
+  const resultTexts = new Map<string, string>();            // tool_use_id → 结果文本
+  const resultMeta = new Map<string, Record<string, unknown>>(); // tool_use_id → structured_output
   for (const item of turn) {
-    if (item.role === 'tool_result' && item.is_error && item.tool_use_id) {
-      failedUseIds.add(item.tool_use_id);
-    }
+    if (item.role !== 'tool_result' || !item.tool_use_id) continue;
+    if (item.is_error) continue;
+    resultTexts.set(item.tool_use_id, item.text ?? '');
+    if (item.structured_output) resultMeta.set(item.tool_use_id, item.structured_output);
   }
-  const seen = new Set<string>();
-  const files: string[] = [];
   for (const item of turn) {
     if (item.role !== 'tool' || !item.tool_name || !CHANGE_TOOLS.has(item.tool_name)) continue;
-    if (!item.tool_use_id || failedUseIds.has(item.tool_use_id)) continue;
+    if (!item.tool_use_id) continue;
+    const text = resultTexts.get(item.tool_use_id);
+    if (text === undefined) continue; // 结果未到（流式中）或失败
+    const stat = parseToolResultStat(text, resultMeta.get(item.tool_use_id));
+    if (!stat) continue;
     const input = item.tool_input as { file_path?: unknown; path?: unknown } | undefined;
-    const raw = input?.file_path ?? input?.path;
+    const raw = (input?.file_path ?? input?.path);
     if (typeof raw !== 'string' || !raw.trim()) continue;
-    // push trim 后的串：请求键/缓存键/后端回显键三方一致——未 trim 的原串
-    // 会使后端 exists() 误判 deleted 且预览回显失配（载荷被丢弃永久加载）
-    const trimmed = raw.trim();
-    if (seen.has(trimmed)) continue;
-    seen.add(trimmed);
-    files.push(trimmed);
+    const display = raw.trim();
+    const key = normalizePathKey(display);
+    const created = /^Created\s/.test(text.trimStart().split('\n')[0] ?? '');
+    const prev = result.get(key);
+    if (prev) {
+      prev.insertions += stat.insertions;
+      prev.deletions += stat.deletions;
+    } else {
+      result.set(key, {
+        raw: display,
+        status: created ? 'added' : 'modified',
+        insertions: stat.insertions,
+        deletions: stat.deletions,
+      });
+    }
   }
-  return files;
+  return result;
 }
 
 /**

@@ -29,6 +29,7 @@ import {MarkdownContent} from './MarkdownContent.js';
 import {WelcomeBanner} from './WelcomeBanner.js';
 import {useBlink} from '../hooks/useBlink.js';
 import {getTool} from '../tools/registry.js';
+import {diffStatParts} from '../utils/diffStat.js';
 
 /** 流式尾部最大显示行数 */
 const STREAMING_TAIL_LINES = 10;
@@ -36,6 +37,9 @@ const STREAMING_TAIL_LINES = 10;
 const MIN_WRAP_WIDTH = 12;
 /** 宽度安全余量 */
 const WIDTH_SAFETY_EXTRA = 2;
+/** 在工具行括号外附增强删行数的变更类工具（write_file 的结果文本
+ *  "Wrote N lines to …" 本身已表达写入行数，无需重复标注） */
+const DIFF_STAT_TOOLS = new Set(['edit_file']);
 
 /**
  * 对话视图组件
@@ -385,6 +389,11 @@ function ToolGroupRow({
 	const needsGap = prevRole !== undefined && prevRole !== 'tool' && prevRole !== 'tool_result';
 	const prefix = `${theme.icons.tool} `;
 	const continuationPrefix = ' '.repeat(stringWidth(prefix));
+	// 变更类工具在文件预览括号外附增删行数（+N 绿 / -M 红）：取自配对结果
+	// 的结构化统计（直播精确值），恢复场景回退结果文本解析
+	const stat = resultItem !== null && !resultItem.is_error && DIFF_STAT_TOOLS.has(toolName)
+		? diffStatParts(resultItem.text ?? '', resultItem.structured_output)
+		: null;
 	const content = summary ? `${displayName}(${summary})` : displayName;
 	const wrapped = wrapForPrefix(content, terminalWidth, prefix);
 
@@ -396,9 +405,25 @@ function ToolGroupRow({
 						<Text>
 							<Text color={theme.colors.info}>{prefix}</Text>
 							<Text bold>{line}</Text>
+							{/* 增删行数着色段：附在路径（括号）之后、整行末尾 */}
+							{i === wrapped.length - 1 && stat !== null && (
+								<Text>
+									{stat.insertions > 0 && <Text color={theme.colors.success}>{` +${stat.insertions}`}</Text>}
+									{stat.deletions > 0 && <Text color={theme.colors.error}>{` -${stat.deletions}`}</Text>}
+								</Text>
+							)}
 						</Text>
 					) : (
-						<Text>{continuationPrefix}{line}</Text>
+						<Text>
+							{continuationPrefix}
+							{line}
+							{i === wrapped.length - 1 && stat !== null && (
+								<Text>
+									{stat.insertions > 0 && <Text color={theme.colors.success}>{` +${stat.insertions}`}</Text>}
+									{stat.deletions > 0 && <Text color={theme.colors.error}>{` -${stat.deletions}`}</Text>}
+								</Text>
+							)}
+						</Text>
 					)}
 				</Box>
 			))}
