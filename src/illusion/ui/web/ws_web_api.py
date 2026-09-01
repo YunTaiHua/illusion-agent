@@ -140,6 +140,100 @@ def build_replay_items(replay_messages: list[Any] | None) -> list[dict[str, Any]
 
 log = logging.getLogger(__name__)
 
+# === 长会话分页恢复（左侧轮次导航数据源）===
+
+# 恢复会话时下发最近 N 轮（更早轮次由 web_request_history 按页拉取）
+RESTORE_PAGE_TURNS = 10
+# 单页历史轮次拉取量（"加载更多"每次一页）
+HISTORY_PAGE_TURNS = 5
+_OUTLINE_PROMPT_LIMIT = 80
+_OUTLINE_RESPONSE_LIMIT = 120
+
+
+def _clip_preview(text: str, limit: int) -> str:
+    """折叠空白并截断到预览预算（超长补省略号）。"""
+    compact = " ".join((text or "").split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: max(1, limit - 1)] + "…"
+
+
+def build_turn_outline(replay_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """从全量重放条目构建轮次大纲（含未载入轮次的预览）。
+
+    轮界与前端 useStableTurns 一致：user 条目开新轮。prompt 取该轮
+    首条用户消息，response 取该轮最后一条有文本的助手回复（流式期间
+    前端用本地已载入数据覆盖后缀，大纲只承担"未载入前缀"的预览）。
+
+    Args:
+        replay_items: build_replay_items 的输出（已过滤命令/通知消息）
+
+    Returns:
+        list[dict[str, Any]]: [{turn, prompt, response}]（turn 从 1 起）
+    """
+    entries: list[dict[str, Any]] = []
+    for item in replay_items:
+        role = item.get("role")
+        if role == "user":
+            entries.append({
+                "turn": len(entries) + 1,
+                "prompt": _clip_preview(str(item.get("text") or ""), _OUTLINE_PROMPT_LIMIT),
+                "response": "",
+            })
+        elif role == "assistant" and entries:
+            text = str(item.get("text") or "").strip()
+            if text:
+                entries[-1]["response"] = _clip_preview(text, _OUTLINE_RESPONSE_LIMIT)
+    return entries
+
+
+def slice_replay_items_by_turns(
+    replay_items: list[dict[str, Any]], first_turn: int, last_turn: int
+) -> list[dict[str, Any]]:
+    """按轮号区间（1-based，闭区间）切片重放条目。
+
+    user 条目开新轮并归属新轮；切片不会把一轮从中间切开。
+
+    Args:
+        replay_items: 全量重放条目
+        first_turn: 起始轮号（含）
+        last_turn: 结束轮号（含）
+
+    Returns:
+        list[dict[str, Any]]: 区间内的条目（保持原顺序）
+    """
+    if last_turn < first_turn:
+        return []
+    turns = 0
+    out: list[dict[str, Any]] = []
+    for item in replay_items:
+        if item.get("role") == "user":
+            turns += 1
+            if turns > last_turn:
+                break
+        if first_turn <= turns:
+            out.append(item)
+    return out
+
+
+def paginate_replay_page(
+    replay_items: list[dict[str, Any]], page_turns: int = RESTORE_PAGE_TURNS
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
+    """计算恢复下发的最近一页：返回 (全量大纲, 页内条目, 已载入最小轮号)。
+
+    Args:
+        replay_items: 全量重放条目
+        page_turns: 页大小（轮数）
+
+    Returns:
+        tuple[list, list, int]: (turn_outline, page_items, first_loaded_turn)
+    """
+    outline = build_turn_outline(replay_items)
+    total = len(outline)
+    first = max(1, total - page_turns + 1)
+    page = slice_replay_items_by_turns(replay_items, first, total)
+    return outline, page, first
+
 
 class WebApiDispatcher:
     """Web 专属请求分发器。
@@ -201,6 +295,8 @@ class WebApiDispatcher:
         return {
             "web_new_session": self.handle_web_new_session,
             "web_restore_session": self.handle_web_restore_session,
+            "web_fork_session": self.handle_web_fork_session,
+            "web_request_history": self.handle_web_request_history,
             "web_delete_sessions": self.handle_web_delete_sessions,
             "web_set_setting": self.handle_web_set_setting,
             "web_request_sessions": self.handle_web_request_sessions,
@@ -214,7 +310,6 @@ class WebApiDispatcher:
             "web_request_agent_tasks": self.handle_web_request_agent_tasks,
             "web_request_session_files": self.handle_web_request_session_files,
             "web_read_session_file": self.handle_web_read_session_file,
-            "web_request_file_stats": self.handle_web_request_file_stats,
             "web_request_file_mentions": self.handle_web_request_file_mentions,
             "web_query": self.handle_web_query,
             "web_request_workspaces": self.handle_web_request_workspaces,
@@ -326,60 +421,12 @@ class WebApiDispatcher:
         else:
             # 2'. 运行时不存在：定位所属工作区并创建独立引擎载入会话历史
             try:
-                target_cwd = request.cwd or host._locate_session_workspace(session_id)
-                if target_cwd is None:
-                    raise FileNotFoundError(f"Session not found: {session_id}")
-                from illusion.services.session_storage import read_meta as _read_meta
-
-                if not _read_meta(target_cwd, session_id):
-                    raise FileNotFoundError(f"Session not found: {session_id}")
-                ws_bundle = await host._get_or_build_bundle(target_cwd)
-                engine = build_session_engine(
-                    ws_bundle,
-                    session_id,
-                    permission_prompt=host._make_permission_prompt(session_id),
-                    ask_user_prompt=host._make_ask_user_prompt(session_id),
-                    plan_approval_prompt=host._make_plan_approval_prompt(session_id),
-                )
-                from illusion.ui.runtime import build_session_bundle
-                session = SessionRuntime(
-                    session_id=session_id,
-                    bundle=build_session_bundle(ws_bundle, session_id, engine),
-                    workspace_cwd=ws_bundle.cwd,
-                )
-                host._sessions[session_id] = session
-                host._maybe_evict_sessions()
-                context = CommandContext(
-                    engine=session.engine,
-                    hooks_summary=session.bundle.hook_summary(),
-                    mcp_summary=session.bundle.mcp_summary(),
-                    plugin_summary=session.bundle.plugin_summary(),
-                    cwd=session.bundle.cwd,
-                    tool_registry=session.bundle.tool_registry,
-                    app_state=session.bundle.app_state,
-                    session_id=session_id,
-                )
-                result = await _resume_handler(session_id, context)
-                if result.restored_session_id and result.restored_session_id != session_id:
-                    # resume_handler 可能规范化会话 id（如 # 轮次引用）：
-                    # 同步注册表 key，避免 dict key 与 session_id 不一致
-                    # 导致后续请求按新 id 路由时找不到运行时
-                    host._sessions.pop(session_id, None)
-                    session.session_id = result.restored_session_id
-                    session.bundle.session_id = result.restored_session_id
-                    host._sessions[session.session_id] = session
-                    session_id = session.session_id
-                replay_items = build_replay_items(result.replay_messages)
+                session = await self._materialize_session(session_id, request.cwd)
+                replay_items = build_replay_items(session.engine.messages)
             except Exception as exc:
                 log.exception("恢复会话 %s 失败", session_id)
                 error_msg = str(exc)
-                session = host._sessions.pop(session_id, None)
-                # 关闭失败恢复的引擎，避免每次失败泄漏一个运行时
-                if session is not None:
-                    try:
-                        await session.engine.aclose()
-                    except Exception:
-                        log.exception("关闭失败恢复的会话 %s 引擎出错", session_id)
+                session = None
 
         # 3. 恢复成功（或已存在）：设为活跃会话
         if error_msg is None and session is not None:
@@ -391,13 +438,25 @@ class WebApiDispatcher:
         if host._ws_closed:
             return
 
+        # 4.5 长会话分页：只下发最近 RESTORE_PAGE_TURNS 轮，更早轮次由
+        # web_request_history 按页拉取；全量轻量轮次大纲随事件下发，
+        # 供前端左侧轮次导航预览与跳转"尚未载入"的轮次
+        outline: list[dict[str, Any]] = []
+        page_items = replay_items
+        first_loaded_turn = 1
+        if error_msg is None:
+            outline, page_items, first_loaded_turn = paginate_replay_page(replay_items)
+
         # 5. 始终发 web_restore_completed——前端据此清除 restoringSessionId
         await self._emit(BackendEvent(
             type="web_restore_completed",
             session_id=session_id,
-            items=replay_items,  # type: ignore[arg-type]
+            items=page_items,  # type: ignore[arg-type]
             state=host._session_state_payload(session) if session is not None else {},
             web_error=error_msg,
+            turn_outline=outline,
+            first_loaded_turn=first_loaded_turn,
+            total_turns=len(outline),
         ), session_id=session_id)
         # 6. 推送会话列表刷新
         await host._push_sessions()
@@ -411,6 +470,206 @@ class WebApiDispatcher:
         await self._emit(self._host._status_snapshot())
 
     # _build_replay_items 已提取为模块级函数 build_replay_items()，供本类和 ws_host 共用
+
+    async def _materialize_session(
+        self, session_id: str, cwd: str | None
+    ) -> SessionRuntime:
+        """为磁盘会话创建独立引擎运行时并载入历史（恢复/fork/历史分页共用）。
+
+        定位所属工作区（cwd 缺省时按内存/注册表扫描）→ 懒构建工作区
+        bundle → 构建引擎 → resume_handler 载入全量历史。失败时清理
+        半成品运行时（pop + 关引擎）后向上抛出，由调用方决定错误呈现。
+
+        Args:
+            session_id: 目标会话 ID
+            cwd: 会话所属工作区目录（可选）
+
+        Returns:
+            SessionRuntime: 已载入历史的会话运行时
+        """
+        host = self._host
+        target_cwd = cwd or host._locate_session_workspace(session_id)
+        if target_cwd is None:
+            raise FileNotFoundError(f"Session not found: {session_id}")
+        from illusion.services.session_storage import read_meta as _read_meta
+
+        if not _read_meta(target_cwd, session_id):
+            raise FileNotFoundError(f"Session not found: {session_id}")
+        ws_bundle = await host._get_or_build_bundle(target_cwd)
+        engine = build_session_engine(
+            ws_bundle,
+            session_id,
+            permission_prompt=host._make_permission_prompt(session_id),
+            ask_user_prompt=host._make_ask_user_prompt(session_id),
+            plan_approval_prompt=host._make_plan_approval_prompt(session_id),
+        )
+        from illusion.ui.runtime import build_session_bundle
+        session = SessionRuntime(
+            session_id=session_id,
+            bundle=build_session_bundle(ws_bundle, session_id, engine),
+            workspace_cwd=ws_bundle.cwd,
+        )
+        host._sessions[session_id] = session
+        host._maybe_evict_sessions()
+        context = CommandContext(
+            engine=session.engine,
+            hooks_summary=session.bundle.hook_summary(),
+            mcp_summary=session.bundle.mcp_summary(),
+            plugin_summary=session.bundle.plugin_summary(),
+            cwd=session.bundle.cwd,
+            tool_registry=session.bundle.tool_registry,
+            app_state=session.bundle.app_state,
+            session_id=session_id,
+        )
+        try:
+            result = await _resume_handler(session_id, context)
+        except Exception:
+            # 载入失败：释放刚注册的运行时（关引擎），向上抛出
+            host._sessions.pop(session_id, None)
+            try:
+                await session.engine.aclose()
+            except Exception:
+                log.exception("关闭恢复失败的会话 %s 引擎出错", session_id)
+            raise
+        if result.restored_session_id and result.restored_session_id != session_id:
+            # resume_handler 可能规范化会话 id（如 # 轮次引用）：
+            # 同步注册表 key，避免 dict key 与 session_id 不一致
+            # 导致后续请求按新 id 路由时找不到运行时
+            host._sessions.pop(session_id, None)
+            session.session_id = result.restored_session_id
+            session.bundle.session_id = result.restored_session_id
+            host._sessions[session.session_id] = session
+        return session
+
+    async def handle_web_fork_session(self, request: FrontendRequest) -> None:
+        """分叉会话：复制源会话（可截断到前 N 轮）并切换到新会话。
+
+        源会话的运行时与磁盘内容保持原样（fork 只读取）；运行中的
+        会话（busy）拒绝分叉——最后一轮尚未落盘，副本会缺最新内容。
+        新会话物化后设为活跃，按分页恢复的同一格式推送
+        web_restore_completed（前端据此切换视图），并刷新会话列表。
+
+        Args:
+            request: 前端请求（session_id 缺省为活跃会话；turns 可选：
+                保留前 N 轮；cwd 可选：源会话所属工作区）
+        """
+        from illusion.services.session_storage import fork_session as _fork_session
+
+        host = self._host
+        if host._bundle is None:
+            await self._emit(BackendEvent(type="error", message="运行时未就绪"))
+            return
+        source_sid = request.session_id or host._active_session_id
+        if not source_sid:
+            await self._emit(BackendEvent(type="error", message="缺少源会话 ID"))
+            return
+        src_session = host._sessions.get(source_sid)
+        if src_session is not None and src_session.busy:
+            await self._emit(BackendEvent(
+                type="error", message="会话正在运行任务，无法分叉（请等待任务完成）"))
+            return
+        cwd = request.cwd or (
+            src_session.bundle.cwd if src_session is not None
+            else host._locate_session_workspace(source_sid)
+        )
+        if cwd is None:
+            await self._emit(BackendEvent(type="error", message=f"Session not found: {source_sid}"))
+            return
+        turns = request.turns
+        if turns is not None:
+            turns = max(1, int(turns))
+        try:
+            new_sid = await asyncio.to_thread(_fork_session, cwd, source_sid, turns)
+        except Exception as exc:
+            log.exception("分叉会话 %s 失败", source_sid)
+            await self._emit(BackendEvent(type="error", message=f"分叉会话失败: {exc}"))
+            return
+        if not new_sid:
+            await self._emit(BackendEvent(type="error", message=f"Session not found: {source_sid}"))
+            return
+
+        # 物化新会话并激活（物化失败时保持源会话不动）
+        try:
+            session = await self._materialize_session(new_sid, cwd)
+        except Exception as exc:
+            log.exception("载入分叉会话 %s 失败", new_sid)
+            await self._emit(BackendEvent(type="error", message=f"分叉会话失败: {exc}"))
+            return
+        host._set_active_session(session.session_id)
+        host._refresh_session_display(session)
+        sid = session.session_id
+
+        replay_items = build_replay_items(session.engine.messages)
+        outline, page_items, first_turn = paginate_replay_page(replay_items)
+        await self._emit(BackendEvent(
+            type="web_restore_completed",
+            session_id=sid,
+            items=page_items,  # type: ignore[arg-type]
+            state=host._session_state_payload(session),
+            turn_outline=outline,
+            first_loaded_turn=first_turn,
+            total_turns=len(outline),
+        ), session_id=sid)
+        await host._push_sessions()
+        await self._push_resources(session.bundle)
+        await self._push_models(session.bundle)
+        from illusion.tasks import get_task_manager
+        await self._emit(BackendEvent.tasks_snapshot(get_task_manager().list_tasks()))
+        await self._emit(self._host._status_snapshot())
+
+    async def handle_web_request_history(self, request: FrontendRequest) -> None:
+        """加载更早的轮次分页并推送 web_history 事件（长会话导航跳转数据源）。
+
+        请求携带 before_turn（前端当前已载入的最小轮号，1-based），
+        返回紧邻其前的一页（HISTORY_PAGE_TURNS 轮）。数据源优先内存
+        运行时；已被淘汰的会话先物化（全量载入后切片）。
+
+        Args:
+            request: 前端请求（before_turn 必填；session_id 缺省为活跃会话；
+                cwd 可选：会话所属工作区）
+        """
+        host = self._host
+        if host._bundle is None:
+            return
+        session_id = request.session_id or host._active_session_id
+        session = host._sessions.get(session_id) if session_id else None
+        if session is None and session_id:
+            try:
+                session = await self._materialize_session(session_id, request.cwd)
+            except Exception as exc:
+                log.exception("物化会话 %s 以加载历史失败", session_id)
+                await self._emit(BackendEvent(
+                    type="web_history", session_id=session_id,
+                    web_history={"items": [], "first_turn": None, "has_more": False,
+                                 "total_turns": 0, "error": str(exc)},
+                ), session_id=session_id)
+                return
+        if session is None:
+            await self._emit(BackendEvent(
+                type="web_history", session_id=None,
+                web_history={"items": [], "first_turn": None, "has_more": False,
+                             "total_turns": 0, "error": "session_not_found"},
+            ))
+            return
+
+        sid = session.session_id
+        replay_items = build_replay_items(session.engine.messages)
+        outline = build_turn_outline(replay_items)
+        total = len(outline)
+        before = request.before_turn or (total + 1)
+        page_last = max(0, before - 1)
+        page_first = max(1, page_last - HISTORY_PAGE_TURNS + 1)
+        items = slice_replay_items_by_turns(replay_items, page_first, page_last)
+        await self._emit(BackendEvent(
+            type="web_history",
+            session_id=sid,
+            web_history={
+                "items": items,
+                "first_turn": page_first if items else None,
+                "has_more": page_first > 1,
+                "total_turns": total,
+            },
+        ), session_id=sid)
 
     async def handle_web_delete_sessions(self, request: FrontendRequest) -> None:
         """批量删除会话。
@@ -1024,74 +1283,6 @@ class WebApiDispatcher:
         await self._emit(BackendEvent(
             type="web_file_content", session_id=session_id,
             cwd=session.bundle.cwd, web_file_content=payload))
-
-    async def handle_web_request_file_stats(self, request: FrontendRequest) -> None:
-        """批量统计会话内修改文件的增删行数并推送 web_file_stats 事件。
-
-        单轮变更条（聊天气泡底部"本轮变更"）的数据源：前端按轮次提取
-        edit_file/write_file 的目标路径后批量请求。安全模型与
-        web_read_session_file 一致：仅允许统计"当前会话确实修改过的文件"
-        （由 _collect_session_files 界定），杜绝任意路径探测。
-
-        Args:
-            request: 前端请求（paths 必填：变更工具输入的原始路径串；
-                session_id 可选：目标会话）
-        """
-        host = self._host
-        if host._bundle is None:
-            return
-        session_id = request.session_id or host._active_session_id
-        session = host._sessions.get(session_id) if session_id else None
-        raw_paths = [p for p in (request.paths or []) if isinstance(p, str) and p.strip()]
-        if session is None:
-            # 逐条回显占位而非空数组：前端以 input 键清理 in-flight 标记，
-            # 空响应会让这些键永久滞留 → 之后不再重试 → 条目永远无统计
-            await self._emit(BackendEvent(
-                type="web_file_stats", session_id=session_id,
-                cwd=host._bundle.cwd,
-                web_file_stats=[
-                    {"input": p, "path": "", "display": p,
-                     "status": None, "insertions": None, "deletions": None}
-                    for p in raw_paths]))
-            return
-        if not raw_paths:
-            await self._emit(BackendEvent(
-                type="web_file_stats", session_id=session_id,
-                cwd=session.bundle.cwd, web_file_stats=[]))
-            return
-        tracked = {
-            f["path"]: f["display"]
-            for f in await asyncio.to_thread(
-                _collect_session_files, session.engine.messages, session.bundle.cwd)
-        }
-
-        # 白名单过滤必须前移到 _file_numstats 之前：后者会填充真实 Git 数值
-        # 与 deleted 存在性标记，若对白名单外路径调用即泄漏工作区任意文件的
-        # 变更状态（存在性预言机）。白名单外条目仅回显纯占位（input 原串、
-        # 无解析路径、无任何数值），供前端清理 in-flight 标记与占位缓存；
-        # 预览仍走 web_read_session_file 白名单校验。
-        from illusion.config.paths import resolve_relative_path
-        root = Path(session.bundle.cwd).resolve()
-
-        def _allowlisted(raw: str) -> bool:
-            try:
-                return str(resolve_relative_path(root, raw.strip())) in tracked
-            except (ValueError, OSError):
-                return False
-
-        def _placeholder(raw: str) -> dict[str, Any]:
-            return {"input": raw, "path": "", "display": raw,
-                    "status": None, "insertions": None, "deletions": None}
-
-        allowed_raws = [p for p in raw_paths if _allowlisted(p)]
-        stats = (
-            await asyncio.to_thread(_file_numstats, session.bundle.cwd, allowed_raws)
-            if allowed_raws else [])
-        by_input = {e["input"]: e for e in stats}
-        allowed = [by_input.get(p) or _placeholder(p) for p in raw_paths]
-        await self._emit(BackendEvent(
-            type="web_file_stats", session_id=session_id,
-            cwd=session.bundle.cwd, web_file_stats=allowed))
 
     async def handle_web_request_file_mentions(self, request: FrontendRequest) -> None:
         """收集 @ 提及补全候选并推送 web_file_mentions 事件。
@@ -2221,82 +2412,6 @@ def _read_session_file_payload(path: str) -> dict[str, Any]:
     if not target.exists():
         return {"path": path, "error": "file_deleted"}
     return _read_file_payload(target, path)
-
-
-def _count_lines(path: Path) -> int | None:
-    """统计文本文件行数；二进制（含 NUL 字节）或读取失败返回 None。"""
-    try:
-        data = path.read_bytes()
-    except OSError:
-        return None
-    if b"\x00" in data:
-        return None
-    if not data:
-        return 0
-    return data.count(b"\n") + (0 if data.endswith(b"\n") else 1)
-
-
-def _file_numstats(cwd: str, abs_paths: list[str]) -> list[dict[str, Any]]:
-    """批量统计文件相对 Git HEAD 的增删行数（单轮变更条数据源）。
-
-    入参为已通过会话白名单校验的绝对路径（过滤在 handler 中完成）。
-    语义：返回值为该文件"当前相对 HEAD"的差异统计（非严格单轮增量，
-    与主流 agent 桌面端一致）。降级链：非 Git 仓库 / 工作区外 / 二进制
-    → insertions/deletions/status 均为 None（前端只显示文件名）；未跟踪
-    新文件 → status="added"、insertions=文件总行数、deletions=0；
-    文件不存在（被用户手动删除或会话中被删除）→ status="deleted"。
-
-    Args:
-        cwd: 工作区目录（git 执行目录与工作区内判定基准）
-        abs_paths: 文件绝对路径列表
-
-    Returns:
-        list[dict[str, Any]]: [{input, path, status, insertions, deletions}]
-        input 为原始串（前端映射键，顺序与入参一致）
-    """
-    root = Path(cwd).resolve()
-    inside_repo = (_run_git(cwd, "rev-parse", "--is-inside-work-tree") or "").strip() == "true"
-
-    entries: list[dict[str, Any]] = []
-    rel_of: dict[str, str] = {}  # 绝对路径 → 工作区内 posix 相对路径（仅仓库内文件）
-    for raw in abs_paths:
-        entry: dict[str, Any] = {
-            "input": raw, "path": raw, "display": Path(raw).as_posix(),
-            "status": None, "insertions": None, "deletions": None,
-        }
-        entries.append(entry)
-        if inside_repo and raw:
-            try:
-                rel_of[raw] = Path(raw).relative_to(root).as_posix()
-            except ValueError:
-                pass
-
-    # 先检测存在性：已删除（被用户手动删除或工具删除）标 deleted，
-    # 前端点击时降级为内容视图并展示"文件已被删除"
-    for entry in entries:
-        if entry["path"] and not Path(entry["path"]).exists():
-            entry["status"] = "deleted"
-
-    if inside_repo and rel_of:
-        # 全量采集后内存过滤：避免长 pathspec 命令行（Windows 长度上限），
-        # 成本与右栏 Git 快照的单次全量 diff 一致
-        numstat = _parse_git_numstat(
-            _run_git(cwd, "diff", "--numstat", "-z", "--relative", "HEAD") or "")
-        others = set(
-            (_run_git(cwd, "ls-files", "--others", "--exclude-standard", "-z") or "").split("\0"))
-        for entry in entries:
-            rel = rel_of.get(entry["path"])
-            if rel is None or entry["status"] == "deleted":
-                continue  # 工作区外无 Git 数值；deleted 已标记不覆盖
-            if rel in others:
-                entry["status"] = "added"
-                entry["insertions"] = _count_lines(Path(entry["path"]))
-                entry["deletions"] = 0
-            elif rel in numstat:
-                ins, dele = numstat[rel]
-                entry["status"] = "modified"
-                entry["insertions"], entry["deletions"] = ins, dele
-    return entries
 
 
 def _cap_preview_text(text: str) -> tuple[str, bool]:

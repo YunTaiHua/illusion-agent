@@ -90,7 +90,7 @@ from illusion.ui.runtime import (
 )
 from illusion.ui.web.security import assert_trusted_authority
 from illusion.ui.web.session_runtime import MAX_MATERIALIZED_SESSIONS, SessionRuntime
-from illusion.ui.web.ws_web_api import build_replay_items
+from illusion.ui.web.ws_web_api import build_replay_items, paginate_replay_page
 from illusion.utils.aioqueue import Queue, QueueShutDown
 
 # 配置模块级日志记录器
@@ -491,15 +491,23 @@ class WebBackendHost:
         # Web 前端专属：ready 后推送工作区列表（默认 + 注册目录）
         await self._push_workspaces()
         # Web 前端专属：ready 后推送活跃会话的转录与状态（前端据此
-        # materialize 当前会话视图；若为全新会话则为空转录）
+        # materialize 当前会话视图；若为全新会话则为空转录）。
+        # 长会话分页：只发最近 RESTORE_PAGE_TURNS 轮 + 全量轮次大纲
+        #（前端左侧轮次导航据此预览/跳转未载入轮次），与
+        # handle_web_restore_session 的下发口径一致
         assert self._active_session_id is not None
         active_session = self._sessions[self._active_session_id]
+        _outline, _page_items, _first_turn = paginate_replay_page(
+            build_replay_items(active_session.engine.messages))
         await self._emit(
             BackendEvent(
                 type="web_restore_completed",
                 session_id=active_session.session_id,
-                items=build_replay_items(active_session.engine.messages),  # type: ignore[arg-type]
+                items=_page_items,  # type: ignore[arg-type]
                 state=self._session_state_payload(active_session),
+                turn_outline=_outline,
+                first_loaded_turn=_first_turn,
+                total_turns=len(_outline),
             ),
             session_id=active_session.session_id,
         )
@@ -918,6 +926,10 @@ class WebBackendHost:
                         output=event.output,
                         is_error=event.is_error,
                         tool_use_id=tool_use_id or None,
+                        # 变更工具（edit_file/write_file）的增减行数等结构化数据：
+                        # 与 backend_host（terminal）保持一致转发，前端工具气泡
+                        # 与单轮变更卡片据此显示 +N/-M
+                        structured_output=event.structured_output,
                         item=TranscriptItem(
                             role="tool_result",
                             text=event.output,

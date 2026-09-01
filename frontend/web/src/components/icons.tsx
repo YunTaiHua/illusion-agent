@@ -141,6 +141,26 @@ export function GitBranchIcon({ className }: { className?: string }) {
 }
 
 /**
+ * Git 分叉图标（Phosphor git-fork 风格）。
+ *
+ * 左右两个源节点汇入下方目标节点（分叉语义：从此处分出新会话），
+ * 实心头表示分叉产物。stroke 2.1 与 24 viewBox 折算保持同族图标线宽。
+ */
+export function GitForkIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      {/* 左右源节点下垂线汇合 */}
+      <circle cx="6" cy="5" r="2.2" />
+      <circle cx="18" cy="5" r="2.2" />
+      <path d="M6 7.2v2.3a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V7.2" />
+      {/* 汇合竖线到目标节点 */}
+      <path d="M12 12.5v4.3" />
+      <circle cx="12" cy="19" r="2.2" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+/**
  * 火花/技能图标（lucide sparkle 描边风格，仅四芒星）。
  *
  * 仅中间四角星（去掉右上小十字标记），留白描边。

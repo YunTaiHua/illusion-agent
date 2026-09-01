@@ -29,7 +29,6 @@ import type {
   FileContentPayload,
   FileTreeNode,
   FileMentionCandidate,
-  FileStatItem,
   GitStatusSnapshot,
   GoalStatus,
   McpServerSnapshot,
@@ -44,6 +43,7 @@ import type {
   TodoItemSnapshot,
   ToastPayload,
   TranscriptItem,
+  TurnOutlineEntry,
   WebWorkspaceItem,
 } from '../types/protocol';
 
@@ -176,6 +176,27 @@ function stripReplayItems(items: TranscriptItem[]): TranscriptItem[] {
 }
 
 /**
+ * 计算转录头部前 nTurns 轮消耗的条目数（去掉前 nTurns 轮的起始下标）
+ *
+ * web_history 前插时用于截掉与新页重叠的头部轮次。
+ *
+ * @param items - 转录项列表（user 条目开轮）
+ * @param turns - 要跳过的轮数（<= 0 返回 0）
+ * @returns 截掉前 turns 轮后的起始下标（不足时为 items.length）
+ */
+function countLeadingTurnItems(items: TranscriptItem[], turns: number): number {
+  if (turns <= 0) return 0;
+  let seen = 0;
+  for (let i = 0; i < items.length; i++) {
+    if (items[i]!.role === 'user') {
+      seen += 1;
+      if (seen > turns) return i;
+    }
+  }
+  return items.length;
+}
+
+/**
  * 选项类型
  */
 type Option = { value: string; label: string; active?: boolean };
@@ -237,6 +258,12 @@ interface SessionViewState {
   reasoningStreaming: boolean;
   /** 停止请求已发送、等待后端确认 */
   stopping: boolean;
+  /** 全量轮次大纲（web_restore_completed 携带；null 表示无后端大纲，导航退化为本地轮次） */
+  turnOutline: TurnOutlineEntry[] | null;
+  /** 已载入最小轮号（1-based；分页恢复的头部边界） */
+  firstLoadedTurn: number;
+  /** 历史分页加载中（导航跳转/加载更早按钮的防重标记） */
+  loadingHistory: boolean;
 }
 
 /**
@@ -293,10 +320,16 @@ export interface WebSocketSessionState {
   sessionFiles: SessionFileItem[];
   /** 会话文件拉取中（右栏会话文件区块加载态） */
   sessionFilesLoading: boolean;
-  /** 文件增删行数统计缓存：原始路径串 → 条目（web_file_stats，随会话隔离；单轮变更条数据源） */
-  fileStats: Map<string, FileStatItem>;
-  /** 批量拉取文件增删行数统计（已缓存/在途的路径自动跳过） */
-  requestFileStats: (paths: string[]) => void;
+  /** 全量轮次大纲（null = 无后端大纲，导航退化为本地已载入轮次） */
+  turnOutline: TurnOutlineEntry[] | null;
+  /** 已载入最小轮号（1-based；分页恢复的头部边界） */
+  firstLoadedTurn: number;
+  /** 历史轮次分页加载中（导航跳转/加载更早按钮防重标记） */
+  loadingHistory: boolean;
+  /** 加载更早的轮次分页（在途/已全载入时自动跳过） */
+  requestHistory: () => void;
+  /** 分叉当前会话（turns = 保留前 N 轮；后端完成后经 web_restore_completed 自动切换） */
+  forkSession: (turns?: number) => void;
   /** @ 提及补全候选订阅：返回取消订阅函数。响应直通订阅方（PromptInput 本地持有缓存），
       不进入 hook 状态，避免每次补全响应触发整页重渲染 */
   subscribeFileMentions: (cb: (result: { requestId: string; query: string; candidates: FileMentionCandidate[] }) => void) => () => void;
@@ -471,6 +504,9 @@ function createSessionView(id: string, cwd: string = ''): SessionViewState {
     inlineOptions: null,
     reasoningStreaming: false,
     stopping: false,
+    turnOutline: null,
+    firstLoadedTurn: 1,
+    loadingHistory: false,
   };
 }
 
@@ -507,11 +543,6 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   const [sessionFiles, setSessionFiles] = useState<SessionFileItem[]>([]);
   /** 会话文件拉取中（区块加载态） */
   const [sessionFilesLoading, setSessionFilesLoading] = useState(false);
-  // 单轮变更条行数统计（原始路径串 → 统计条目；随会话隔离，切会话清空）
-  const [fileStats, setFileStats] = useState<Map<string, FileStatItem>>(() => new Map());
-  const fileStatsRef = useRef<Map<string, FileStatItem>>(fileStats);
-  // 已发出未返回的统计请求去重（ref 不触发渲染）
-  const fileStatsInFlightRef = useRef<Set<string>>(new Set());
   // @ 提及补全：响应直通订阅方（PromptInput 持有缓存），不设状态避免整页重渲染
   const fileMentionListenersRef = useRef<Set<(r: { requestId: string; query: string; candidates: FileMentionCandidate[] }) => void>>(new Set());
   const subscribeFileMentions = useCallback((cb: (r: { requestId: string; query: string; candidates: FileMentionCandidate[] }) => void): (() => void) => {
@@ -1005,22 +1036,56 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   }, [sendRaw]);
 
   /**
-   * 批量拉取文件增删行数统计（单轮变更条数据源）
+   * 加载更早的轮次分页（长会话导航跳转未载入轮次）
    *
-   * 已缓存 / 在途的路径自动跳过；后端对白名单外路径回显占位条目
-   * （无数值），占位同样合并进缓存并清理 in-flight 标记。
-   *
-   * @param paths - 变更工具输入的原始路径串列表
+   * 请求携带当前已载入最小轮号；响应 web_history 前插转录并前移边界。
+   * loadingHistory 防重（在途时跳过）；每次请求重置兜底计时器（10s
+   * 超时清除加载态），上一次的超时不清除新请求的加载态。
    */
-  const requestFileStats = useCallback((paths: string[]): void => {
-    const missing = paths.filter(
-      (p) => !fileStatsRef.current.has(p) && !fileStatsInFlightRef.current.has(p));
-    if (missing.length === 0) return;
-    for (const p of missing) fileStatsInFlightRef.current.add(p);
+  const historyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestHistory = useCallback((): void => {
+    const sid = activeSessionIdRef.current;
+    if (!sid) return;
+    const view = viewsRef.current[sid];
+    if (!view || view.loadingHistory) return;
+    // 无后端大纲（本地新建/rewind 后）或已全载入：无需分页
+    if (!view.turnOutline || (view.firstLoadedTurn ?? 1) <= 1) return;
+    patchView(sid, { loadingHistory: true });
     sendRaw({
-      type: 'web_request_file_stats', paths: missing,
-      session_id: activeSessionIdRef.current ?? undefined,
+      type: 'web_request_history',
+      before_turn: view.firstLoadedTurn ?? 1,
+      session_id: sid,
     });
+    if (historyTimerRef.current) clearTimeout(historyTimerRef.current);
+    historyTimerRef.current = setTimeout(
+      () => patchView(sid, { loadingHistory: false }), 10000);
+  }, [patchView, sendRaw]);
+
+  /**
+   * 分叉当前会话（可截断到前 N 轮）
+   *
+   * 后端复制源会话并物化新会话后推 web_restore_completed（分页载荷），
+   * 前端据此自动切换到新会话视图；源会话不受影响。pendingActivateRef
+   * 置 '__new__' 让该 restore_completed 到达时激活新会话（复用新建
+   * 会话的激活通道；fork 对前端即"出现一个新会话并切换过去"）。
+   */
+  const forkSession = useCallback((turns?: number): void => {
+    const sid = activeSessionIdRef.current;
+    if (!sid) return;
+    pendingActivateRef.current = '__new__';
+    sendRaw({
+      type: 'web_fork_session',
+      session_id: sid,
+      ...(turns != null ? { turns } : {}),
+    });
+    // 15s 兜底：fork 失败（后端异常/会话丢失）没有明确的失败事件，
+    // 不清除挂起的 '__new__' 会让下一次自发的 web_restore_completed
+    // 把用户拽到错误的会话
+    setTimeout(() => {
+      if (pendingActivateRef.current === '__new__') {
+        pendingActivateRef.current = null;
+      }
+    }, 15000);
   }, [sendRaw]);
 
   /** 打开会话内修改文件预览（内容视图；支持工作区外/非 Git 追踪的文件；
@@ -1066,7 +1131,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   }, [activeSessionId, refreshRightPanel]);
 
   /**
-   * 清空会话隔离数据（agentTasks / sessionFiles / fileStats）
+   * 清空会话隔离数据（agentTasks / sessionFiles）
    *
    * 切换会话（无论是否跨目录）都需要清理的数据：它们按会话隔离，
    * 残留会导致新会话显示上一会话的任务与变更文件。
@@ -1077,9 +1142,6 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     setAgentTasks([]);
     setSessionFiles([]);
     setSessionFilesLoading(false);
-    setFileStats(new Map());
-    fileStatsRef.current = new Map();
-    fileStatsInFlightRef.current.clear();
   }, []);
 
   /**
@@ -1110,7 +1172,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
 
   // 活跃会话切换的清空策略（与上方 refreshRightPanel 同一触发源，分置以
   // 满足声明顺序）：跨目录全量清空（防串档）；同目录仅清会话隔离数据
-  // （agentTasks/sessionFiles/fileStats），保留文件树/Git/资源缓存——数据
+  // （agentTasks/sessionFiles），保留文件树/Git/资源缓存——数据
   // 相同，清了只会让区块闪占位符（切换流畅性）。
   useEffect(() => {
     if (!activeSessionId) return;
@@ -1279,9 +1341,6 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
         setTasks(evt.tasks ?? []);
         setCommands(evt.commands ?? []);
         setMcpServers((evt.mcp_servers as McpServerSnapshot[]) ?? []);
-        // 重连成功：断线期间在途统计请求的响应已丢失，清理标记允许重新请求
-        // （否则键永久滞留，对应变更条直到切会话都无计数）
-        fileStatsInFlightRef.current.clear();
         // 会话列表 / 活跃会话转录由后端随后的 web_sessions + web_restore_completed 驱动
         return;
       }
@@ -1450,7 +1509,10 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
           pushStatic(sid, { role: 'tool', text: toolName, tool_name: toolName, tool_input: toolInput, tool_use_id: toolUseId || undefined });
           pushStatic(sid, { ...evt.item, role: 'tool_result', tool_name: toolName,
             tool_use_id: toolUseId || undefined, is_error: (evt.item.is_error ?? evt.is_error ?? undefined) as boolean | undefined,
-            progress_messages: progressMessages });
+            progress_messages: progressMessages,
+            // 变更工具的结构化统计（增减行数等）：随条目持久到转录，
+            // 工具气泡据此显示 +N/-M（恢复场景无此字段，前端回退文本解析）
+            structured_output: (evt.structured_output ?? undefined) as Record<string, unknown> | undefined });
           // 变更类工具执行完成后统一刷新右栏（文件树 / Git / 资源快照）；
           // 仅活跃会话触发的工具才刷新（后台 agent 的变更不联动活跃会话数据）
           if (CHANGE_TOOLS.has(toolName) && sid === activeSessionIdRef.current) refreshRightPanel();
@@ -1499,7 +1561,8 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
           optimisticUserRef.current[sid] = null;
           pendingToolCallsRef.current[sid] = [];
           clearAssistantDelta(sid);
-          patchView(sid, { items: [], pendingToolCalls: [] });
+          // 清空转录 = 新会话语义：轮次大纲归零（本地轮次即全部轮次）
+          patchView(sid, { items: [], pendingToolCalls: [], turnOutline: null, firstLoadedTurn: 1, loadingHistory: false });
           return;
         }
         if (evt.type === 'replace_transcript' && evt.items) {
@@ -1519,7 +1582,9 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
           });
           pendingToolCallsRef.current[sid] = [];
           clearAssistantDelta(sid);
-          patchView(sid, { items: stripReplayItems(items), pendingToolCalls: [] });
+          // 整体替换（rewind/compact）：本地轮次即权威，作废后端大纲
+          // （其含已被回退/压缩掉的轮次，保留会导致导航序号错位）
+          patchView(sid, { items: stripReplayItems(items), pendingToolCalls: [], turnOutline: null, firstLoadedTurn: 1, loadingHistory: false });
           return;
         }
 
@@ -1585,12 +1650,16 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
           for (const key of Object.keys(restoreState)) {
             if (SESSION_STATUS_KEYS.has(key)) sessionStatus[key] = restoreState[key];
           }
+          // 长会话分页：items 只含最近一页，全量轻量大纲随事件下发
           patchView(sid, {
             items,
             pendingToolCalls: [],
             materialized: true,
             restoring: false,
             status: sessionStatus,
+            turnOutline: (evt.turn_outline as TurnOutlineEntry[] | null | undefined) ?? null,
+            firstLoadedTurn: Math.max(1, Number(evt.first_loaded_turn ?? 1) || 1),
+            loadingHistory: false,
             // 恢复载荷携带会话所属工作区目录（多目录分组与目录按钮展示依据）
             ...(typeof restoreState.cwd === 'string' && restoreState.cwd ? { cwd: restoreState.cwd } : {}),
           });
@@ -1620,6 +1689,36 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
           return;
         }
 
+        // 历史轮次分页（长会话导航跳转"尚未载入"轮次的数据源）：
+        // 条目前插到当前转录，头部边界前移
+        if (evt.type === 'web_history') {
+          const page = evt.web_history;
+          const view = viewsRef.current[sid];
+          if (!view || !page) {
+            return;
+          }
+          if (page.error || !Array.isArray(page.items) || page.items.length === 0 || page.first_turn == null) {
+            patchView(sid, { loadingHistory: false });
+            if (page.error) {
+              pushStatic(sid, { role: 'system', text: `加载历史轮次失败: ${page.error}` });
+            }
+            return;
+          }
+          const firstTurn = Math.max(1, Number(page.first_turn) || 1);
+          const newItems = stripReplayItems(
+            (page.items as TranscriptItem[]).filter((i) => !(i.role === 'user' && i.is_command)));
+          const pageTurns = Math.max(1, newItems.filter((i) => i.role === 'user').length);
+          // 新页尾部与现有头部的重叠轮数（迟到/重复响应兜底）：
+          // 截掉被覆盖的头部轮，再前插新页，保证轮序不重复
+          const overlap = Math.max(0, firstTurn + pageTurns - (view.firstLoadedTurn ?? 1));
+          patchView(sid, {
+            items: [...newItems, ...view.items.slice(countLeadingTurnItems(view.items, overlap))],
+            firstLoadedTurn: firstTurn,
+            loadingHistory: false,
+          });
+          return;
+        }
+
         // rewind 被回退的 user 消息：回填输入框（转录已由 replace_transcript 刷新）
         if (evt.type === 'session_rewind' && evt.restored_text) {
           optimisticUserRef.current[sid] = null;
@@ -1632,6 +1731,11 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
           pushStatic(sid, { role: 'system', text: `error: ${evt.message ?? 'unknown error'}` });
           clearAssistantDelta(sid);
           patchView(sid, { busy: false });
+          // 挂起的 fork 自动激活一并取消：fork 失败时若不清除，下一次
+          // 自发的 web_restore_completed 会把用户拽到错误的会话
+          if (pendingActivateRef.current === '__new__' && sid === activeSessionIdRef.current) {
+            pendingActivateRef.current = null;
+          }
           return;
         }
 
@@ -1759,24 +1863,6 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
           setSessionFiles((evt.web_session_files as SessionFileItem[]) ?? []);
         }
         setSessionFilesLoading(false);
-        return;
-      }
-      if (evt.type === 'web_file_stats') {
-        // 文件增删行数统计（单轮变更条）：归属活跃会话或未标记时合并；
-        // 无论归属都清理 in-flight 标记，避免迟到响应泄漏导致无法重新请求
-        const items = (evt.web_file_stats as FileStatItem[] | undefined) ?? [];
-        for (const it of items) fileStatsInFlightRef.current.delete(it.input);
-        const sid = evt.session_id;
-        if (!sid || !activeSessionIdRef.current || sid === activeSessionIdRef.current) {
-          if (items.length > 0) {
-            setFileStats((prev) => {
-              const next = new Map(prev);
-              for (const it of items) next.set(it.input, it);
-              fileStatsRef.current = next;
-              return next;
-            });
-          }
-        }
         return;
       }
       if (evt.type === 'web_file_tree') {
@@ -2023,7 +2109,10 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       tasks, commands, mcpServers, skills, plugins, rules, modelOptions,
       agentTasks, fileTree, fileTreeLoadingPaths, gitStatus, gitLoading,
       sessionFiles, sessionFilesLoading,
-      fileStats, requestFileStats,
+      turnOutline: view?.turnOutline ?? null,
+      firstLoadedTurn: view?.firstLoadedTurn ?? 1,
+      loadingHistory: view?.loadingHistory ?? false,
+      requestHistory, forkSession,
       subscribeFileMentions, requestFileMentions,
       filePreview, filePreviewLoading,
       requestFileTree, requestGitStatus, openFilePreview, openFileDiff, closeFilePreview,
@@ -2080,7 +2169,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     status, tasks, commands, mcpServers, skills, plugins, rules, modelOptions,
     agentTasks, fileTree, fileTreeLoadingPaths, gitStatus, gitLoading,
     sessionFiles, sessionFilesLoading,
-    fileStats, requestFileStats,
+    requestHistory, forkSession,
     subscribeFileMentions, requestFileMentions,
     filePreview, filePreviewLoading,
     requestFileTree, requestGitStatus, openFilePreview, openFileDiff, closeFilePreview,

@@ -713,6 +713,12 @@ export default function App() {
     else session.openSessionFile(path);
   }, [session.openFileDiff, session.openSessionFile]);
 
+  // 分叉会话（聊天气泡底部 fork 按钮触发）：保留前 N 轮复制为新会话，
+  // 后端完成后经 web_restore_completed 自动切换视图
+  const handleForkTurn = useCallback((turnsToKeep: number) => {
+    session.forkSession(turnsToKeep);
+  }, [session.forkSession]);
+
   // 文件/diff 预览出现时自动调整布局：折叠区块栏，让文件预览栏占满最大宽度（2/5 屏）。
   // 仅处理同一预览键（kind|path）的首次出现，预览载荷反复刷新（加载中→内容）不重复调整；
   // 打开新文件/切视图时再次调整。若用户已手动点开区块栏或调整过各栏宽度（userAdjustedPanelsRef），
@@ -1055,7 +1061,9 @@ export default function App() {
           onQuestionResponse={handleQuestionResponse}
           restoringSessionId={session.restoringSessionId ?? (session.awaitingNewSession ? '__pending_new__' : null)}
           onRewindToTurn={handleRewindToTurn} onRegenerate={handleRegenerate}
-          fileStats={session.fileStats} onRequestFileStats={session.requestFileStats}
+          onForkTurn={handleForkTurn}
+          turnOutline={session.turnOutline} firstLoadedTurn={session.firstLoadedTurn}
+          loadingHistory={session.loadingHistory} onRequestHistory={session.requestHistory}
           onOpenSessionFile={handleOpenSessionFile}>
           {/* 欢迎态：输入框 + 工具栏注入到标题/副标题下方（ChatArea 内渲染） */}
           {welcomeVisible && composer}

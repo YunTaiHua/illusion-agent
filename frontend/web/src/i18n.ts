@@ -431,6 +431,17 @@ const ZH: Record<string, string> = {
   session_files_title: '会话文件',
   // ---- 单轮变更条（聊天气泡底部）----
   turn_files_title: '本轮变更',
+  // ---- 会话分叉（聊天气泡底部 fork 按钮）----
+  fork_session: '分叉会话（保留到本轮）',
+  // ---- 左侧轮次导航（长会话预览 + 跳转未载入轮次）----
+  // load_more 复用上方既有键
+  turn_nav_loading: '正在加载轮次…',
+  turn_nav_turn_title: '第 {turn} 轮',
+  turn_nav_jump: '跳转到第 {turn} 轮',
+  turn_nav_jump_load: '加载并跳转到第 {turn} 轮',
+  turn_nav_loaded: '已载入',
+  turn_nav_unloaded: '未载入 · 点击加载',
+  turn_nav_prompt_empty: '（无预览）',
   // ---- 区块空占位 ----
   no_skills: '暂无技能',
   no_mcp: '暂无 MCP 服务器',
@@ -972,6 +983,16 @@ const EN: Record<string, string> = {
   session_files_title: 'Session Files',
   // ---- per-turn changed files bar (chat bubble footer) ----
   turn_files_title: 'Changed this round',
+  // ---- session fork (chat bubble footer button) ----
+  fork_session: 'Fork session (through this turn)',
+  // ---- left turn navigator (long-session preview + jump to unloaded turns) ----
+  turn_nav_loading: 'Loading turns…',
+  turn_nav_turn_title: 'Turn {turn}',
+  turn_nav_jump: 'Jump to turn {turn}',
+  turn_nav_jump_load: 'Load and jump to turn {turn}',
+  turn_nav_loaded: 'Loaded',
+  turn_nav_unloaded: 'Not loaded · click to load',
+  turn_nav_prompt_empty: '(no preview)',
   // ---- section empty placeholders ----
   no_skills: 'No skills',
   no_mcp: 'No MCP servers',

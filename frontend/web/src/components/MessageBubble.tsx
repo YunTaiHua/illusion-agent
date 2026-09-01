@@ -26,7 +26,8 @@ import { toolDisplayName } from '../utils/toolDisplayName';
 import { renderAnsi } from '../utils/ansi';
 import { openImagePreview } from '../utils/imagePreview';
 import type { TranscriptItem, PendingToolCall } from '../types/protocol';
-import { CheckIcon, CopyIcon, RegenerateIcon, RewindIcon } from './icons';
+import { parseToolResultStat } from '../utils/turnGrouping';
+import { CheckIcon, CopyIcon, GitForkIcon, RegenerateIcon, RewindIcon } from './icons';
 
 /**
  * HTML 消毒 schema（防 XSS，对齐 opencode 的 DOMPurify 处理）
@@ -256,6 +257,8 @@ interface MessageBubbleProps {
   onRewind?: () => void;
   /** 重新生成回调（仅最终 assistant 消息显示） */
   onRegenerate?: () => void;
+  /** 分叉会话回调（最终 assistant 消息显示：保留到该轮分叉出新会话） */
+  onFork?: () => void;
   /** 是否隐藏思考过程块（reasoning 由上层统一渲染时使用） */
   hideReasoning?: boolean;
   /** 是否显示操作按钮（复制/撤销） */
@@ -278,7 +281,7 @@ interface MessageBubbleProps {
  * @param props.onRewind - 撤销回调（可选，user 消息显示）
  * @param props.onRegenerate - 重新生成回调（可选，assistant 消息显示）
  */
-const MessageActions = memo(function MessageActions({ text, lang, onRewind, onRegenerate, disabled }: { text: string; lang: UiLanguage; onRewind?: () => void; onRegenerate?: () => void; disabled?: boolean }) {
+const MessageActions = memo(function MessageActions({ text, lang, onRewind, onRegenerate, onFork, disabled }: { text: string; lang: UiLanguage; onRewind?: () => void; onRegenerate?: () => void; onFork?: () => void; disabled?: boolean }) {
   const [copied, setCopied] = useState(false);
   const handleCopy = () => {
     navigator.clipboard.writeText(text).then(() => {
@@ -311,6 +314,16 @@ const MessageActions = memo(function MessageActions({ text, lang, onRewind, onRe
           <RewindIcon className="w-[13px] h-[13px]" />
         </button>
       )}
+      {onFork && (
+        <button
+          onClick={onFork}
+          onMouseDown={(e) => e.preventDefault()}
+          className={`w-6 h-6 flex items-center justify-center rounded text-content-disabled hover:text-content-primary hover:bg-black/5 transition-colors ${dis}`}
+          title={t(lang, 'fork_session')}
+        >
+          <GitForkIcon className="w-[13px] h-[13px]" />
+        </button>
+      )}
       {onRegenerate && (
         <button
           onClick={onRegenerate}
@@ -336,7 +349,7 @@ const MessageActions = memo(function MessageActions({ text, lang, onRewind, onRe
  * @param props - 组件属性
  * @returns 返回消息气泡的 JSX 元素
  */
-function MessageBubble({ item, toolInputMap, lang = 'zh-CN', onRewind, onRegenerate, hideReasoning, showActions = true, actionsDisabled, footer }: MessageBubbleProps) {
+function MessageBubble({ item, toolInputMap, lang = 'zh-CN', onRewind, onRegenerate, onFork, hideReasoning, showActions = true, actionsDisabled, footer }: MessageBubbleProps) {
   if (item.role === 'user') {
     return (
       <div className="flex justify-end py-1.5 group">
@@ -365,14 +378,14 @@ function MessageBubble({ item, toolInputMap, lang = 'zh-CN', onRewind, onRegener
           </ReactMarkdown>
         </div>
         {footer}
-        {showActions && <MessageActions text={item.text} lang={lang} onRegenerate={onRegenerate} disabled={actionsDisabled} />}
+        {showActions && <MessageActions text={item.text} lang={lang} onRegenerate={onRegenerate} onFork={onFork} disabled={actionsDisabled} />}
       </div>
     );
   }
 
   if (item.role === 'tool_result') {
     const toolInput = (item.tool_use_id && toolInputMap?.get(item.tool_use_id)) || item.tool_input;
-    return <ToolResultBubble name={item.tool_name || 'tool'} text={item.text} isError={item.is_error} toolInput={toolInput} />;
+    return <ToolResultBubble name={item.tool_name || 'tool'} text={item.text} isError={item.is_error} toolInput={toolInput} structuredOutput={item.structured_output} />;
   }
 
   if (item.role === 'tool') {
@@ -471,7 +484,7 @@ function DiffLines({ text }: { text: string }) {
  * @param props.isError - 是否为错误结果
  * @param props.toolInput - 工具输入参数
  */
-const ToolResultBubble = memo(function ToolResultBubble({ name, text, isError, toolInput }: { name: string; text: string; isError?: boolean; toolInput?: Record<string, unknown> }) {
+const ToolResultBubble = memo(function ToolResultBubble({ name, text, isError, toolInput, structuredOutput }: { name: string; text: string; isError?: boolean; toolInput?: Record<string, unknown>; structuredOutput?: Record<string, unknown> }) {
   const [open, setOpen] = useState(false);
   // summarizeInput 用原名做大小写不敏感匹配，显示名用映射后的友好名
   const summary = summarizeInput(name, toolInput, name);
@@ -483,6 +496,12 @@ const ToolResultBubble = memo(function ToolResultBubble({ name, text, isError, t
   // 统一 diff 且无 ANSI 转义码时按行着色渲染；错误结果与 terminal 一致整行走错误色，
   // 不启用 diff 着色（text 可能为空，需先守卫避免崩溃）
   const isDiff = !!text && !isError && !text.includes('\x1b[') && isUnifiedDiffText(text);
+  // 变更工具（edit_file/write_file）的增删行数：优先 structured_output
+  // （直播，工具 metadata 精确值），回退结果文本解析（恢复路径），
+  // 两条路径口径与单轮变更条一致
+  const diffStat = !isError && (name === 'edit_file' || name === 'write_file')
+    ? parseToolResultStat(text ?? '', structuredOutput)
+    : null;
 
   return (
     <div data-tool-row className="py-1.5">
@@ -498,6 +517,14 @@ const ToolResultBubble = memo(function ToolResultBubble({ name, text, isError, t
           {/* 预览行在展开/折叠时均保留，展开后与结果正文并存；字号介于工具名与正文之间 */}
           {summary && <span className={`text-sm ${isError ? 'text-danger' : 'text-content-disabled'}`}>（{summary}）</span>}
           {isError && <span className="text-xs text-danger font-medium"> ERROR</span>}
+          {/* 该次编辑的增删行数（着色加粗数字，无分隔符；无法统计时不显示） */}
+          {diffStat && (diffStat.insertions > 0 || diffStat.deletions > 0) && (
+            <span className="ml-1.5 font-mono text-xs font-bold whitespace-nowrap">
+              {diffStat.insertions > 0 && <span className="text-diff-add">+{diffStat.insertions}</span>}
+              {diffStat.insertions > 0 && diffStat.deletions > 0 && <span> </span>}
+              {diffStat.deletions > 0 && <span className="text-diff-del">-{diffStat.deletions}</span>}
+            </span>
+          )}
         </span>
       </button>
       {open && hasContent && (
