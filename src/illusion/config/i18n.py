@@ -745,7 +745,8 @@ _COMMAND_EXACT: dict[str, str] = {
     # 登录
     "Usage: /login API_KEY": "用法：/login API_KEY",
     # 用法提示（registry.usage 追加到 message 时翻译）
-    "Usage: /resume [session_id|#N]": "用法：/resume [session_id|#N]",
+    "Usage: /resume [session_id|#N]": "用法：/resume [会话ID|#N]",
+    "Usage: /fork [TURNS]": "用法：/fork [轮数]",
     "Usage: /skills [name|number]": "用法：/skills [名称|序号]",
     "Usage: /max-tokens [show|set N]": "用法：/max-tokens [show|set N]",
     "Usage: /delete [session_id|#N|all]": "用法：/delete [session_id|#N|all]",

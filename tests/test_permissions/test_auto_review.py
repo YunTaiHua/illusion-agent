@@ -53,8 +53,6 @@ def _make_context(auto_review: bool = False, mode: PermissionMode = PermissionMo
     settings.permission.mode = mode
     if auto_review:
         settings.permission.auto_review = True
-    # 必须落盘：maybe_auto_review 的开关语义是实时读磁盘（load_settings），
-    # 仅构造内存 Settings 不会让审核分流生效（配置目录由 conftest 隔离）
     save_settings(settings)
     return SimpleNamespace(
         api_client=SimpleNamespace(),

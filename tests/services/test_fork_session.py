@@ -93,6 +93,12 @@ def test_fork_full_copy_preserves_turns(workspace: Path) -> None:
     result = asyncio.run(store.restore())
     assert len(result.messages) == 6
     assert store.next_checkpoint_id == 3
+    # fork 目录文件形态与 live 会话一致:锁文件 + 文件历史备份目录始终生成
+    from illusion.config.paths import get_config_dir
+
+    fork_dir = session_dir_for(workspace, new_sid)
+    assert (fork_dir / "context.jsonl.lock").is_file()
+    assert (get_config_dir() / "file-history" / new_sid).is_dir()
 
 
 def test_fork_truncation_keeps_checkpoints_aligned(workspace: Path) -> None:

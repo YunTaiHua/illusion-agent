@@ -149,7 +149,8 @@ def coerce_setting_value(settings: Settings, key: str, raw: str) -> Any:
     """
     from typing import Literal, get_args
 
-    field = settings.model_fields.get(key)
+    # Pydantic 2.11 起弃用实例访问 model_fields，须从模型类访问
+    field = type(settings).model_fields.get(key)
     if field is None:
         raise KeyError(key)
     annotation = field.annotation

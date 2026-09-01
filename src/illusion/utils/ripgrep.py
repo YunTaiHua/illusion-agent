@@ -158,8 +158,12 @@ def extract_tar(tar_path: str, extract_dir: str) -> None:
         # 查找 rg 文件
         for member in tf.getmembers():
             if member.name.endswith("/rg") or member.name == "rg":
-                # 提取到目标目录
-                tf.extract(member, extract_dir)
+                # 提取到目标目录；3.12+ 需显式过滤以消除
+                # "Python 3.14 will filter extracted tar archives" 弃用警告
+                if sys.version_info >= (3, 12):
+                    tf.extract(member, extract_dir, filter="data")
+                else:
+                    tf.extract(member, extract_dir)
                 # 移动到目标目录根目录
                 extracted = os.path.join(extract_dir, member.name)
                 target = os.path.join(extract_dir, "rg")

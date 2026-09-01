@@ -31,6 +31,7 @@ meta.json 以及 pending 类文件。
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from hashlib import sha1
@@ -43,6 +44,8 @@ from illusion.utils.atomic_write import atomic_write_text
 
 # 会话标题/摘要中的 fork 备份前缀（如 "[fork 3] 原标题"）
 _FORK_PREFIX_RE = re.compile(r"^\[fork (\d+)\]")
+
+log = logging.getLogger(__name__)
 
 
 class InvalidSessionIdError(ValueError):
@@ -303,6 +306,7 @@ def _fork_file_history(
     new_dir: Path,
     source_sid: str,
     new_sid: str,
+    workspace: str,
     max_checkpoint_id: int | None = None,
 ) -> None:
     """复制文件历史状态与备份目录到新会话（fork 后 /rewind both 可用）。
@@ -323,14 +327,15 @@ def _fork_file_history(
     任一部分缺失/损坏都静默跳过：fork 会话降级为无文件历史（仅对话
     可回退），不阻断分叉主流程。
 
-    Args:
-        src_dir: 源会话数据目录
-        new_dir: 新会话数据目录（已创建）
-        source_sid: 源会话 ID
-        new_sid: 新会话 ID
-        max_checkpoint_id: 保留快照的 checkpoint_id 上界（不含）；
-            None = 全量保留
-    """
+        Args:
+            src_dir: 源会话数据目录
+            new_dir: 新会话数据目录（已创建）
+            source_sid: 源会话 ID
+            new_sid: 新会话 ID
+            workspace: 项目工作目录（写入空基线 file_history.json 的 cwd）
+            max_checkpoint_id: 保留快照的 checkpoint_id 上界（不含）；
+                None = 全量保留
+        """
     import shutil as _shutil
 
     from illusion.config.paths import get_config_dir
@@ -358,15 +363,50 @@ def _fork_file_history(
                 )
             except OSError:
                 pass
-    src_backups = get_config_dir() / "file-history" / source_sid
-    if src_backups.is_dir():
+    else:
+        # 源会话无文件历史（未编辑过任何文件）：写入一份空基线，使 fork
+        # 目录的文件形态与 live 会话一致；后续编辑照常从空状态开始跟踪
         try:
-            _shutil.copytree(
-                src_backups, get_config_dir() / "file-history" / new_sid,
-                dirs_exist_ok=True,
+            atomic_write_text(
+                new_dir / "file_history.json",
+                json.dumps({
+                    "version": 1,
+                    "session_id": new_sid,
+                    "cwd": workspace,
+                    "turn_counter": 0,
+                    "tracked_files": [],
+                    "snapshots": [],
+                }, indent=2, ensure_ascii=False) + "\n",
             )
         except OSError:
-            pass  # 备份复制失败不阻断 fork（rewind both 降级为仅回退对话）
+            pass
+    # fork 的备份目录始终生成（live 会话在首次 track_edit 时创建，这里
+    # 提前建好使目录形态一致）；源有备份则逐文件复制——单文件失败只记
+    # 警告不阻断其余备份，也不再静默吞掉整个复制过程
+    backups_root = get_config_dir() / "file-history"
+    src_backups = backups_root / source_sid
+    new_backups_path = backups_root / new_sid
+    new_backups: Path | None = new_backups_path
+    try:
+        new_backups_path.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        log.warning("fork %s 创建文件历史备份目录失败: %s", new_sid, new_backups_path)
+        new_backups = None
+    if new_backups is not None and src_backups.is_dir():
+        for bfile in src_backups.iterdir():
+            if not bfile.is_file():
+                continue
+            try:
+                _shutil.copy2(bfile, new_backups / bfile.name)
+            except OSError as exc:
+                log.warning(
+                    "fork %s 复制备份文件 %s 失败: %s", new_sid, bfile.name, exc
+                )
+    elif new_backups is not None:
+        log.warning(
+            "fork %s：源会话 %s 无文件历史备份目录，仅写入快照索引",
+            new_sid, source_sid,
+        )
 
 
 def _next_fork_number(cwd: str | Path) -> int:
@@ -516,6 +556,14 @@ def fork_session(
     with open(new_dir / "context.jsonl", "w", encoding="utf-8") as f:
         f.writelines(kept + "\n" for kept in kept_lines)
 
+    # 锁文件提前生成：live 会话由 CheckpointStore 首次追加时创建，fork
+    # 目录的文件形态与源目录保持一致（空锁文件与 _WinLock/_PosixLock
+    # 首次打开时的形态相同，不影响后续跨进程锁语义）
+    try:
+        (new_dir / "context.jsonl.lock").touch()
+    except OSError:
+        pass
+
     now = time.time()
     meta: dict[str, Any] = dict(read_meta_from(src_dir, source_session_id) or {})
     meta.update({
@@ -533,6 +581,7 @@ def fork_session(
     # fork 后 /rewind both 可用且不会恢复到 fork 点之后的状态
     _fork_file_history(
         src_dir, new_dir, source_session_id, new_session_id,
+        workspace=str(cwd),
         max_checkpoint_id=checkpoint_count if truncated else None,
     )
     return new_session_id
