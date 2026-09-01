@@ -414,6 +414,10 @@ class Settings(BaseModel):
     goal: GoalSettings = Field(default_factory=GoalSettings)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     notifications: NotificationSettings = Field(default_factory=NotificationSettings)
+    # 内置 agent 的默认模型固化（agent 名 → "inherit" | "env_N.model_M"）。
+    # 用户/项目级 agent 的模型直接写入各自 .md 文件，不经此字段。
+    # 声明在 notifications 之后，save_settings 按声明顺序输出字段。
+    agent_models: dict[str, str] = Field(default_factory=dict)
     enabled_plugins: dict[str, bool] = Field(default_factory=dict)
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)
     ui_language: str = ""  # 空字符串表示未设置，由 _ensure_language 引导选择
@@ -592,6 +596,35 @@ class Settings(BaseModel):
         if not isinstance(env_data, dict):
             raise TypeError(f"env {env_key} does not exist or is not a dict")
         env_data[model_key] = config.model_dump()
+
+    def resolve_agent_model_spec(
+        self, spec: str | None
+    ) -> tuple[str | None, str | None, str | None]:
+        """解析 agent 的模型字段，返回 (env_key, model_name, ref)。
+
+        agent 模型值有两种合法形态：
+            - None / "inherit" / 空串：继承当前会话模型 → (None, None, None)
+            - ``env_N.model_M`` 引用：直接解析
+
+        裸模型名一律视为非法（不做反查兼容）：返回 (None, None, 原值)，
+        调用方应拒绝或回退当前模型并告警。
+
+        Args:
+            spec: agent 定义中的模型值
+
+        Returns:
+            tuple: (env_key, model_name, ref)。ref 为 None 表示继承；
+                env_key 为 None 而 ref 非 None 表示值非法
+        """
+        if not spec:
+            return None, None, None
+        trimmed = str(spec).strip()
+        if not trimmed or trimmed.lower() == "inherit":
+            return None, None, None
+        env_key, model_name = self.resolve_model_ref_with_env(trimmed)
+        if env_key and model_name:
+            return env_key, model_name, trimmed
+        return None, None, trimmed
 
     def _resolve_ref_parts(self, ref: str | None) -> tuple[str | None, str | None]:
         """将模型引用拆为 (env_key, model_key)；None 用当前激活模型。"""

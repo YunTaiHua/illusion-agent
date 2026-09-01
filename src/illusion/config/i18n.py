@@ -769,7 +769,10 @@ _COMMAND_EXACT: dict[str, str] = {
     "/login API_KEY          (standard x-api-key auth)": "/login API_KEY          （标准 x-api-key 认证）",
     "/login auth_token TOKEN (Bearer Token auth)": "/login auth_token TOKEN （Bearer Token 认证）",
     # 处理器内自带的变体形式（session/agent/rename 等）
-    "Usage: /agent [list|create|<task_id>]": "用法：/agent [list|create|<任务ID>]",
+    "Usage: /agent [list|create|model <name> <env_N.model_M|inherit>|<task_id>]":
+        "用法：/agent [list|create|model <名称> <env_N.model_M|inherit>|<任务ID>]",
+    "Usage: /agent model <name> <env_N.model_M|inherit>":
+        "用法：/agent model <名称> <env_N.model_M|inherit>",
     "Usage: /rename [name|#N name|session_id name|--clear]": "用法：/rename [名称|#N 名称|会话ID 名称|--清除]",
     "Usage: /resume #1 or /resume <session_id>": "用法：/resume #1 或 /resume <会话ID>",
     "Usage: /delete #1 or /delete <session_id>  — delete a specific session":

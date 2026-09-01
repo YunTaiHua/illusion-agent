@@ -3749,21 +3749,29 @@ class WebBackendHost:
         await self._emit(BackendEvent(type="agent_wizard_init_response", tools=tools, models=models))
 
     async def _handle_agent_wizard_submit(self, req: FrontendRequest) -> None:
-        """处理 agent_wizard_submit：校验并写入 agent 定义文件。"""
+        """处理 agent_wizard_submit：校验并写入 agent 定义文件。
+
+        项目级创建时 req.cwd 指定目标工作区（缺省为活跃会话所在工作区），
+        使 agent 定义写入该工作区的 .illusion/agents/ 目录。
+        """
         assert self._bundle is not None
         bundle = self._active_bundle() or self._bundle
+        target_cwd = (req.cwd or "").strip() or bundle.cwd
         fields = req.fields or {}
         scope = req.scope or "user"
-        errors = validate_agent_definition(fields, bundle.cwd)
+        errors = validate_agent_definition(fields, target_cwd)
         if errors:
             await self._emit(BackendEvent(type="agent_wizard_result", success=False, errors=errors))
             return
         try:
-            path = write_agent_definition(fields, scope, bundle.cwd)
+            path = write_agent_definition(fields, scope, target_cwd)
         except OSError as exc:
             await self._emit(BackendEvent(type="agent_wizard_result", success=False, errors={"_": str(exc)}))
             return
         await self._emit(BackendEvent(type="agent_wizard_result", success=True, path=str(path)))
+        # 新 agent 需要立即可见于派发描述与右栏 agents 区块
+        await self._web_api._push_agents()
+        await self._web_api._refresh_resources_after_agent_op()
 
     async def _handle_agent_generate_request(self, req: FrontendRequest) -> None:
         """处理 agent_generate_request：LLM 辅助生成 agent 配置。

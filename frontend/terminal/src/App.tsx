@@ -502,9 +502,10 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 			return true;
 		}
 
-		// /agent 无参数 → 前端渲染两分支选择
+		// /agent 无参数 → 前端渲染三分支选择
 		// "查看已完成的 agent" 走后端 select_command('agent') 现有管道；
-		// "创建新 agent" 直接打开 AgentWizard。
+		// "创建新 agent" 直接打开 AgentWizard；
+		// "设置 agent 默认模型" 走后端 agent_model 两步选择（内置固化 settings.json）。
 		if (trimmed === '/agent') {
 			setSelectIndex(0);
 			setSelectModal({
@@ -512,11 +513,14 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 				options: [
 					{value: '__view__', label: t(language, 'agentBranchView'), description: ''},
 					{value: '__create__', label: t(language, 'agentBranchCreate'), description: ''},
+					{value: '__model__', label: t(language, 'agentBranchModel'), description: ''},
 				],
 				onSelect: (value) => {
 					setSelectModal(null);
 					if (value === '__view__') {
 						session.sendRequest({type: 'select_command', command: 'agent'});
+					} else if (value === '__model__') {
+						session.sendRequest({type: 'select_command', command: 'agent_model'});
 					} else {
 						session.clearAgentWizardState();
 						session.sendAgentWizardInit();
@@ -533,6 +537,13 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 			session.clearAgentWizardState();
 			session.sendAgentWizardInit();
 			setShowAgentWizard(true);
+			return true;
+		}
+
+		// /agent model（无参数）或 /agent model <name>（缺目标模型）→ 后端两步选择
+		// /agent model <name> <ref|inherit>（完整形式）走命令注册表
+		if (trimmed === '/agent model' || /^\/agent model \S+$/.test(trimmed)) {
+			session.sendRequest({type: 'select_command', command: 'agent_model'});
 			return true;
 		}
 

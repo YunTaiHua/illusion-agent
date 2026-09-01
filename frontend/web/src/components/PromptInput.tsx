@@ -28,12 +28,12 @@ import { CheckIcon, FolderClosedIcon, GearIcon, PlusIcon, StopIcon } from './ico
  * 非阻塞指令：/export、/init、/rename、/agent（不改变 busy 状态）。
  * 回退功能由 user 气泡下方的回退按钮承担，/rewind 不再作为输入框指令。 */
 // 自动补全列表：包含所有前端识别的斜杠指令
-// 注意：'/agent' 虽在此列表中，但在 App.tsx 的 handleSubmit 中有特殊分支处理（分支选择器/创建向导/查看摘要）
-// 因此 '/agent' 不在 B_COMMANDS 中，不会走 web_query 通道
-// '/goal' 同理：在 App.tsx 中走 submit_line（A 通道命令注册表），后端执行 /goal 命令并驱动 goal 轮次
+// 注意：'/agent' 已移除——agent 创建/管理由设置表单的"代理"标签页（AgentsTab）承担，
+// agent 任务摘要在右栏查看
+// '/goal' 在 App.tsx 中走 submit_line（A 通道命令注册表），后端执行 /goal 命令并驱动 goal 轮次
 export const WEB_COMMANDS = [
   '/compact', '/export', '/init',
-  '/agent', '/rename',
+  '/rename',
   '/goal',
 ];
 

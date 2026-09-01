@@ -257,11 +257,26 @@ async def run_goal_verification(
 
 
 def _get_verifier_definition() -> Any | None:
-    """取 illusion 自己的 verification 代理定义（复用其对抗性系统提示词）。"""
-    try:
-        from illusion.coordinator.agent_definitions import get_agent_definition
+    """取 goal-verifier 定义（复用 verification 的对抗性系统提示词）。
 
-        return get_agent_definition("verification")
+    定义内容跟随 verification（含用户自定义覆盖），但 name 独立为
+    ``goal-verifier``——模型覆盖按 settings.agent_models 的独立键生效，
+    不再与 verification 共用配置。verification 被用户覆盖为自定义
+    时仍需应用该覆盖，因此 source 不强制改写，executor 侧按名称放行。
+    """
+    try:
+        from illusion.coordinator.agent_definitions import (
+            GOAL_VERIFIER_AGENT_NAME,
+            get_agent_definition,
+        )
+
+        base = get_agent_definition("verification")
+        if base is None:
+            return None
+        return base.model_copy(update={
+            "name": GOAL_VERIFIER_AGENT_NAME,
+            "subagent_type": GOAL_VERIFIER_AGENT_NAME,
+        })
     except Exception:
         logger.exception("[goal-verifier] failed to load verification agent definition")
         return None

@@ -1355,6 +1355,21 @@ class ReactBackendHost:
             await self._emit(BackendEvent(type="error", message="custom input must be handled by frontend"))
             await self._emit(BackendEvent(type="line_complete"))
             return True
+        # /agent model 两步选择 步1（选 agent）→ 弹出步2模型选择器，
+        # 步2 value 编码 "agent名::ref"，无宿主状态
+        if command == "agent_model":
+            await self._emit_agent_model_ref_options(selected)
+            return True
+        # /agent model 步2：value 形如 "agent名::ref"（空 ref 表示继承当前），
+        # 转 /agent model 命令管道执行（内置写 settings.json，用户级改 .md）
+        if command == "agent_model_ref":
+            agent_name, _, ref = selected.partition("::")
+            if not agent_name:
+                await self._emit(BackendEvent(type="error", message="Invalid agent model selection"))
+                await self._emit(BackendEvent(type="line_complete"))
+                return True
+            line = f"/agent model {agent_name} {ref}" if ref else f"/agent model {agent_name} inherit"
+            return await self._process_line(line, transcript_line=f"/agent model {agent_name}")
         # rewind 两步选择：第一步（选消息）→ 存储目标，弹出模式选择
         if command == "rewind":
             return await self._handle_rewind_message_selected(selected)
@@ -1899,6 +1914,39 @@ class ReactBackendHost:
             )
             return
 
+        if command == "agent_model":
+            # /agent model 两步选择 步1：列出全部 agent（内置 + 用户级 + 项目级）
+            # 供选择，label 附当前生效模型；选中后进入 agent_model_ref 步2
+            from illusion.coordinator.agent_definitions import get_managed_agent_definitions
+
+            settings_full = load_settings()
+            agent_options: list[dict[str, Any]] = []
+            for agent_def in get_managed_agent_definitions(self._bundle.cwd):
+                override = str(
+                    settings_full.agent_models.get(agent_def.name, "") or ""
+                ).strip()
+                candidate = override or (agent_def.model or "inherit")
+                _env, _mn, ref = settings_full.resolve_agent_model_spec(candidate)
+                display = ref or (candidate if candidate.lower() != "inherit" else "")
+                scope_tag = "builtin" if agent_def.source == "builtin" else "custom"
+                agent_options.append({
+                    "value": agent_def.name,
+                    "label": f"{agent_def.name} [{scope_tag}]",
+                    "description": display or ("继承当前" if zh else "Inherit current"),
+                    "active": bool(override),
+                })
+            if not agent_options:
+                await self._emit(BackendEvent(type="error", message=("没有可配置的 agent" if zh else "No agents available")))
+                return
+            await self._emit(
+                BackendEvent(
+                    type="select_request",
+                    modal={"kind": "select", "title": ("设置子智能体默认模型" if zh else "Set Subagent Default Model"), "command": "agent_model"},
+                    select_options=agent_options,
+                )
+            )
+            return
+
         if command == "agent":
             # 双数据源列出已完成任务：
             #   1. 前台 agent：从 transcript 提取 tool_result（tool_name='agent'，且非后台启动）
@@ -2271,6 +2319,53 @@ class ReactBackendHost:
                 })
         return options
 
+    async def _emit_agent_model_ref_options(self, agent_name: str) -> None:
+        """推送 /agent model 两步选择的步2模型选择器。
+
+        复用 _model_selector_options 构建 [继承当前] + 各 env 模型引用，
+        value 重编码为 "agent名::ref"（空 ref 表示继承），apply 时无宿主状态。
+        """
+        assert self._bundle is not None
+        zh = self._is_zh()
+        from illusion.coordinator.agent_definitions import get_managed_agent_definitions
+
+        settings_full = load_settings()
+        agent_def = next(
+            (a for a in get_managed_agent_definitions(self._bundle.cwd) if a.name == agent_name),
+            None,
+        )
+        if agent_def is None:
+            await self._emit(BackendEvent(type="error", message=f"Agent '{agent_name}' not found"))
+            return
+        override = str(settings_full.agent_models.get(agent_name, "") or "").strip()
+        candidate = override or (agent_def.model or "")
+        _env, _mn, current_ref = settings_full.resolve_agent_model_spec(candidate)
+
+        options: list[dict[str, object]] = []
+        for opt in self._model_selector_options(current_ref):
+            raw_value = str(opt["value"])
+            options.append({
+                "value": f"{agent_name}::{raw_value}",
+                "label": opt["label"],
+                "description": opt["description"],
+                "active": bool(opt.get("active")),
+            })
+        scope_tag = ("内置" if zh else "built-in") if agent_def.source == "builtin" else ("自定义" if zh else "custom")
+        await self._emit(
+            BackendEvent(
+                type="select_request",
+                modal={
+                    "kind": "select",
+                    "title": (
+                        f"{agent_name}（{scope_tag}）的默认模型"
+                        if zh else f"Default model for {agent_name} ({scope_tag})"
+                    ),
+                    "command": "agent_model_ref",
+                },
+                select_options=options,
+            )
+        )
+
     @contextlib.asynccontextmanager
     async def _acquire_modal_lock(self) -> AsyncIterator[None]:
         """获取 modal 串行锁（同会话排队：前一个完成后自然后续继续）。"""
@@ -2510,16 +2605,20 @@ class ReactBackendHost:
         await self._emit(BackendEvent(type="agent_wizard_init_response", tools=tools, models=models))
 
     async def _handle_agent_wizard_submit(self, req: FrontendRequest) -> None:
-        """处理 agent_wizard_submit：校验并写入 agent 定义文件。"""
+        """处理 agent_wizard_submit：校验并写入 agent 定义文件。
+
+        项目级创建时 req.cwd 指定目标工作区（缺省为当前工作区）。
+        """
         assert self._bundle is not None
+        target_cwd = (req.cwd or "").strip() or self._bundle.cwd
         fields = req.fields or {}
         scope = req.scope or "user"
-        errors = validate_agent_definition(fields, self._bundle.cwd)
+        errors = validate_agent_definition(fields, target_cwd)
         if errors:
             await self._emit(BackendEvent(type="agent_wizard_result", success=False, errors=errors))
             return
         try:
-            path = write_agent_definition(fields, scope, self._bundle.cwd)
+            path = write_agent_definition(fields, scope, target_cwd)
         except OSError as exc:
             await self._emit(BackendEvent(type="agent_wizard_result", success=False, errors={"_": str(exc)}))
             return

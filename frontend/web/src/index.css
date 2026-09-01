@@ -1175,3 +1175,13 @@ pre code.hljs,
 .toast-md hr {
   margin: 0.6em 0;
 }
+
+/* 隐藏滚动条但保留滚动（固定高度文本域 / 代码预览用）。
+   注意：需要显式滚动条的场景（如工具选择列表）不要使用本类。 */
+.scrollbar-hidden::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-hidden {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

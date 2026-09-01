@@ -41,7 +41,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from illusion.coordinator.agent_definitions import AgentDefinition
+from illusion.coordinator.agent_definitions import (
+    GOAL_VERIFIER_AGENT_NAME,
+    AgentDefinition,
+)
 from illusion.engine.messages import ConversationMessage
 from illusion.tasks.manager import get_task_manager
 from illusion.tools.base import ToolRegistry
@@ -603,15 +606,77 @@ async def run_agent_in_process(
     if system_prompt is None:
         system_prompt = query_context.system_prompt
 
-    # 构建模型
-    model = config.model
-    if model is None and agent_def and agent_def.model:
-        if agent_def.model == "inherit":
-            model = query_context.model
-        else:
-            model = agent_def.model
-    if model is None:
+    # 内置 agent 的默认模型固化覆盖（settings.agent_models）在此统一应用：
+    # 无论经 AgentTool 派发还是 goal-verifier 等直接调用 run_agent_in_process
+    # 的路径都生效；config.model（调用方显式指定）仍优先于该覆盖。
+    # goal-verifier 复用 verification 定义但 name 独立，按名称放行——即使
+    # verification 被用户覆盖为自定义（source=user）副本，模型覆盖仍生效。
+    if agent_def is not None and (
+        agent_def.source == "builtin"
+        or agent_def.name == GOAL_VERIFIER_AGENT_NAME
+    ):
+        try:
+            from illusion.config.settings import load_settings as _load_settings
+
+            _override = _load_settings().agent_models.get(agent_def.name)
+        except Exception:  # noqa: BLE001 - settings 读取失败不阻塞派发
+            _override = None
+        if _override and str(_override).strip().lower() != "inherit":
+            agent_def = agent_def.model_copy(update={"model": str(_override).strip()})
+
+    # 构建模型与客户端：agent 的模型值（config.model 优先于 agent_def.model）
+    # 统一经 settings.resolve_agent_model_spec 解析：
+    #   - None / "inherit" → 继承父会话当前模型与客户端
+    #   - env_N.model_M 引用 → 使用该 env 的模型名，跨 env 时按该 env
+    #     端点/凭据独立构建 api_client（复用父 client 调另一 provider 的
+    #     模型会 404 model_not_found）
+    #   - 其他值（裸模型名等非法值）→ 回退父模型并告警，不直发 provider
+    model = config.model or (agent_def.model if agent_def else None)
+    api_client = query_context.api_client
+    capabilities = query_context.capabilities
+    model_spec = str(model).strip() if model else ""
+    if not model_spec or model_spec.lower() == "inherit":
         model = query_context.model
+    else:
+        from illusion.config.settings import load_settings
+
+        settings = load_settings()
+        env_key, model_name, ref = settings.resolve_agent_model_spec(model_spec)
+        if ref and env_key and model_name:
+            model = model_name
+            if env_key != settings._active_env_key:
+                try:
+                    from illusion.api.factory import build_api_client_for_env
+
+                    api_client = build_api_client_for_env(settings, env_key)
+                except (ValueError, RuntimeError) as exc:
+                    # 原子回退：client 构建失败时 model 同步回退父模型，
+                    # capabilities 一并回退——否则子代理以父模型运行却携带
+                    # 目标模型的多模态声明，图片直发会发生 400/误降级
+                    logger.warning(
+                        "[agent_executor] Failed to build API client for env %s (%s); "
+                        "falling back to parent model %s",
+                        env_key, exc, query_context.model,
+                    )
+                    model = query_context.model
+                    api_client = query_context.api_client
+                    capabilities = query_context.capabilities
+                else:
+                    # 多模态能力：按该模型在 settings 中的实际声明查询（支持
+                    # 多模态的模型不再因"非继承模型"被一律判为无媒体能力；
+                    # 未声明仍 fail-closed）
+                    capabilities = settings.get_model_capabilities(ref)
+            else:
+                # 同 env：模型无特殊声明，能力仍按父级能力（同模型同声明）
+                capabilities = settings.get_model_capabilities(ref)
+        else:
+            logger.warning(
+                "[agent_executor] Agent model %r does not match any configured model; "
+                "falling back to parent model %s",
+                model_spec, query_context.model,
+            )
+            model = query_context.model
+            capabilities = query_context.capabilities
 
     # 使用父级的权限检查器（agent 继承父级权限设置）
     permission_checker = query_context.permission_checker
@@ -623,7 +688,7 @@ async def run_agent_in_process(
     # read_file 命中父会话的"已读"标记而返回占位提示；文件修改后的 mtime
     # 失效机制保证父会话读到的始终是最新磁盘内容。
     agent_query_context = QueryContext(
-        api_client=query_context.api_client,
+        api_client=api_client,
         tool_registry=agent_tools,
         permission_checker=permission_checker,
         cwd=ctx.cwd,
@@ -641,12 +706,9 @@ async def run_agent_in_process(
         sandbox_permission_prompt=query_context.sandbox_permission_prompt,
         on_before_tool_execute=query_context.on_before_tool_execute,
         file_state_cache=FileStateCache(),
-        # 媒体能力：子代理使用与父级相同模型时继承父级能力（可读图）；
-        # 使用其他模型（如 agent_def.model 跨 env 指定）时无法定位其声明，
-        # 按 fail-closed 处理（无媒体能力）——与 settings 未声明语义一致
-        capabilities=(
-            query_context.capabilities if model == query_context.model else None
-        ),
+        # 媒体能力：继承时沿用父级能力；指定模型时按该模型在 settings 中
+        # 的实际声明解析（上方模型解析段），未声明仍 fail-closed
+        capabilities=capabilities,
         # 继承任务上下文提供者：子代理的自动审批同样携带 goal objective /
         # 最近 user 消息。provider 由父级 engine 构造时绑定（捕获父级
         # messages 属性表达式，惰性求值），子代理作为父任务的一部分，

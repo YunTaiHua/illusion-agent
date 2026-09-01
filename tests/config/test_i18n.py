@@ -156,7 +156,8 @@ class TestUsageCoverageComplete:
     def test_processor_variant_lines_translated(self):
         """处理器内自带（非 registry 追加）的 Usage 变体行也必须入表"""
         variants = [
-            "Usage: /agent [list|create|<task_id>]",
+            "Usage: /agent [list|create|model <name> <env_N.model_M|inherit>|<task_id>]",
+            "Usage: /agent model <name> <env_N.model_M|inherit>",
             "Usage: /rename [name|#N name|session_id name|--clear]",
             "Usage: /resume #1 or /resume <session_id>",
             (

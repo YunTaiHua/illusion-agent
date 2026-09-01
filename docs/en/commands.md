@@ -161,7 +161,7 @@ In interactive sessions, you can use the following commands:
 | Reasoning Control | `/effort`, `/max-tokens`, `/turns` | Effort, token limit, turn count control |
 | Plugin Extensions | `/skills`, `/hooks`, `/mcp`, `/plugin` | Manage extension features |
 | Project Init | `/init` | Initialize project IllusionAgent files |
-| Multi-Agent | `/continue`, `/agent` | Agent collaboration and management |
+| Multi-Agent | `/continue`, `/agent` | Subagent collaboration and management: `/agent` for completed-task summaries / creation wizard / model settings; `/agent model <name> <env_N.model_M|inherit>` sets a subagent's default model (built-ins persist to settings.json, user/project agents edit the .md). On the Web, manage subagents in the Settings form's "Subagents" tab |
 
 ### Non-Interactive Mode (Print Mode) Available Parameters
 

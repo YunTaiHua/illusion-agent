@@ -39,10 +39,9 @@ def test_agent_wizard_result():
     assert ev.path == "/tmp/a.md"
 
 
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-from illusion.ui.protocol import FrontendRequest
+import pytest
 
 
 @pytest.mark.asyncio
@@ -90,8 +89,8 @@ async def test_agent_wizard_submit_validates_and_writes(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_agent_generate_returns_generated_agent(monkeypatch, tmp_path):
-    from illusion.ui.backend_host import ReactBackendHost
     from illusion.services.agent_creator import GeneratedAgent
+    from illusion.ui.backend_host import ReactBackendHost
 
     host = ReactBackendHost.__new__(ReactBackendHost)
     host._bundle = MagicMock()
@@ -110,3 +109,44 @@ async def test_agent_generate_returns_generated_agent(monkeypatch, tmp_path):
     await host._handle_agent_generate_request(req)
     assert captured["ev"].type == "agent_generate_response"
     assert captured["ev"].agent["identifier"] == "x"
+
+
+# ===== agent 管理（web 设置表单 AgentsTab）协议 =====
+
+
+def test_web_request_agents_type():
+    req = FrontendRequest(type="web_request_agents")
+    assert req.type == "web_request_agents"
+
+
+def test_web_update_agent_request():
+    req = FrontendRequest(type="web_update_agent", fields={"name": "explore", "source": "builtin", "model": "env_1.model_1"})
+    assert req.fields["source"] == "builtin"
+    assert req.fields["model"] == "env_1.model_1"
+
+
+def test_web_delete_agent_request():
+    req = FrontendRequest(type="web_delete_agent", fields={"name": "my-agent", "base_dir": "/tmp/agents"})
+    assert req.fields["base_dir"] == "/tmp/agents"
+
+
+def test_web_agents_event_payload():
+    ev = BackendEvent(type="web_agents", web_agents={
+        "global": [{"name": "explore", "source": "builtin", "scope": "builtin", "model": "env_1.model_1"}],
+        "projects": [{"workspace": "/ws", "name": "ws", "is_default": True, "available": True, "agents": []}],
+    })
+    assert ev.web_agents["global"][0]["name"] == "explore"
+    assert ev.web_agents["projects"][0]["is_default"] is True
+
+
+def test_web_agent_op_result_event():
+    ev = BackendEvent(type="web_agent_op_result", web_agent_op="update", success=False, error="boom")
+    assert ev.web_agent_op == "update"
+    assert ev.success is False
+    assert ev.error == "boom"
+
+
+def test_agent_wizard_submit_cwd():
+    """项目级创建向导提交可指定目标工作区 cwd。"""
+    req = FrontendRequest(type="agent_wizard_submit", fields={"name": "p1"}, scope="project", cwd="/ws/project-a")
+    assert req.cwd == "/ws/project-a"

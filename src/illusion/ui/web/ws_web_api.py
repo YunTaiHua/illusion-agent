@@ -220,6 +220,10 @@ class WebApiDispatcher:
             "web_request_workspaces": self.handle_web_request_workspaces,
             "web_add_workspace": self.handle_web_add_workspace,
             "web_remove_workspace": self.handle_web_remove_workspace,
+            # agent 管理（web 设置表单 AgentsTab）
+            "web_request_agents": self.handle_web_request_agents,
+            "web_update_agent": self.handle_web_update_agent,
+            "web_delete_agent": self.handle_web_delete_agent,
         }
 
     # === emit 辅助：委托给 host ===
@@ -1224,6 +1228,381 @@ class WebApiDispatcher:
         host._sync_workspace_states_from_registry()
         await host._push_workspaces()
         await host._push_sessions()
+
+    # === Agent 管理（Web 设置表单 AgentsTab）===
+
+    def _serialize_agent_entry(
+        self,
+        agent: Any,
+        settings: Any,
+        scope: str,
+        workspace: str | None = None,
+    ) -> dict[str, Any]:
+        """将代理定义序列化为 AgentsTab 条目。
+
+        条目携带生效模型（内置代理含 settings.agent_models 固化覆盖）与
+        该模型的多模态声明（supports_images，供前端展示徽标）。
+
+        Args:
+            agent: 代理定义
+            settings: 当前 Settings（用于模型引用解析与能力查询）
+            scope: 作用域（builtin / user / project / plugin）
+            workspace: 项目级代理所属工作区路径（其余作用域为 None）
+
+        Returns:
+            dict[str, Any]: 可直接 JSON 序列化的代理条目
+        """
+        from illusion.coordinator.agent_definitions import GOAL_VERIFIER_AGENT_NAME
+
+        raw_model = str(agent.model or "").strip()
+        override = ""
+        if scope == "builtin":
+            override = str(settings.agent_models.get(agent.name, "") or "").strip()
+            if override.lower() == "inherit":
+                override = ""
+
+        model_ref: str | None = None
+        model_resolved: str | None = None
+        supports_images: bool | None = None
+        candidate = override or raw_model
+        if candidate and candidate.lower() != "inherit":
+            env_key, model_name, ref = settings.resolve_agent_model_spec(candidate)
+            if ref and env_key and model_name:
+                model_ref = ref
+                model_resolved = model_name
+                supports_images = settings.get_model_capabilities(ref).supports_images
+
+        return {
+            "name": agent.name,
+            "description": agent.description or "",
+            "source": agent.source,
+            "scope": scope,
+            "workspace": workspace,
+            "color": agent.color,
+            "background": agent.background,
+            # goal 专用标记（前端展示"Goal 专用"徽标；仅内置 goal-verifier 为 True）
+            "goal_specific": agent.name == GOAL_VERIFIER_AGENT_NAME,
+            # 生效模型引用（env_N.model_M）；None 表示继承当前会话模型
+            "model": model_ref,
+            "model_resolved": model_resolved,
+            "supports_images": supports_images,
+            "base_dir": agent.base_dir,
+            "filename": agent.filename,
+            "tools": agent.tools,
+            "effort": str(agent.effort) if agent.effort is not None else None,
+            "permission_mode": agent.permission_mode,
+            "max_turns": agent.max_turns,
+            "system_prompt": agent.system_prompt,
+        }
+
+    def _collect_agents_catalog(self) -> dict[str, Any]:
+        """收集全部代理并按作用域分组（同步，供 to_thread 调用）。
+
+        分组：
+            - global：内置 + 用户级（~/.illusion/agents）+ 插件
+            - projects：各注册工作区的项目级代理（{ws}/.illusion/agents）
+
+        Returns:
+            dict[str, Any]: web_agents 事件载荷
+        """
+        from illusion.config.paths import get_config_dir
+        from illusion.config.settings import load_settings
+        from illusion.coordinator.agent_definitions import (
+            GOAL_VERIFIER_AGENT_NAME,
+            get_builtin_agent_definitions,
+            get_goal_verifier_definition,
+            load_agents_dir,
+        )
+        from illusion.services import workspace_registry
+
+        settings = load_settings()
+        global_entries: list[dict[str, Any]] = []
+
+        for agent in get_builtin_agent_definitions():
+            global_entries.append(
+                self._serialize_agent_entry(agent, settings, "builtin"))
+
+        # 内置 goal-verifier（内部专用，独立配置模型）：作为内置条目展示。
+        # 用户/项目级创建了同名定义时不附加（以用户定义为准，避免重复条目）
+        for agent in load_agents_dir(get_config_dir() / "agents"):
+            global_entries.append(
+                self._serialize_agent_entry(agent, settings, "user"))
+        if not any(
+            e.get("name") == GOAL_VERIFIER_AGENT_NAME
+            for e in global_entries if e.get("scope") == "user"
+        ):
+            global_entries.append(
+                self._serialize_agent_entry(
+                    get_goal_verifier_definition(), settings, "builtin"))
+
+        try:
+            import os as _os
+
+            from illusion.config.settings import load_settings as _load_settings
+            from illusion.coordinator.agent_definitions import AgentDefinition
+            from illusion.plugins.loader import load_plugins as _load_plugins
+
+            for plugin in _load_plugins(_load_settings(), _os.getcwd()):
+                if not getattr(plugin, "enabled", True):
+                    continue
+                for agent_def in getattr(plugin, "agents", []) or []:
+                    if isinstance(agent_def, AgentDefinition):
+                        global_entries.append(
+                            self._serialize_agent_entry(agent_def, settings, "plugin"))
+        except Exception:
+            log.exception("收集插件代理失败")
+
+        projects: list[dict[str, Any]] = []
+        for view in workspace_registry.resolve_workspace_views():
+            agents_dir = Path(view["path"]) / ".illusion" / "agents"
+            entries = [
+                self._serialize_agent_entry(agent, settings, "project", view["path"])
+                for agent in load_agents_dir(agents_dir)
+            ]
+            projects.append({
+                "workspace": view["path"],
+                "name": view["name"],
+                "is_default": view["is_default"],
+                "available": view["available"],
+                "agents": entries,
+            })
+
+        return {"global": global_entries, "projects": projects}
+
+    async def _push_agents(self) -> None:
+        """收集并推送 web_agents 事件（供多处复用）。"""
+        catalog = await asyncio.to_thread(self._collect_agents_catalog)
+        await self._emit(BackendEvent(type="web_agents", web_agents=catalog))
+
+    async def handle_web_request_agents(self, request: FrontendRequest) -> None:
+        """拉取代理列表（内置/全局/项目级分组）并推送 web_agents 事件。
+
+        Args:
+            request: 前端请求（无附加字段）
+        """
+        host = self._host
+        if host._bundle is None:
+            await self._emit(BackendEvent(type="error", message="运行时未就绪"))
+            return
+        await self._push_agents()
+
+    def _allowed_agents_dirs(self) -> set[str]:
+        """返回允许读写的 agents 目录集合（规范化）。
+
+        用户级：``~/.illusion/agents``；项目级：各注册工作区的
+        ``{workspace}/.illusion/agents``。base_dir 必须命中集合才允许
+        更新/删除——防止 `"内置/插件不可删"` 只在前端隐藏按钮、服务端
+        可传任意目录删除/改写任意 .md 文件的漏洞。
+
+        Returns:
+            set[str]: 经过 normcase 规范化的目录绝对路径集合
+        """
+        import os as _os
+
+        from illusion.config.paths import get_config_dir
+        from illusion.services import workspace_registry
+
+        dirs: set[str] = {get_config_dir() / "agents"}
+        # 默认工作区（settings.working_directory）未注册时也属于项目级候选
+        try:
+            for view in workspace_registry.resolve_workspace_views():
+                dirs.add(Path(view["path"]) / ".illusion" / "agents")
+        except Exception:
+            log.exception("读取工作区注册表失败，仅限用户级目录")
+        return {_os.path.normcase(str(p.resolve())) for p in dirs}
+
+    def _validate_model_value(self, model: Any) -> tuple[bool, str]:
+        """规范化模型更新值：inherit/空为继承；其余必须是合法 env 引用。
+
+        Returns:
+            tuple[bool, str]: (是否合法, 规范值或错误信息)
+        """
+        from illusion.config.settings import load_settings
+
+        model_str = str(model if model is not None else "").strip()
+        if model_str.lower() in ("", "inherit"):
+            return True, "inherit"
+        settings = load_settings()
+        env_key, _mn, ref = settings.resolve_agent_model_spec(model_str)
+        if not ref or not env_key:
+            return False, (
+                f"未知模型 '{model_str}'：请使用 env_N.model_M 引用或 'inherit'"
+            )
+        return True, ref
+
+    def _is_allowed_agents_dir(self, base_dir: str) -> bool:
+        """base_dir 是否命中允许的 agents 目录列表。"""
+        import os as _os
+
+        return _os.path.normcase(str(Path(base_dir))) in self._allowed_agents_dirs()
+
+    def _update_agent_on_disk(
+        self, fields: dict[str, Any]
+    ) -> tuple[bool, str | None]:
+        """按字段定位并更新一个 .md 代理定义（同步，供 to_thread 调用）。
+
+        安全约束：
+            - base_dir 必须命中允许的 agents 目录（用户级/已注册工作区）
+            - 模型值必须为合法的 env_N.model_M 引用或 inherit（与内置分支
+              同一校验，避免裸模型名落盘后再 404）
+
+        Args:
+            fields: 请求载荷（name/base_dir 必填；model 及其余受管字段可选）
+
+        Returns:
+            tuple[bool, str | None]: (是否成功, 错误信息)
+        """
+
+        from illusion.coordinator.agent_definitions import load_agents_dir
+
+        name = str(fields.get("name", "")).strip()
+        base_dir = str(fields.get("base_dir", "")).strip()
+        if not name or not base_dir:
+            return False, "缺少代理名称或定义目录"
+        if not self._is_allowed_agents_dir(base_dir):
+            return False, f"目录 {base_dir} 不在允许的子智能体定义目录列表中"
+
+        model_ok, model_value = self._validate_model_value(fields.get("model"))
+        if not model_ok:
+            return False, model_value
+
+        target = next(
+            (a for a in load_agents_dir(Path(base_dir)) if a.name == name), None)
+        if target is None:
+            return False, f"目录 {base_dir} 下未找到代理 '{name}'"
+
+        from illusion.services.agent_creator import update_agent_definition_file
+
+        updates: dict[str, Any] = {}
+        for key in ("model", "description", "system_prompt", "tools",
+                    "effort", "permission_mode", "max_turns"):
+            if key in fields:
+                updates[key] = fields[key]
+        if "model" in updates:
+            updates["model"] = model_value
+        try:
+            update_agent_definition_file(target, updates)
+        except (ValueError, OSError) as exc:
+            return False, str(exc)
+        return True, None
+
+    async def handle_web_update_agent(self, request: FrontendRequest) -> None:
+        """更新代理配置并推送刷新后的 web_agents。
+
+        内置代理（source=builtin）仅允许改模型：写 settings.agent_models
+        固化到 settings.json（"inherit" 清除覆盖）；用户/项目级代理直接
+        外科手术式改写其 .md frontmatter（模型值校验与内置分支一致）。
+
+        Args:
+            request: 前端请求（fields 携带 name/source/base_dir/model 等）
+        """
+        from illusion.config.settings import load_settings, save_settings
+
+        host = self._host
+        if host._bundle is None:
+            await self._emit(BackendEvent(type="error", message="运行时未就绪"))
+            return
+        fields = request.fields or {}
+        name = str(fields.get("name", "")).strip()
+        source = str(fields.get("source", "user")).strip()
+
+        if source == "builtin":
+            if not name:
+                await self._emit(BackendEvent(
+                    type="web_agent_op_result", web_agent_op="update",
+                    success=False, error="缺少代理名称"))
+                return
+            from illusion.coordinator.agent_definitions import (
+                get_builtin_agent_definitions,
+                get_goal_verifier_definition,
+            )
+
+            builtin_names = {
+                a.name
+                for a in get_builtin_agent_definitions()
+            } | {get_goal_verifier_definition().name}
+            if name not in builtin_names:
+                await self._emit(BackendEvent(
+                    type="web_agent_op_result", web_agent_op="update",
+                    success=False, error=f"'{name}' 不是内置子智能体"))
+                return
+            model_ok, model_value = self._validate_model_value(fields.get("model"))
+            if not model_ok:
+                await self._emit(BackendEvent(
+                    type="web_agent_op_result", web_agent_op="update",
+                    success=False, error=model_value))
+                return
+            settings = load_settings()
+            if model_value == "inherit":
+                settings.agent_models.pop(name, None)
+            else:
+                settings.agent_models[name] = model_value
+            save_settings(settings)
+            await self._push_agents()
+            await self._refresh_resources_after_agent_op()
+            await self._emit(BackendEvent(
+                type="web_agent_op_result", web_agent_op="update",
+                success=True))
+            return
+
+        ok, err = await asyncio.to_thread(self._update_agent_on_disk, fields)
+        await self._push_agents()
+        if ok:
+            await self._refresh_resources_after_agent_op()
+        await self._emit(BackendEvent(
+            type="web_agent_op_result", web_agent_op="update",
+            success=ok, error=err))
+
+    def _delete_agent_on_disk(
+        self, fields: dict[str, Any]
+    ) -> tuple[bool, str | None]:
+        """按字段定位并删除一个用户创建的 .md 代理定义（同步）。"""
+        from illusion.coordinator.agent_definitions import load_agents_dir
+        from illusion.services.agent_creator import delete_agent_definition_file
+
+        name = str(fields.get("name", "")).strip()
+        base_dir = str(fields.get("base_dir", "")).strip()
+        if not name or not base_dir:
+            return False, "缺少代理名称或定义目录"
+        if not self._is_allowed_agents_dir(base_dir):
+            return False, f"目录 {base_dir} 不在允许的子智能体定义目录列表中"
+        target = next(
+            (a for a in load_agents_dir(Path(base_dir)) if a.name == name), None)
+        if target is None:
+            return False, f"目录 {base_dir} 下未找到代理 '{name}'"
+        try:
+            delete_agent_definition_file(target)
+        except (ValueError, OSError) as exc:
+            return False, str(exc)
+        return True, None
+
+    async def handle_web_delete_agent(self, request: FrontendRequest) -> None:
+        """删除用户创建的代理定义文件并推送刷新后的 web_agents。
+
+        仅用户创建的代理可删除（内置/插件拒绝）。
+
+        Args:
+            request: 前端请求（fields 携带 name/base_dir）
+        """
+        host = self._host
+        if host._bundle is None:
+            await self._emit(BackendEvent(type="error", message="运行时未就绪"))
+            return
+        ok, err = await asyncio.to_thread(
+            self._delete_agent_on_disk, request.fields or {})
+        await self._push_agents()
+        if ok:
+            await self._refresh_resources_after_agent_op()
+        await self._emit(BackendEvent(
+            type="web_agent_op_result", web_agent_op="delete",
+            success=ok, error=err))
+
+    async def _refresh_resources_after_agent_op(self) -> None:
+        """代理增删改后刷新右栏资源快照（agents 区块与派发描述同步）。"""
+        host = self._host
+        bundle = host._active_bundle() or host._bundle
+        if bundle is not None:
+            await self._push_resources(bundle)
 
     async def handle_web_query(self, request: FrontendRequest) -> None:
         """B 通道精细化指令处理。

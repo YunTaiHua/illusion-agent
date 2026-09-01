@@ -29,7 +29,6 @@ import ImagePreview from './components/ImagePreview';
 import FileViewerModal from './components/FileViewerModal';
 import FilePreviewPanel from './components/FilePreviewPanel';
 import { CustomInputModal } from './components/CustomInputModal';
-import { AgentWizardForm } from './components/AgentWizardForm';
 import { SetupForm } from './components/SetupForm';
 import { GoalBar } from './components/GoalBar';
 import { ToastMarkdown } from './components/ToastMarkdown';
@@ -203,10 +202,6 @@ export default function App() {
     targetSessionId?: string;
   } | null>(null);
 
-  // Agent 摘要浮动卡片：查看已完成 agent 时以卡片形式展示
-  const [agentResult, setAgentResult] = useState<string | null>(null);
-  const agentRequestIdRef = useRef<string | null>(null); // 当前等待的 agent 请求 ID
-
   // 回退确认弹窗状态
   const [rewindConfirm, setRewindConfirm] = useState<{ turns: number } | null>(null);
   // 重新生成：存储待重发的 user 消息文本，rewind 完成后自动重发
@@ -265,17 +260,11 @@ export default function App() {
       setRewindDraft(text);
       promptInputRef.current?.setDraft(text);
     });
-    session.setOnCommandResult((text, type, requestId) => {
-      // 使用 request_id 精确匹配 agent 摘要响应，避免竞态条件
-      if (agentRequestIdRef.current && requestId === agentRequestIdRef.current) {
-        agentRequestIdRef.current = null;
-        setAgentResult(text);
-      } else {
-        // Usage 用法提示是终端专属信息，web/desktop 的 toast 不展示；
-        // 历史来源可能带 "error:" 字面前缀，统一剥掉由红色样式表达错误语义
-        const clean = stripUsageHint(text).replace(/^error:\s*/i, '');
-        if (clean) showToast(clean, type);
-      }
+    session.setOnCommandResult((text, type) => {
+      // Usage 用法提示是终端专属信息，web/desktop 的 toast 不展示；
+      // 历史来源可能带 "error:" 字面前缀，统一剥掉由红色样式表达错误语义
+      const clean = stripUsageHint(text).replace(/^error:\s*/i, '');
+      if (clean) showToast(clean, type);
     });
     // 版本更新提醒：连接建立后后端异步检查，有新版本时弹 toast
     session.setOnUpdateAvailable((version) => {
@@ -433,36 +422,8 @@ export default function App() {
         });
         return;
       }
-      // /agent create | /agent new → 打开 agent 创建向导
-      // /agent（无参数）→ 分支选择器：查看已完成 agent / 创建新 agent
-      // /agent <id> → 提交后端查看摘要
-      if (cmdName === 'agent') {
-        const sub = args.split(/\s+/)[0] ?? '';
-        if (sub === 'create' || sub === 'new') {
-          session.clearAgentWizardState();
-          session.sendAgentWizardInit();
-          setShowAgentWizard(true);
-          return;
-        }
-        if (!sub) {
-          session.setInlineOptions({
-            command: 'agent_branch',
-            title: t(lang, 'agentBranchTitle'),
-            options: [
-              { value: '__view__', label: t(lang, 'agentBranchView') },
-              { value: '__create__', label: t(lang, 'agentBranchCreate') },
-            ],
-          });
-          return;
-        }
-      // /agent <id> → 命令注册表查摘要：busy 时拒绝（避免 "Session is busy"
-      // error 落入转录）；携带 request_id 使摘要响应精确匹配进预览面板，
-      // 而非 5 秒即逝的 toast（后端 submit_line 绑定 session.current_request_id）
-      if (session.busy) { showToast(t(lang, 'cmd_unavailable_busy').replace('{cmd}', '/agent'), 'info'); return; }
-      agentRequestIdRef.current = `agent-${Date.now()}`;
-      session.sendRequest({ type: 'submit_line', line: trimmed, request_id: agentRequestIdRef.current });
-      return;
-      }
+      // 注：/agent 斜杠指令已移除，agent 创建/管理/模型设置由设置表单的
+      // "代理"标签页承担（AgentsTab）；agent 任务摘要仍在右栏查看。
       // /goal → 走命令注册表（A 通道，不带 treat_as_text）：后端执行 /goal 命令，
       // drive_goal 轮次正常流式，命令结果以 toast 呈现（创建目标的长任务入口）。
       // busy 时不可用，通过 toast 提示
@@ -528,28 +489,10 @@ export default function App() {
       });
       return;
     }
-    // /agent 分支选择器
-    if (command === 'agent_branch') {
-      session.setInlineOptions(null);
-      if (value === '__view__') {
-        // 列表拉取为瞬时操作且失败走 toast 反馈，不再进入 busy（避免闪一下）
-        session.sendRequest({ type: 'select_command', command: 'agent' });
-      } else if (value === '__create__') {
-        session.clearAgentWizardState();
-        session.sendAgentWizardInit();
-        setShowAgentWizard(true);
-      }
-      return;
-    }
-    // agent_branch 之后其余指令：内联选项直接 apply_select_command 提交
+    // agent_branch 选择器已随 /agent 斜杠指令移除（功能由设置表单 AgentsTab 承担）
+    // 内联选项：其余指令直接 apply_select_command 提交
     session.setInlineOptions(null);
-    // agent 摘要：生成唯一 request_id 并传递给后端，用于精确匹配响应
-    if (command === 'agent') {
-      agentRequestIdRef.current = `agent-${Date.now()}`;
-    } else {
-      agentRequestIdRef.current = null;
-    }
-    session.sendRequest({ type: 'apply_select_command', command, value, request_id: agentRequestIdRef.current ?? undefined });
+    session.sendRequest({ type: 'apply_select_command', command, value });
   }, [session.sendRequest, lang]);
 
   /**
@@ -603,13 +546,10 @@ export default function App() {
   // 桌面壳中会阻塞渲染进程并遗留焦点异常，导致后续输入框无法聚焦
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
-  // Agent 创建向导显示状态（/agent create 或 /agent new 触发）
-  const [showAgentWizard, setShowAgentWizard] = useState(false);
-
   // 设置配置表单显示状态（首次登录自动弹出，或点击左栏 settings 齿轮手动打开）
   const [showSetupForm, setShowSetupForm] = useState(false);
   // 设置表单初始页（目录按钮"管理目录…"直达目录空间页）
-  const [setupInitialTab, setSetupInitialTab] = useState<'settings' | 'workspaces' | 'channels' | 'cron' | 'sandbox'>('settings');
+  const [setupInitialTab, setSetupInitialTab] = useState<'settings' | 'agents' | 'workspaces' | 'channels' | 'cron' | 'sandbox'>('settings');
   // 欢迎界面可见（无任何会话内容且非忙碌）：输入框目录按钮常显，可直接选目录新建。
   // 忙碌（首条消息生成）时不算欢迎态，输入框回到底部，避免与"思考中"指示器并存
   const welcomeVisible = session.connected && !session.busy
@@ -624,29 +564,6 @@ export default function App() {
       setShowSetupForm(true);
     }
   }, [session.ready, session.firstLogin]);
-
-  /**
-   * 处理关闭 agent 创建向导
-   *
-   * 关闭表单并清空所有向导状态（工具/模型列表、生成草稿、提交结果等），
-   * 避免残留旧数据干扰下次打开。
-   */
-  const handleCloseAgentWizard = useCallback(() => {
-    setShowAgentWizard(false);
-    session.clearAgentWizardState();
-  }, [session.clearAgentWizardState]);
-
-  /**
-   * 处理提交 agent 创建向导表单
-   *
-   * 直接转发给 session.sendAgentWizardSubmit，等待 agent_wizard_result 事件回填。
-   *
-   * @param fields - 表单字段（name/description/system_prompt 等，已由表单完成字段名映射）
-   * @param scope - 写入范围：'user' 或 'project'
-   */
-  const handleSubmitAgentWizard = useCallback((fields: Record<string, unknown>, scope: 'user' | 'project') => {
-    session.sendAgentWizardSubmit(fields, scope);
-  }, [session.sendAgentWizardSubmit]);
 
   /**
    * 处理设置表单中界面语言变更
@@ -1351,48 +1268,8 @@ export default function App() {
         />
       )}
 
-      {/* Agent 摘要浮动卡片（查看已完成 agent 时展示） */}
-      {agentResult != null && (
-        <div className="fixed bottom-8 right-6 z-40 max-w-[420px] animate-fade-in-up">
-          <div className="glass-surface rounded-2xl overflow-hidden flex flex-col shadow-glow">
-            <div className="px-4 py-3 flex items-center justify-between border-b border-white/30">
-              <div className="text-sm font-semibold text-content-primary">{t(lang, 'agentResultCardTitle')}</div>
-              <button
-                onClick={() => setAgentResult(null)}
-                className="shrink-0 w-6 h-6 flex items-center justify-center rounded text-content-disabled hover:text-content-primary glass-option-hover transition-colors cursor-pointer"
-              >
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-                  <path d="M2 2l8 8M10 2l-8 8" />
-                </svg>
-              </button>
-            </div>
-            <div className="px-4 py-3 max-h-[60vh] overflow-y-auto">
-              <div className="text-sm leading-relaxed whitespace-pre-wrap break-words text-content-primary select-text">
-                {agentResult}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Agent 创建向导（/agent create 或 /agent new 触发） */}
-      {showAgentWizard && (
-        <AgentWizardForm
-          lang={lang}
-          tools={session.agentWizardTools}
-          models={session.agentWizardModels}
-          generated={session.agentGenerated}
-          generateLoading={session.agentGenerateLoading}
-          generateError={session.agentGenerateError}
-          result={session.agentWizardResult}
-          onInit={session.sendAgentWizardInit}
-          onGenerate={session.sendAgentGenerateRequest}
-          onSubmit={handleSubmitAgentWizard}
-          onClose={handleCloseAgentWizard}
-        />
-      )}
-
-      {/* 设置配置表单（首次登录自动弹出，或点击左栏 settings 齿轮触发） */}
+      {/* 设置配置表单（首次登录自动弹出，或点击左栏 settings 齿轮触发；
+          agent 创建/管理/模型设置由"代理"标签页承担） */}
       {showSetupForm && (
         <SetupForm
           lang={lang}
@@ -1409,6 +1286,26 @@ export default function App() {
               .catch(() => undefined);
           }}
           onSetUiLanguage={handleSetUiLanguage}
+          agentsApi={{
+            catalog: session.agentCatalog,
+            loading: session.agentCatalogLoading,
+            opResult: session.agentOpResult,
+            tools: session.agentWizardTools,
+            models: session.agentWizardModels,
+            generated: session.agentGenerated,
+            generateLoading: session.agentGenerateLoading,
+            generateError: session.agentGenerateError,
+            wizardResult: session.agentWizardResult,
+            requestAgents: session.requestAgents,
+            updateAgent: session.updateAgent,
+            deleteAgent: session.deleteAgent,
+            clearOpResult: session.clearAgentOpResult,
+            wizardInit: session.sendAgentWizardInit,
+            wizardGenerate: session.sendAgentGenerateRequest,
+            wizardSubmit: session.sendAgentWizardSubmit,
+            clearWizardState: session.clearAgentWizardState,
+          }}
+          defaultWorkspace={session.sessions.find((s) => s.active)?.cwd}
           onSaved={handleSetupSaved}
           onClose={handleCloseSetupForm}
         />

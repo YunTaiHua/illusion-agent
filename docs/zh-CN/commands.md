@@ -163,7 +163,7 @@ illusion update --deps           # 同时更新项目依赖
 | 推理控制 | `/effort`, `/max-tokens`, `/turns` | 推理强度、令牌数、轮次控制 |
 | 插件扩展 | `/skills`, `/hooks`, `/mcp`, `/plugin` | 管理扩展功能 |
 | 项目初始化 | `/init` | 初始化项目 IllusionAgent 文件 |
-| 多智能体 | `/continue`, `/agent` | Agent 协作与管理 |
+| 多智能体 | `/continue`, `/agent` | 子智能体协作与管理：`/agent` 查看已完成任务/创建向导/模型设置，`/agent model <name> <env_N.model_M|inherit>` 设置子智能体默认模型（内置固化到 settings.json，用户/项目级改 .md）；Web 端在设置表单「子智能体」标签页管理 |
 
 ### 非交互模式（打印模式）可用参数
 

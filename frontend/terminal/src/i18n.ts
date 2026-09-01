@@ -165,6 +165,7 @@ const ZH: Dict = {
 	agentBranchTitle: 'Agent 操作',
 	agentBranchView: '查看已完成的 agent',
 	agentBranchCreate: '创建新 agent',
+	agentBranchModel: '设置子智能体默认模型',
 };
 
 /**
@@ -309,6 +310,7 @@ const EN: Dict = {
 	agentBranchTitle: 'Agent Actions',
 	agentBranchView: 'View completed agents',
 	agentBranchCreate: 'Create a new agent',
+	agentBranchModel: 'Set subagent default model',
 };
 
 /**

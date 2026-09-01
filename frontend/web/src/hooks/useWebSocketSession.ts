@@ -22,6 +22,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { attachAuthHeaders } from '../utils/launchToken';
 
 import type {
+  AgentCatalog,
+  AgentModelOption,
   AgentTaskItem,
   BackendEvent,
   FileContentPayload,
@@ -376,8 +378,8 @@ export interface WebSocketSessionState {
   // ---- agent 向导相关（全局）----
   /** agent 向导可选工具列表（来自 agent_wizard_init_response） */
   agentWizardTools: { name: string; description: string }[] | null;
-  /** agent 向导可选模型列表（来自 agent_wizard_init_response，后端返回 name 字段） */
-  agentWizardModels: { name: string; label: string }[] | null;
+  /** agent 向导可选模型列表（来自 agent_wizard_init_response，name 为 env_N.model_M 引用或 'inherit'） */
+  agentWizardModels: AgentModelOption[] | null;
   /** LLM 生成的 agent 草稿（来自 agent_generate_response） */
   agentGenerated: { identifier: string; when_to_use: string; system_prompt: string } | null;
   /** agent 生成中标志 */
@@ -390,10 +392,25 @@ export interface WebSocketSessionState {
   sendAgentWizardInit: () => void;
   /** 请求 LLM 生成 agent 草稿：生成 request_id，发 agent_generate_request，置 loading */
   sendAgentGenerateRequest: (prompt: string, model: string) => void;
-  /** 提交 agent 向导表单：发 agent_wizard_submit */
-  sendAgentWizardSubmit: (fields: Record<string, unknown>, scope: 'user' | 'project') => void;
+  /** 提交 agent 向导表单：发 agent_wizard_submit（项目级 cwd 指定目标工作区） */
+  sendAgentWizardSubmit: (fields: Record<string, unknown>, scope: 'user' | 'project', cwd?: string) => void;
   /** 清空所有 agent 向导状态（关闭表单时调用） */
   clearAgentWizardState: () => void;
+  // ---- agent 管理相关（设置表单 AgentsTab，全局）----
+  /** 代理分组目录（来自 web_agents 推送） */
+  agentCatalog: AgentCatalog | null;
+  /** 代理目录拉取中 */
+  agentCatalogLoading: boolean;
+  /** 最近一次代理操作结果（来自 web_agent_op_result） */
+  agentOpResult: { op: string; success: boolean; error?: string } | null;
+  /** 拉取代理目录：发 web_request_agents */
+  requestAgents: () => void;
+  /** 更新代理配置（内置改 settings，用户级改 .md）：发 web_update_agent */
+  updateAgent: (fields: Record<string, unknown>) => void;
+  /** 删除用户创建的代理：发 web_delete_agent */
+  deleteAgent: (fields: Record<string, unknown>) => void;
+  /** 清除代理操作结果（UI 消费后调用） */
+  clearAgentOpResult: () => void;
   /** 首次登录配置保存后清除 firstLogin 状态 */
   clearFirstLogin: () => void;
   deleteSessions: (sessionIds: string[], deleteAll?: boolean, cwd?: string) => void;
@@ -570,11 +587,15 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
 
   // === agent 向导状态（全局）===
   const [agentWizardTools, setAgentWizardTools] = useState<{ name: string; description: string }[] | null>(null);
-  const [agentWizardModels, setAgentWizardModels] = useState<{ name: string; label: string }[] | null>(null);
+  const [agentWizardModels, setAgentWizardModels] = useState<AgentModelOption[] | null>(null);
   const [agentGenerated, setAgentGenerated] = useState<{ identifier: string; when_to_use: string; system_prompt: string } | null>(null);
   const [agentGenerateLoading, setAgentGenerateLoading] = useState(false);
   const [agentGenerateError, setAgentGenerateError] = useState<string | null>(null);
   const [agentWizardResult, setAgentWizardResult] = useState<{ success: boolean; path?: string; errors?: Record<string, string>; error?: string } | null>(null);
+  // === agent 管理状态（设置表单 AgentsTab，全局）===
+  const [agentCatalog, setAgentCatalog] = useState<AgentCatalog | null>(null);
+  const [agentCatalogLoading, setAgentCatalogLoading] = useState(false);
+  const [agentOpResult, setAgentOpResult] = useState<{ op: string; success: boolean; error?: string } | null>(null);
   // GoalBar 操作结果（失败行内显示；成功/新操作时清除）
   const [goalActionError, setGoalActionError] = useState<{ code: string; message: string } | null>(null);
   /** agent generate 请求 ID 的 ref：handleEvent 闭包中读取当前活跃 ID，避免过期响应覆盖新请求状态 */
@@ -1169,9 +1190,9 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     sendRequest({ type: 'agent_generate_request', prompt, model, request_id: requestId });
   }, [sendRequest]);
 
-  /** 提交 agent 向导表单（全局） */
-  const sendAgentWizardSubmit = useCallback((fields: Record<string, unknown>, scope: 'user' | 'project'): void => {
-    sendRequest({ type: 'agent_wizard_submit', fields, scope });
+  /** 提交 agent 向导表单（全局；项目级 cwd 指定目标工作区） */
+  const sendAgentWizardSubmit = useCallback((fields: Record<string, unknown>, scope: 'user' | 'project', cwd?: string): void => {
+    sendRequest({ type: 'agent_wizard_submit', fields, scope, cwd: cwd || undefined });
   }, [sendRequest]);
 
   /** 清空所有 agent 向导相关状态（关闭表单时调用） */
@@ -1183,6 +1204,29 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     setAgentWizardResult(null);
     setAgentGenerateLoading(false);
     setAgentGenerateError(null);
+  }, []);
+
+  // === agent 管理（设置表单 AgentsTab）===
+
+  /** 拉取代理目录（内置/全局/项目级分组） */
+  const requestAgents = useCallback((): void => {
+    setAgentCatalogLoading(true);
+    sendRequest({ type: 'web_request_agents' });
+  }, [sendRequest]);
+
+  /** 更新代理配置（内置改 settings.agent_models，用户级改 .md） */
+  const updateAgent = useCallback((fields: Record<string, unknown>): void => {
+    sendRequest({ type: 'web_update_agent', fields });
+  }, [sendRequest]);
+
+  /** 删除用户创建的代理定义文件 */
+  const deleteAgent = useCallback((fields: Record<string, unknown>): void => {
+    sendRequest({ type: 'web_delete_agent', fields });
+  }, [sendRequest]);
+
+  /** 清除代理操作结果（UI 消费后调用） */
+  const clearAgentOpResult = useCallback((): void => {
+    setAgentOpResult(null);
   }, []);
 
   useEffect(() => {
@@ -1877,6 +1921,22 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
         return;
       }
 
+      // === agent 管理（设置表单 AgentsTab）===
+      if (evt.type === 'web_agents' && evt.web_agents) {
+        setAgentCatalog(evt.web_agents);
+        setAgentCatalogLoading(false);
+        return;
+      }
+      if (evt.type === 'web_agent_op_result') {
+        setAgentCatalogLoading(false);
+        setAgentOpResult({
+          op: evt.web_agent_op ?? 'update',
+          success: Boolean(evt.success),
+          error: evt.error ?? undefined,
+        });
+        return;
+      }
+
       // === 其他全局事件 ===
       if (evt.type === 'toast' && evt.toast) {
         // toast 通知：转发给 App 做监管判定（界内不打扰）、播放音效、
@@ -2003,6 +2063,9 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       agentWizardTools, agentWizardModels, agentGenerated, agentGenerateLoading,
       agentGenerateError, agentWizardResult,
       sendAgentWizardInit, sendAgentGenerateRequest, sendAgentWizardSubmit, clearAgentWizardState,
+      // agent 管理（设置表单 AgentsTab，全局）
+      agentCatalog, agentCatalogLoading, agentOpResult,
+      requestAgents, updateAgent, deleteAgent, clearAgentOpResult,
       clearFirstLogin,
       deleteSessions, clearModal, setBusyTrue,
       requestSelectCommand, setEffortValue, setModelValue,
@@ -2030,6 +2093,8 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     agentWizardTools, agentWizardModels, agentGenerated, agentGenerateLoading,
     agentGenerateError, agentWizardResult,
     sendAgentWizardInit, sendAgentGenerateRequest, sendAgentWizardSubmit, clearAgentWizardState,
+    agentCatalog, agentCatalogLoading, agentOpResult,
+    requestAgents, updateAgent, deleteAgent, clearAgentOpResult,
     clearFirstLogin, deleteSessions, clearModal, setBusyTrue,
     requestSelectCommand, setEffortValue, setModelValue,
     sendRequest, sendStop, clearStaticItems, optimisticSubmit,

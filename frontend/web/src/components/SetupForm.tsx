@@ -27,7 +27,8 @@ import { useTheme } from '../hooks/useTheme';
 import { GlassDropdown, type DropdownOption } from './GlassDropdown';
 import ToggleSwitch from './ToggleSwitch';
 import { CronTab } from './CronTab';
-import type { WebWorkspaceItem } from '../types/protocol';
+import { AgentsTab, type AgentsSessionApi } from './AgentsTab';
+import type { AgentModelOption, WebWorkspaceItem } from '../types/protocol';
 import {
   envApi, oauthApi, settingsApi, channelsApi,
   type EnvInfo, type ModelConfig, type SettingsResponse, type CreateEnvPayload,
@@ -149,7 +150,7 @@ interface SetupFormProps {
   /** 是否首次登录模式（true 时 env 必填，标题为初始配置） */
   firstLogin: boolean;
   /** 初始打开的 Tab（目录按钮"管理目录…"直达目录空间页） */
-  initialTab?: 'settings' | 'workspaces' | 'channels' | 'cron' | 'sandbox';
+  initialTab?: 'settings' | 'agents' | 'workspaces' | 'channels' | 'cron' | 'sandbox';
   /** 注册的工作区列表（web_workspaces 驱动） */
   workspaces: WebWorkspaceItem[];
   /** 注册新目录空间（WS web_add_workspace，后端校验） */
@@ -162,6 +163,10 @@ interface SetupFormProps {
   onSetDefaultWorkspace: (path: string) => void;
   /** ui_language 改动回调（走 WebSocket web_set_setting 即时同步） */
   onSetUiLanguage: (lang: 'zh-CN' | 'en-US') => void;
+  /** agent 管理会话能力聚合（AgentsTab 数据源；原 /agent 指令功能的 UI 承载） */
+  agentsApi: AgentsSessionApi;
+  /** 当前会话所在工作区（agent 创建时默认目标目录） */
+  defaultWorkspace?: string;
   /** 保存成功后回调（App 可据此刷新 / 重连） */
   onSaved: () => void;
   /** 关闭表单回调 */
@@ -179,9 +184,9 @@ const labelClass = 'text-xs font-medium text-content-secondary mb-1.5';
  * @param props - 组件属性
  * @returns 表单 JSX
  */
-export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorkspace, onRemoveWorkspace, onRequestWorkspaces, onSetDefaultWorkspace, onSetUiLanguage, onSaved, onClose }: SetupFormProps) {
+export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorkspace, onRemoveWorkspace, onRequestWorkspaces, onSetDefaultWorkspace, onSetUiLanguage, agentsApi, defaultWorkspace, onSaved, onClose }: SetupFormProps) {
   /** 当前 Tab */
-  const [tab, setTab] = useState<'settings' | 'workspaces' | 'channels' | 'cron' | 'sandbox'>(initialTab ?? 'settings');
+  const [tab, setTab] = useState<'settings' | 'agents' | 'workspaces' | 'channels' | 'cron' | 'sandbox'>(initialTab ?? 'settings');
   /** 加载状态 */
   const [loading, setLoading] = useState(true);
   /** 加载错误 */
@@ -338,6 +343,23 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
         opts.push({
           value: `${env.env_key}.${key}`,
           label: mc.name, // 仅显示模型名，不显示 env_N.model_N
+        });
+      }
+    }
+    return opts;
+  }, [envs, lang]);
+
+  /** agent 管理用模型选项（envs 已随表单挂载加载，首次进入子智能体 Tab 即完整可用） */
+  const agentModelOptions = useMemo<AgentModelOption[]>(() => {
+    const opts: AgentModelOption[] = [
+      { name: 'inherit', label: t(lang, 'agentsTabModelInherit') },
+    ];
+    for (const env of envs) {
+      for (const [key, mc] of Object.entries(env.models)) {
+        opts.push({
+          name: `${env.env_key}.${key}`,
+          label: mc.name,
+          supports_images: mc.capabilities?.includes('image') ?? false,
         });
       }
     }
@@ -612,9 +634,10 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
         <div className="flex flex-1 min-h-0">
           {/* 左侧 Tab 导航栏（垂直） */}
           <div className="w-fit shrink-0 border-r border-border-light px-3 py-3 flex flex-col gap-1 overflow-y-auto">
-            {(['settings', 'workspaces', 'channels', 'cron', 'sandbox'] as const).map((tabKey) => {
+            {(['settings', 'agents', 'workspaces', 'channels', 'cron', 'sandbox'] as const).map((tabKey) => {
               const isActive = tab === tabKey;
               const labelKey = tabKey === 'settings' ? 'setupFormSettingsTitle'
+                : tabKey === 'agents' ? 'setupFormAgentsTitle'
                 : tabKey === 'workspaces' ? 'setupFormWorkspacesTitle'
                 : tabKey === 'channels' ? 'setupFormChannelsTitle'
                 : tabKey === 'cron' ? 'setupFormCronTitle'
@@ -639,6 +662,14 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
           <div className="flex-1 min-w-0 overflow-y-auto px-6 py-4 [scrollbar-gutter:stable]">
           {tab === 'cron' ? (
             <CronTab lang={lang} workspaces={workspaces} />
+          ) : tab === 'agents' ? (
+            <AgentsTab
+              lang={lang}
+              workspaces={workspaces}
+              defaultWorkspace={defaultWorkspace}
+              api={agentsApi}
+              models={agentModelOptions}
+            />
           ) : tab === 'workspaces' ? (
             <WorkspacesTab
               lang={lang}

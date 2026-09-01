@@ -14,6 +14,7 @@
   - [Auto Title Configuration](#auto-title-configuration)
   - [Notification Toggles (Toast & Sound)](#notification-toggles-toast--sound)
   - [Sandbox Configuration](#sandbox-configuration)
+  - [Subagent Default Models (agent_models)](#subagent-default-models-agent_models)
 
 ---
 
@@ -121,6 +122,7 @@ Uses `env_N` grouped format. Each `env_N` is an independent environment config (
     "enabled": true,
     "sound": true
   },
+  "agent_models": {},
   "sandbox": {
     "enabled_platforms": [],
     "excluded_commands": [],
@@ -167,6 +169,7 @@ Uses `env_N` grouped format. Each `env_N` is an independent environment config (
 | `effort` | string | "medium" | Reasoning effort: low/medium/high/xhigh/max |
 | `notifications.enabled` | bool | true | Master toggle for toast notifications (task completion/termination, questions, permission reminders); when off the backend stops emitting toast events |
 | `notifications.sound` | bool | true | Toast sound-effect toggle (only effective while `notifications.enabled` is on) |
+| `agent_models` | object | {} | Persisted default models for built-in subagents: agent name → `"inherit"` or an `env_N.model_M` ref (see [Subagent Default Models](#subagent-default-models-agent_models)) |
 | `working_directory` | string | - | Fixed working directory (optional) |
 
 ---
@@ -670,3 +673,42 @@ The `sandbox` config and the built-in risk levels (LOW/MEDIUM/HIGH) are **two in
 | `full_auto` | Subject to sandbox filesystem restrictions | Only HIGH is blocked; everything else allowed |
 | `plan` | Plan file exempt; other mutations blocked | Not by level; blocked by "is it a mutation tool" |
 | `yolo` | Bypassed entirely | Ignored; only explicit tool/path denies remain |
+
+---
+
+## Subagent Default Models (agent_models)
+
+`agent_models` persists the default model for **built-in subagents** (`general-purpose` / `explore` / `verification` / `goal-verifier`). The `goal-verifier` is the goal system's adversarial verification subagent: it reuses the `verification` system prompt but is an independent entry, so its model can be configured separately. Built-in subagents have no definition file, so their model override lives only in `settings.json`:
+
+```json
+{
+  "agent_models": {
+    "explore": "env_2.model_1",
+    "verification": "inherit"
+  }
+}
+```
+
+**Value semantics:**
+
+| Value | Meaning |
+|-------|---------|
+| `"env_N.model_M"` | Use the given model of the given env (dispatch builds an independent client from that env's endpoint/credentials; no 404) |
+| `"inherit"` / absent | Inherit the current session model |
+
+**How to configure:**
+
+- **Web**: Settings form → "Subagents" tab → pick a model in the target subagent's dropdown (takes effect immediately).
+- **Terminal**: `/agent model <name> <env_N.model_M|inherit>`, or pick "Set subagent default model" from the `/agent` branch menu.
+
+**Compared with user-created subagents:**
+
+| Source | Storage | Scope | Editable |
+|--------|---------|-------|----------|
+| Built-in | `agent_models` in `settings.json` | Global | Model only |
+| User-created | `~/.illusion/agents/<name>.md` | Global | Everything (edits the .md) |
+| Project-level | `<project>/.illusion/agents/<name>.md` | That project | Everything (edits the .md) |
+
+> **Model value format**: subagent models must be an `env_N.model_M` ref or `inherit`. Bare model names (e.g. `step-3.7-flash`) are not accepted — they are rejected at creation/update time, and at runtime an unresolvable value falls back to the current model with a warning (no legacy-format compatibility).
+
+> **Multimodal**: whether a model can read images is decided by `"image"` in that model's `env_N.model_N.capabilities` declaration. Subagent dispatch resolves capabilities from the effective model's declaration instead of unconditionally disabling media for non-inherited models.

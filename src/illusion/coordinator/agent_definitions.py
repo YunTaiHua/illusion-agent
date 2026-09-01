@@ -412,6 +412,49 @@ def get_builtin_agent_definitions() -> list[AgentDefinition]:
     return list(_BUILTIN_AGENTS)
 
 
+#: goal-verifier 的保留名称：goal 系统的对抗性验证子代理。
+#: 它复用 verification 的系统提示词，但作为独立内置条目可单独配置模型
+#: （settings.agent_models 的独立键），不随 verification 的模型共用。
+GOAL_VERIFIER_AGENT_NAME = "goal-verifier"
+
+
+def get_goal_verifier_definition() -> AgentDefinition:
+    """获取内置 goal-verifier 代理定义（name 与 verification 解耦）。
+
+    内容复用 verification 定义（系统提示词/工具/后台运行等），仅将
+    name 独立为 ``goal-verifier``，使模型覆盖按独立键
+    ``settings.agent_models["goal-verifier"]`` 生效。
+
+    Returns:
+        AgentDefinition: goal-verifier 代理定义
+    """
+    verifier = next(a for a in _BUILTIN_AGENTS if a.name == "verification")
+    return verifier.model_copy(update={
+        "name": GOAL_VERIFIER_AGENT_NAME,
+        "subagent_type": GOAL_VERIFIER_AGENT_NAME,
+    })
+
+
+def get_managed_agent_definitions(cwd: str | None = None) -> list[AgentDefinition]:
+    """获取"可管理"的代理定义视图：全部定义 + 内置 goal-verifier。
+
+    用于设置表单/终端命令的管理列表与内置名校验：
+    - goal-verifier 是内部专用（不在 agent 工具派发列表中）但可独立配置模型
+    - 若已存在用户/项目/插件创建的同名 ``goal-verifier`` 定义，
+      以用户定义为准，不再附加内置项
+
+    Args:
+        cwd: 项目工作目录（项目级/插件代理的加载基准）
+
+    Returns:
+        list[AgentDefinition]: 可管理代理定义列表
+    """
+    agents = get_all_agent_definitions(cwd=cwd)
+    if any(a.name == GOAL_VERIFIER_AGENT_NAME for a in agents):
+        return agents
+    return agents + [get_goal_verifier_definition()]
+
+
 # ---------------------------------------------------------------------------
 # Markdown / YAML-frontmatter loader
 # ---------------------------------------------------------------------------

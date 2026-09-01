@@ -14,6 +14,7 @@
   - [会话自动标题配置](#会话自动标题配置)
   - [通知开关（Toast 与音效）](#通知开关toast-与音效)
   - [沙箱配置](#沙箱配置)
+  - [子智能体默认模型 (agent_models)](#子智能体默认模型-agent_models)
 
 ---
 
@@ -122,6 +123,7 @@
     "enabled": true,
     "sound": true
   },
+  "agent_models": {},
   "sandbox": {
     "enabled_platforms": [],
     "excluded_commands": [],
@@ -168,6 +170,7 @@
 | `effort` | string | "medium" | 推理强度：low/medium/high/xhigh/max |
 | `notifications.enabled` | bool | true | Toast 通知总开关（任务完成/终止、询问、权限提醒；关闭后后端不再下发 toast 事件） |
 | `notifications.sound` | bool | true | Toast 提示音效开关（仅在 `notifications.enabled` 开启时生效） |
+| `agent_models` | object | {} | 内置子智能体的默认模型固化：代理名 → `"inherit"` 或 `env_N.model_M` 引用（详见[子智能体默认模型](#子智能体默认模型-agent_models)） |
 | `working_directory` | string | - | 固定工作目录（可选） |
 
 ---
@@ -671,3 +674,42 @@ LongCat 使用 `Authorization: Bearer` 认证方式，需要通过 `auth_token` 
 | `full_auto` | 受沙箱文件系统限制 | 只拦 HIGH，其余放行 |
 | `plan` | 计划文件豁免，其余变更被挡 | 不按分级，按"是否变更工具"拦截 |
 | `yolo` | 全部绕过 | 忽略，仅保留显式工具/路径 deny |
+
+---
+
+## 子智能体默认模型 (agent_models)
+
+`agent_models` 固化**内置子智能体**（`general-purpose` / `explore` / `verification` / `goal-verifier`）的默认模型。其中 `goal-verifier` 是 goal 系统的对抗性验证子智能体：复用 `verification` 的系统提示词但作为独立条目，可单独配置模型（互不影响）。内置子智能体没有定义文件，其模型覆盖只能保存在 `settings.json`：
+
+```json
+{
+  "agent_models": {
+    "explore": "env_2.model_1",
+    "verification": "inherit"
+  }
+}
+```
+
+**字段语义：**
+
+| 取值 | 含义 |
+|------|------|
+| `"env_N.model_M"` | 使用指定 env 的指定模型（派发时按该 env 的端点与凭据独立调用，不会 404） |
+| `"inherit"` / 缺省 | 继承当前会话模型 |
+
+**设置方式：**
+
+- **Web 端**：设置表单 → 「子智能体」标签页 → 选择目标子智能体的模型下拉（即时生效）。
+- **终端端**：`/agent model <name> <env_N.model_M|inherit>`，或 `/agent` 分支菜单选择「设置子智能体默认模型」。
+
+**与用户创建子智能体的区别：**
+
+| 来源 | 存储位置 | 作用域 | 可配置项 |
+|------|----------|--------|----------|
+| 内置（builtin） | `settings.json` 的 `agent_models` | 全局 | 仅模型 |
+| 用户创建（user） | `~/.illusion/agents/<name>.md` | 全局 | 全部配置（直接改 .md） |
+| 项目级（project） | `<项目>/.illusion/agents/<name>.md` | 该项目 | 全部配置（直接改 .md） |
+
+> **模型值格式**：子智能体的模型一律使用 `env_N.model_M` 引用或 `inherit`。裸模型名（如 `step-3.7-flash`）不被接受——创建/更新阶段会直接拒绝，运行时遇到也无法解析并回退当前模型（不做旧格式兼容）。
+
+> **多模态**：模型是否可读图由该模型在 `env_N.model_N.capabilities` 中是否声明 `"image"` 决定。子智能体派发时按其生效模型的声明判断，不再一律按"非继承模型"禁用媒体。

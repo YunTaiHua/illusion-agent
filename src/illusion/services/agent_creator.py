@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING, Any
 
 from illusion.api.client import ApiMessageRequest
 from illusion.config.paths import get_config_dir, get_project_config_dir
-from illusion.coordinator.agent_definitions import get_all_agent_definitions
+from illusion.coordinator.agent_definitions import AgentDefinition, get_all_agent_definitions
 from illusion.engine.messages import ConversationMessage
 
 if TYPE_CHECKING:
@@ -164,26 +164,27 @@ def validate_agent_definition(
     """校验代理定义字段，返回错误字典。
 
     空字典表示校验通过。检查项：
-        - ``name`` 非空且不与现有代理冲突
+        - ``name`` 非空且不与现有代理冲突（冲突检测按 cwd 加载：
+          内置 + 用户级 + 插件 + 该工作区的项目级定义）
         - ``description`` 非空
         - ``system_prompt`` 非空
-        - ``model`` 若提供需为非空字符串
+        - ``model`` 为空 / ``inherit`` / 合法的 ``env_N.model_M`` 引用；
+          裸模型名等其他值直接报错
 
     Args:
         fields: 代理定义字段
-        cwd: 当前工作目录（保留参数，供后续扩展使用）
+        cwd: 目标工作目录（项目级创建所在工作区，缺省当前目录）
 
     Returns:
         dict[str, str]: 字段名到错误信息的映射
     """
-    del cwd  # 预留：当前校验不依赖 cwd
     errors: dict[str, str] = {}
 
     name = str(fields.get("name", "")).strip()
     if not name:
         errors["name"] = "代理名称不能为空"
     else:
-        for existing in get_all_agent_definitions():
+        for existing in get_all_agent_definitions(cwd=cwd):
             if existing.name == name:
                 errors["name"] = f"代理名称 '{name}' 已存在"
                 break
@@ -195,8 +196,22 @@ def validate_agent_definition(
         errors["system_prompt"] = "系统提示词不能为空"
 
     model = fields.get("model")
-    if model is not None and model != "inherit" and (not isinstance(model, str) or not str(model).strip()):
-        errors["model"] = "模型必须是非空字符串或 'inherit'"
+    if model is not None:
+        model_str = str(model).strip() if isinstance(model, str) else ""
+        if not model_str:
+            errors["model"] = "模型必须是非空字符串或 'inherit'"
+        elif model_str.lower() != "inherit":
+            # 模型必须是 env 引用：裸模型名配当前 env 的 provider 直发会
+            # 404 model_not_found，创建阶段直接拦截
+            from illusion.config.settings import load_settings
+
+            settings = load_settings()
+            env_key, _model_name, ref = settings.resolve_agent_model_spec(model_str)
+            if not ref or not env_key:
+                errors["model"] = (
+                    f"未知模型 '{model_str}'：请使用 settings 中已配置的 "
+                    "env_N.model_M 模型引用，或使用 'inherit'"
+                )
 
     return errors
 
@@ -282,6 +297,158 @@ def write_agent_definition(
     return file_path
 
 
+# 更新操作支持的外科手术式改写键：updates 键 → frontmatter 键（含别名）。
+# 未列出的 frontmatter 字段（skills/mcpServers/hooks/color 等）原样保留。
+_FM_UPDATE_KEYS: dict[str, tuple[str, ...]] = {
+    "model": ("model",),
+    "description": ("description", "when_to_use", "whenToUse"),
+    "tools": ("tools",),
+    "effort": ("effort",),
+    "permission_mode": ("permission_mode", "permissionMode"),
+    "max_turns": ("max_turns", "maxTurns"),
+}
+
+
+def _format_fm_value(key: str, value: Any) -> str:
+    """将 updates 值格式化为单行 frontmatter 文本。"""
+    if isinstance(value, list):
+        return f"{key}: [" + ", ".join(str(v) for v in value) + "]"
+    return f"{key}: {value}"
+
+
+def _agent_md_path(agent: AgentDefinition) -> Path:
+    """定位用户/项目级 agent 的 .md 文件。
+
+    Raises:
+        ValueError: agent 不是文件来源（内置/插件）或路径信息缺失
+    """
+    if agent.source == "builtin":
+        raise ValueError(f"内置代理 '{agent.name}' 不存在对应的定义文件")
+    if not agent.base_dir or not agent.filename:
+        raise ValueError(f"代理 '{agent.name}' 缺少定义文件路径信息")
+    return Path(agent.base_dir) / f"{agent.filename}.md"
+
+
+def update_agent_definition_file(
+    agent: AgentDefinition,
+    updates: dict[str, Any],
+) -> Path:
+    """外科手术式更新用户/项目级 agent 的 .md frontmatter。
+
+    仅替换 ``updates`` 中出现的受管键（model/description/tools/effort/
+    permission_mode/max_turns，支持 camelCase 别名定位），其余 frontmatter
+    字段与 markdown body（system_prompt，可通过 ``updates["system_prompt"]``
+    显式替换）原样保留。
+
+    Args:
+        agent: 现有代理定义（来自 get_all_agent_definitions 等）
+        updates: 待更新字段；值为 None 时删除对应 frontmatter 键
+
+    Returns:
+        Path: 更新后的文件路径
+
+    Raises:
+        ValueError: agent 非文件来源、路径信息缺失或文件不存在
+    """
+    file_path = _agent_md_path(agent)
+    if not file_path.exists():
+        raise ValueError(f"代理定义文件不存在: {file_path}")
+
+    content = file_path.read_text(encoding="utf-8")
+
+    # 拆分 frontmatter 与 body（无 frontmatter 的文件视为空 fm + 全 body）
+    if content.startswith("---"):
+        lines = content.split("\n")
+        try:
+            fm_end = lines.index("---", 1)
+        except ValueError as exc:
+            raise ValueError(f"代理定义文件 frontmatter 格式错误: {file_path}") from exc
+        fm_lines = lines[1:fm_end]
+        body_lines = lines[fm_end + 1 :]
+    else:
+        fm_lines = []
+        body_lines = content.split("\n")
+
+    # system_prompt 更新：直接替换 body
+    system_prompt = updates.get("system_prompt")
+    if system_prompt is not None:
+        body_lines = str(system_prompt).strip().split("\n")
+
+    # 受管键定位：key → fm_lines 索引（匹配任意别名，含大小写变体）
+    def _key_of(line: str) -> str | None:
+        if not line.strip() or ":" not in line:
+            return None
+        if line.lstrip() != line:
+            return None  # 缩进行（块标量/列表延续）不算顶层键
+        key_part = line.split(":", 1)[0].strip()
+        return key_part or None
+
+    def _matches(key: str | None, aliases: tuple[str, ...]) -> bool:
+        if key is None:
+            return False
+        normalized = key.lower().replace("_", "")
+        return normalized in {a.lower().replace("_", "") for a in aliases}
+
+    def _span(start: int) -> int:
+        """受管键条目的行跨度：键行 + 后续缩进/延续行（块标量、列表项）。"""
+        end = start + 1
+        while end < len(fm_lines):
+            line = fm_lines[end]
+            if not line.strip():
+                break
+            if line[:1] in (" ", "\t") or line.lstrip().startswith("- "):
+                end += 1
+                continue
+            break
+        return end
+
+    for updates_key, aliases in _FM_UPDATE_KEYS.items():
+        if updates_key not in updates:
+            continue
+        value = updates[updates_key]
+        fm_key = aliases[0]
+        new_lines: list[str] = [] if value is None else [_format_fm_value(fm_key, value)]
+
+        index = next(
+            (i for i, line in enumerate(fm_lines) if _matches(_key_of(line), aliases)),
+            None,
+        )
+        if index is not None:
+            fm_lines[index : _span(index)] = new_lines
+        elif new_lines:
+            # 键不存在：追加到 frontmatter 末尾（保持 name/description 靠前的
+            # 既有顺序，新键附加以避免插入位置的启发式判断）
+            fm_lines.extend(new_lines)
+
+    file_path.write_text(
+        "---\n" + "\n".join(fm_lines) + "\n---\n" + "\n".join(body_lines) + "\n",
+        encoding="utf-8",
+    )
+    return file_path
+
+
+def delete_agent_definition_file(agent: AgentDefinition) -> Path:
+    """删除用户/项目级 agent 的 .md 定义文件。
+
+    Args:
+        agent: 现有代理定义
+
+    Returns:
+        Path: 被删除的文件路径
+
+    Raises:
+        ValueError: agent 非用户创建来源（内置/插件不可删除）、路径信息
+            缺失或文件不存在
+    """
+    if agent.source != "user":
+        raise ValueError(f"代理 '{agent.name}' 不是用户创建的，无法删除")
+    file_path = _agent_md_path(agent)
+    if not file_path.exists():
+        raise ValueError(f"代理定义文件不存在: {file_path}")
+    file_path.unlink()
+    return file_path
+
+
 def _extract_json(text: str) -> str:
     """从可能包含 markdown 代码块的文本中提取 JSON 字符串。
 
@@ -343,8 +510,38 @@ async def generate_agent_from_description(
 
     messages = [ConversationMessage.from_user_text(user_content)]
 
-    # inherit 不是真实模型名，需替换为 engine 当前默认模型
-    actual_model = model if model and model != "inherit" else engine.model
+    # inherit 不是真实模型名，需替换为 engine 当前默认模型；
+    # 指定其他 env 的模型（env_N.model_M 引用）时，按该 env 的端点/凭据
+    # 独立构建 client——复用主 client 调另一 provider 的模型必然 404
+    # model_not_found（与 memory/extract.py 的处理对齐）。
+    # 注意：任何分支发送给 API 的都必须是裸模型名，"env_N.model_M"
+    # 引用串本身不是合法模型名（否则报 model_invalid 404）。
+    from illusion.config.settings import load_settings
+
+    settings = load_settings()
+    requested = str(model).strip() if model else ""
+    actual_model = engine.model
+    api_client = engine.api_client
+    if requested and requested.lower() != "inherit":
+        env_key, model_name, ref = settings.resolve_agent_model_spec(requested)
+        if ref and env_key and model_name:
+            actual_model = model_name
+            if env_key != settings._active_env_key:
+                try:
+                    from illusion.api.factory import build_api_client_for_env
+
+                    api_client = build_api_client_for_env(settings, env_key)
+                except (ValueError, RuntimeError) as exc:
+                    logger.warning("Failed to build API client for env %s: %s", env_key, exc)
+                    # 原子回退：client 失败则 model 同步回退当前模型
+                    actual_model = engine.model
+                    api_client = engine.api_client
+        else:
+            # 不可解析的值（裸模型名等）不直发 provider，回退当前模型
+            logger.warning(
+                "Agent generation model %r does not match any configured model; "
+                "falling back to %s", requested, engine.model,
+            )
 
     request = ApiMessageRequest(
         model=actual_model,
@@ -356,7 +553,7 @@ async def generate_agent_from_description(
     )
 
     chunks: list[str] = []
-    async for event in engine.api_client.stream_message(request):  # type: ignore[attr-defined]
+    async for event in api_client.stream_message(request):
         text = getattr(event, "text", None)
         if text:
             chunks.append(text)
@@ -389,31 +586,35 @@ async def generate_agent_from_description(
 
 def list_available_models(
     app_state: AppStateStore | None = None,
-) -> list[dict[str, str]]:
-    """返回可用模型列表。
+) -> list[dict[str, Any]]:
+    """返回可用模型列表（``env_N.model_M`` 引用形式）。
 
-    列表包含 ``inherit``（继承默认模型）以及 settings 中配置的所有模型。
+    列表首项为 ``inherit``（继承默认模型）；其余项 ``name`` 为模型引用
+    （写入 agent frontmatter 的值），``label`` 为模型名，``supports_images``
+    取自该模型在 settings 中声明的媒体能力（供前端展示多模态徽标）。
 
     Args:
         app_state: 应用状态（保留参数，当前未使用）
 
     Returns:
-        list[dict[str, str]]: 模型信息列表，每项包含 ``name`` 和 ``label``
+        list[dict[str, Any]]: 模型信息列表（name/label/supports_images）
     """
     del app_state  # 预留
-    models: list[dict[str, str]] = [
-        {"name": "inherit", "label": "继承默认模型"}
+    models: list[dict[str, Any]] = [
+        {"name": "inherit", "label": "继承默认模型", "supports_images": True}
     ]
     try:
         from illusion.config.settings import load_settings
 
         settings = load_settings()
         for env_key, env in settings.list_envs().items():
-            for model_key, model_name in env.list_models().items():
+            for model_key, model_config in env.list_model_configs().items():
+                ref = f"{env_key}.{model_key}"
                 models.append(
                     {
-                        "name": model_name,
-                        "label": f"{env_key}.{model_key} ({model_name})",
+                        "name": ref,
+                        "label": model_config.name,
+                        "supports_images": model_config.media_capabilities.supports_images,
                     }
                 )
     except Exception as exc:  # noqa: BLE001

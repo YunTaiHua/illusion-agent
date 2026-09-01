@@ -256,7 +256,7 @@ def create_default_command_registry() -> CommandRegistry:
     registry.register(SlashCommand("copy", "Copy the latest response or provided text", copy_handler))
     registry.register(SlashCommand("rewind", "Remove the latest conversation turn(s)", rewind_handler, usage="/rewind [TURNS] [both|conversation]"))
     registry.register(SlashCommand("init", "Initialize project IllusionAgent files", _init_handler))
-    registry.register(SlashCommand("agent", "View completed agent summary or create a new agent", agent_handler, usage="/agent [list|create|<task_id>]"))
+    registry.register(SlashCommand("agent", "View completed agent summary, create a new agent, or set its default model", agent_handler, usage="/agent [list|create|model <name> <env_N.model_M|inherit>|<task_id>]"))
     registry.register(SlashCommand("login", "Show auth status or store an API key", login_handler))
     registry.register(SlashCommand("logout", "Clear the stored API key", logout_handler))
     registry.register(SlashCommand("skills", "List or show available skills", skills_handler, usage="/skills [name|number]"))

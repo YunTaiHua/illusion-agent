@@ -100,6 +100,10 @@ class FrontendRequest(BaseModel):
         "web_request_workspaces",
         "web_add_workspace",
         "web_remove_workspace",
+        # === agent 管理（web 设置表单 AgentsTab；terminal 向导共用 agent_wizard_*）===
+        "web_request_agents",
+        "web_update_agent",
+        "web_delete_agent",
         # === agent 向导（terminal + web 共用）===
         "agent_wizard_init",
         "agent_generate_request",
@@ -289,6 +293,9 @@ class BackendEvent(BaseModel):
         "web_restore_completed",
         "web_query_result",
         "web_workspaces",
+        # === agent 管理（web 设置表单 AgentsTab）===
+        "web_agents",
+        "web_agent_op_result",
         "shutdown",
         # === agent 向导响应（terminal + web 共用）===
         "agent_wizard_init_response",
@@ -356,6 +363,9 @@ class BackendEvent(BaseModel):
     web_request_id: str | None = None                   # web_query_result 关联的请求 ID
     web_command: str | None = None                      # web_query_result 关联的命令名
     web_error: str | None = None                        # web_restore_completed 等事件的错误信息（非空表示操作失败）
+    # === agent 管理（web 设置表单 AgentsTab）===
+    web_agents: dict[str, Any] | None = None            # web_agents 推送的代理分组列表（global + projects）
+    web_agent_op: str | None = None                     # web_agent_op_result 的操作名（update/delete）
     # === 右栏扩展：文件树 / Git 状态 / 文件预览 / 智能体与任务 ===
     web_file_tree: dict[str, Any] | None = None         # web_file_tree 推送的目录条目（path + entries）
     web_git_status: dict[str, Any] | None = None        # web_git_status 推送的 Git 快照（branch/upstream/files）

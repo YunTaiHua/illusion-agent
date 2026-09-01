@@ -430,11 +430,15 @@ export type FrontendRequest =
   | { type: 'web_request_workspaces' }
   | { type: 'web_add_workspace'; path: string }
   | { type: 'web_remove_workspace'; path: string }
+  // === agent 管理（web 设置表单 AgentsTab）===
+  | { type: 'web_request_agents' }
+  | { type: 'web_update_agent'; fields: Record<string, unknown> }
+  | { type: 'web_delete_agent'; fields: Record<string, unknown> }
   // === agent 向导（terminal + web 共用）===
   | { type: 'agent_wizard_init' }
   | { type: 'agent_generate_request'; prompt: string; model: string; request_id: string; session_id?: string }
   | { type: 'agent_generate_cancel'; request_id: string }
-  | { type: 'agent_wizard_submit'; fields: Record<string, unknown>; scope: 'user' | 'project' }
+  | { type: 'agent_wizard_submit'; fields: Record<string, unknown>; scope: 'user' | 'project'; cwd?: string }
   // === Goal 状态栏操作（GoalBar 的 pause/resume/edit/clear）===
   | { type: 'goal_action'; goal_action: 'pause' | 'resume' | 'edit' | 'clear'; goal_id?: string; revision?: number; objective?: string; session_id?: string };
 
@@ -551,6 +555,10 @@ export interface BackendEvent {
   web_file_content?: FileContentPayload;
   /** web_agent_tasks 推送的智能体与后台任务列表（可选） */
   web_agent_tasks?: AgentTaskItem[];
+  /** web_agents 推送的代理分组列表（global + projects，可选） */
+  web_agents?: AgentCatalog;
+  /** web_agent_op_result 的操作名（update/delete，可选） */
+  web_agent_op?: string;
   /** web_session_files 推送的会话内修改文件列表（可选，会话文件区块数据源） */
   web_session_files?: SessionFileItem[];
   /** web_file_stats 推送的文件增删行数统计（可选，单轮变更条数据源） */
@@ -578,8 +586,8 @@ export interface BackendEvent {
   error?: string | null;
   /** agent_wizard_init_response 推送的工具列表（可选） */
   tools?: { name: string; description: string }[];
-  /** agent_wizard_init_response 推送的模型列表（可选，后端返回 name 字段） */
-  models?: { name: string; label: string }[];
+  /** agent_wizard_init_response 推送的模型列表（可选，name 为 env_N.model_M 引用或 'inherit'） */
+  models?: AgentModelOption[];
   /** agent_generate_response 返回的 LLM 生成草稿（可选） */
   agent?: { identifier: string; when_to_use: string; system_prompt: string };
   /** agent_wizard_result 的成功标志（可选） */
@@ -706,6 +714,89 @@ export interface WebWorkspaceItem {
   is_default: boolean;
   /** 目录当前是否可用（存在且为文件夹） */
   available: boolean;
+}
+
+/**
+ * agent 可选模型项接口
+ *
+ * agent_wizard_init_response.models 的单个条目；name 为写入 agent
+ * frontmatter 的模型值（'inherit' 或 env_N.model_M 引用）。
+ */
+export interface AgentModelOption {
+  /** 'inherit' 或 env_N.model_M 模型引用 */
+  name: string;
+  /** 显示名（模型名） */
+  label: string;
+  /** 该模型是否声明了图片（多模态）能力 */
+  supports_images?: boolean;
+}
+
+/**
+ * agent 条目接口（web_agents 推送的单个代理）
+ */
+export interface AgentEntry {
+  /** 代理类型标识 */
+  name: string;
+  /** 使用时机描述 */
+  description: string;
+  /** 定义来源：builtin / user / plugin */
+  source: 'builtin' | 'user' | 'plugin';
+  /** 作用域：builtin（内置）/ user（全局）/ project（项目级）/ plugin */
+  scope: 'builtin' | 'user' | 'project' | 'plugin';
+  /** 项目级代理所属工作区路径（其余作用域为 null） */
+  workspace: string | null;
+  /** 显示颜色 */
+  color: string | null;
+  /** 是否始终后台运行 */
+  background: boolean;
+  /** goal 专用标记（仅内置 goal-verifier 为 true，前端展示"Goal 专用"徽标） */
+  goal_specific: boolean;
+  /** 生效模型引用（env_N.model_M）；null 表示继承当前会话模型 */
+  model: string | null;
+  /** 生效模型名（解析后的裸名，用于展示） */
+  model_resolved: string | null;
+  /** 该模型是否声明了图片（多模态）能力；null 表示继承/未知 */
+  supports_images: boolean | null;
+  /** 定义文件所在目录（用户/项目级） */
+  base_dir: string | null;
+  /** 定义文件名（不含 .md） */
+  filename: string | null;
+  /** 工具白名单（null 表示全部工具） */
+  tools: string[] | null;
+  /** 思考强度 */
+  effort: string | null;
+  /** 权限模式 */
+  permission_mode: string | null;
+  /** 最大轮次 */
+  max_turns: number | null;
+  /** 系统提示词（markdown body） */
+  system_prompt: string | null;
+}
+
+/**
+ * 项目级代理分组接口（web_agents 推送的项目维度条目）
+ */
+export interface AgentProjectGroup {
+  /** 工作区路径 */
+  workspace: string;
+  /** 显示名（目录 basename） */
+  name: string;
+  /** 是否为默认工作区 */
+  is_default: boolean;
+  /** 目录当前是否可用 */
+  available: boolean;
+  /** 该工作区下的项目级代理 */
+  agents: AgentEntry[];
+}
+
+/**
+ * 代理目录接口（web_agents 事件载荷）
+ */
+export interface AgentCatalog {
+  /** 内置 + 全局（用户级）+ 插件代理 */
+  global: AgentEntry[];
+  /** 按工作区分组的项目级代理 */
+  projects: AgentProjectGroup[];
 }
 
 /**

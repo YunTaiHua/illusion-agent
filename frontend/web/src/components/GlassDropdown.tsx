@@ -196,11 +196,12 @@ export function GlassDropdown({
         disabled={disabled}
         onClick={handleTriggerClick}
         onMouseDown={handleTriggerMouseDown}
+        title={selectedLabel}
         className={`w-full px-3 py-2 rounded-md bg-surface-card-alt border border-border-light text-content-primary text-sm text-left transition-all duration-200 cursor-pointer flex items-center justify-between gap-2 disabled:opacity-50 disabled:cursor-not-allowed ${
           open ? 'border-primary shadow-glow' : 'focus:border-primary focus:shadow-glow'
         }`}
       >
-        <span className={selectedLabel === (placeholder ?? '') ? 'text-content-disabled' : ''}>
+        <span className={`truncate ${selectedLabel === (placeholder ?? '') ? 'text-content-disabled' : ''}`}>
           {selectedLabel}
         </span>
         <svg
@@ -226,6 +227,7 @@ export function GlassDropdown({
                 key={opt.value}
                 type="button"
                 onClick={() => handleSelect(opt.value)}
+                title={opt.label}
                 className={`w-full text-left px-3 py-2 border border-transparent hover:border-border-light text-sm transition-colors cursor-pointer flex items-center gap-2 ${
                   isSelected
                     ? 'text-primary font-medium glass-option-hover'
