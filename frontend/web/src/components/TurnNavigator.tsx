@@ -163,6 +163,9 @@ const TurnNavigator = memo(function TurnNavigator({ lang, items, activeTurn, bus
                 className="group/nav flex h-[10px] w-full items-center cursor-pointer"
               >
                 {/* 统一 2px 细刻度，宽度内联样式（px 定值）随悬停阶梯过渡 */}
+                {/* 刻度用主题感知的浅色实色（nav-tick-* 变量，浅/深主题
+                    各有合适亮度），与主色高亮拉开对比——若刻度本身是
+                    深灰，主色绿在深灰中不够醒目 */}
                 <span
                   style={{ width: `${width}px` }}
                   className={`h-[2px] rounded-full transition-[width,background-color] duration-200 ${
@@ -171,8 +174,8 @@ const TurnNavigator = memo(function TurnNavigator({ lang, items, activeTurn, bus
                       : highlight
                         ? 'bg-primary'
                         : item.loaded
-                          ? 'bg-content-secondary group-hover/nav:bg-content-primary'
-                          : 'bg-[var(--border-medium)] group-hover/nav:bg-content-secondary'
+                          ? 'bg-[var(--nav-tick-loaded)] group-hover/nav:bg-[var(--text-disabled)]'
+                          : 'bg-[var(--nav-tick-unloaded)] group-hover/nav:bg-[var(--nav-tick-loaded)]'
                   }`}
                 />
               </button>

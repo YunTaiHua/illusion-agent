@@ -1064,6 +1064,7 @@ export default function App() {
           onForkTurn={handleForkTurn}
           turnOutline={session.turnOutline} firstLoadedTurn={session.firstLoadedTurn}
           loadingHistory={session.loadingHistory} onRequestHistory={session.requestHistory}
+          transcriptReplaceTick={session.transcriptReplaceTick}
           onOpenSessionFile={handleOpenSessionFile}>
           {/* 欢迎态：输入框 + 工具栏注入到标题/副标题下方（ChatArea 内渲染） */}
           {welcomeVisible && composer}

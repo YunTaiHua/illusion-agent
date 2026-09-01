@@ -12,15 +12,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from illusion.ui.web.ws_web_api import (
-    build_turn_outline,
-    paginate_replay_page,
-    slice_replay_items_by_turns,
-)
 from illusion.services.session_storage import (
     _is_real_turn_user_record,
     fork_session,
     session_dir_for,
+)
+from illusion.ui.web.ws_web_api import (
+    build_turn_outline,
+    paginate_replay_page,
+    slice_replay_items_by_turns,
 )
 
 

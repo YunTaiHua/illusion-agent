@@ -260,6 +260,8 @@ interface SessionViewState {
   stopping: boolean;
   /** 全量轮次大纲（web_restore_completed 携带；null 表示无后端大纲，导航退化为本地轮次） */
   turnOutline: TurnOutlineEntry[] | null;
+  /** 转录整体替换信号（rewind/compact，Date.now()）；ChatArea 据此强制回底部 */
+  transcriptReplaceTick: number;
   /** 已载入最小轮号（1-based；分页恢复的头部边界） */
   firstLoadedTurn: number;
   /** 历史分页加载中（导航跳转/加载更早按钮的防重标记） */
@@ -326,6 +328,8 @@ export interface WebSocketSessionState {
   firstLoadedTurn: number;
   /** 历史轮次分页加载中（导航跳转/加载更早按钮防重标记） */
   loadingHistory: boolean;
+  /** 转录整体替换信号（rewind/compact，Date.now()）；ChatArea 据此强制回底部 */
+  transcriptReplaceTick: number;
   /** 加载更早的轮次分页（在途/已全载入时自动跳过） */
   requestHistory: () => void;
   /** 分叉当前会话（turns = 保留前 N 轮；后端完成后经 web_restore_completed 自动切换） */
@@ -507,6 +511,7 @@ function createSessionView(id: string, cwd: string = ''): SessionViewState {
     turnOutline: null,
     firstLoadedTurn: 1,
     loadingHistory: false,
+    transcriptReplaceTick: 0,
   };
 }
 
@@ -1584,7 +1589,16 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
           clearAssistantDelta(sid);
           // 整体替换（rewind/compact）：本地轮次即权威，作废后端大纲
           // （其含已被回退/压缩掉的轮次，保留会导致导航序号错位）
-          patchView(sid, { items: stripReplayItems(items), pendingToolCalls: [], turnOutline: null, firstLoadedTurn: 1, loadingHistory: false });
+          patchView(sid, {
+            items: stripReplayItems(items),
+            pendingToolCalls: [],
+            turnOutline: null,
+            firstLoadedTurn: 1,
+            loadingHistory: false,
+            // bump 替换信号：ChatArea 收到后强制回到底部（rewind 时用户
+            // 往往停在旧消息位置且已停止跟随，不清零会留在错误的相对位置）
+            transcriptReplaceTick: Date.now(),
+          });
           return;
         }
 
@@ -1695,6 +1709,12 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
           const page = evt.web_history;
           const view = viewsRef.current[sid];
           if (!view || !page) {
+            return;
+          }
+          // 大纲已被作废（rewind/compact/clear 后的迟到响应）：该页基于
+          // 旧转录计算，前插会污染重置后的转录——直接丢弃
+          if (!view.turnOutline) {
+            patchView(sid, { loadingHistory: false });
             return;
           }
           if (page.error || !Array.isArray(page.items) || page.items.length === 0 || page.first_turn == null) {
@@ -1963,7 +1983,10 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
         } else if (evt.web_query_kind === 'transcript_replace' && Array.isArray(payload)) {
           const target = routeSessionId(evt) ?? activeSessionIdRef.current;
           if (target) {
-            patchView(target, { items: payload as TranscriptItem[] });
+            patchView(target, {
+              items: payload as TranscriptItem[],
+              transcriptReplaceTick: Date.now(),
+            });
           }
         }
         if (sid) patchView(sid, { busy: false });
@@ -2112,6 +2135,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       turnOutline: view?.turnOutline ?? null,
       firstLoadedTurn: view?.firstLoadedTurn ?? 1,
       loadingHistory: view?.loadingHistory ?? false,
+      transcriptReplaceTick: view?.transcriptReplaceTick ?? 0,
       requestHistory, forkSession,
       subscribeFileMentions, requestFileMentions,
       filePreview, filePreviewLoading,

@@ -384,8 +384,10 @@ interface ChatAreaProps {
   firstLoadedTurn: number;
   /** 历史轮次分页加载中 */
   loadingHistory: boolean;
-  /** 加载更早的轮次分页（导航跳转未载入轮 / 加载更早按钮共用） */
+  /** 加载更早的轮次分页（导航跳转未载入轮 / 加载更多按钮共用） */
   onRequestHistory: () => void;
+  /** 转录整体替换信号（rewind/compact 时 bump）：收到后强制回到底部 */
+  transcriptReplaceTick: number;
   /** 点击变更文件打开预览：added/modified 传 'diff'，否则 + 'content'（引用稳定） */
   onOpenSessionFile: (path: string, kind: 'content' | 'diff') => void;
   /** 欢迎态注入到标题下方的内容（输入框 + 工具栏卡片；非欢迎态不渲染） */
@@ -403,7 +405,7 @@ interface ChatAreaProps {
 export default function ChatArea({
   lang, staticItems, assistantBuffer, streamingReasoning, pendingToolCalls, reasoningStreaming, busy, connected,
   modal, onPermissionResponse, onQuestionResponse, restoringSessionId, onRewindToTurn, onRegenerate,
-  onForkTurn, turnOutline, firstLoadedTurn, loadingHistory, onRequestHistory, onOpenSessionFile, children,
+  onForkTurn, turnOutline, firstLoadedTurn, loadingHistory, onRequestHistory, transcriptReplaceTick, onOpenSessionFile, children,
 }: ChatAreaProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showScrollDown, setShowScrollDown] = useState(false);
@@ -620,15 +622,40 @@ export default function ChatArea({
     }
   }, [unloadedTurns, localHidden]);
 
-  // 服务端分页与视口补偿（同一布局 effect 内完成，避免 items 前插与
-  // 窗口扩大的两段式高度增长把锚点消耗在零增长段）：
-  // - firstLoadedTurn 前移 → 同帧扩大本地可见窗口（新载入轮次立即可见）；
-  // - 锚点存在且内容增高（历史前插/本地展开）→ 按高度差下移 scrollTop，
-  //   用户当前阅读的内容保持在原视口位置（不跳动）；5s 未消费自动作废。
+  // 转录变更的统一布局编排（单 effect 内区分两类变更，避免相互打架）：
+  // - 整体替换（rewind/compact，transcriptReplaceTick 变化）：重置本地
+  //   可见窗口到默认折叠态，并无视跟随状态强制回到底部——用户往往停在
+  //   被回退消息处且已停止跟随，不强制会留在错误的相对位置。
+  // - 历史前插（加载更多，firstLoadedTurn 前移）：同帧扩大本地可见窗口
+  //   （新载入轮次立即可见），并按高度锚点补偿 scrollTop——用户当前阅读
+  //   的内容保持在原视口位置（不跳动）；锚点 5s 未消费自动作废。
+  // expandedCount 的重置/扩大在本 effect 内同步触发，随下一次布局提交
+  // 一起完成高度变化，浏览器对收缩的 scrollTop 钳制天然落在新列表底部。
   const prevFirstLoadedRef = useRef(firstLoadedTurn);
   const scrollAnchorAtRef = useRef(0);
+  const prevReplaceTickRef = useRef(transcriptReplaceTick);
   useLayoutEffect(() => {
     const el = scrollRef.current;
+    const isReplace = transcriptReplaceTick !== prevReplaceTickRef.current;
+    prevReplaceTickRef.current = transcriptReplaceTick;
+    if (isReplace) {
+      prevFirstLoadedRef.current = firstLoadedTurn;
+      scrollAnchorRef.current = null;
+      // 挂起的未载入轮跳转一并取消：目标轮已随回退消失或处于折叠区，
+      // 不清除会让该刻度脉冲永久滞留、行出现时中途拽走视口
+      pendingJumpRef.current = null;
+      setBusyJumpTurn(null);
+      setExpandedCount(0);
+      followingRef.current = true;
+      setShowScrollDown(false);
+      setActiveTurn(firstLoadedTurn + turns.length - 1);
+      if (el) {
+        programmaticScrollRef.current = true;
+        el.scrollTop = el.scrollHeight;
+        lastScrollTopRef.current = el.scrollHeight;
+      }
+      return;
+    }
     const deltaTurns = prevFirstLoadedRef.current - firstLoadedTurn;
     prevFirstLoadedRef.current = firstLoadedTurn;
     if (deltaTurns > 0) {
@@ -648,7 +675,7 @@ export default function ChatArea({
       el.scrollTop += grew;
       scrollAnchorRef.current = null;
     }
-  }, [staticItems, firstLoadedTurn, expandedCount]);
+  }, [staticItems, firstLoadedTurn, expandedCount, transcriptReplaceTick, turns.length]);
 
   // 转录变化（恢复/历史前插/新轮）后同步一次阅读线轮次
   // （无滚动事件时导航高亮也要对齐）

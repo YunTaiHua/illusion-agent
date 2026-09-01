@@ -68,6 +68,10 @@
   --scrollbar-thumb: #aab2c0;
   --scrollbar-thumb-hover: #8c96a6;
 
+  /* 轮次导航刻度：已载入比未载入深一档，均为主色高亮的弱对比底色 */
+  --nav-tick-loaded: #b6bdc9;
+  --nav-tick-unloaded: #d4d9e2;
+
   /* 粉彩色块 */
   --pastel-mint: #d4f5e0;
   --pastel-lilac: #e8dff5;
@@ -143,6 +147,10 @@
   /* 滚动条滑块：深色下保持与边框相近但略亮，清晰可辨 */
   --scrollbar-thumb: #3c3c44;
   --scrollbar-thumb-hover: #4c4c55;
+
+  /* 轮次导航刻度：深色下已载入比未载入亮一档，保持可见性 */
+  --nav-tick-loaded: #56565f;
+  --nav-tick-unloaded: #3a3a43;
 
   /* 粉彩色块（深色模式下降低饱和度、提高亮度以适配深底） */
   --pastel-mint: #2a4a3a;
