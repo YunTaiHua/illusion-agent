@@ -298,6 +298,61 @@ async def resume_handler(args: str, context: CommandContext) -> CommandResult:
     )
 
 
+async def fork_handler(args: str, context: CommandContext) -> CommandResult:
+    """分叉当前会话：复制（可截断）为一份新会话并切换过去。
+
+    用法：
+        /fork           — 复制完整会话
+        /fork N         — 只保留前 N 个轮次后分叉
+
+    fork 只读磁盘上的 context.jsonl（每轮结束已落盘）；分叉出的新会话
+    与源会话互不影响，源会话的运行时与文件历史保持原样。
+    """
+    from illusion.services.checkpoint_store import CheckpointStore
+    from illusion.services.session_storage import (
+        fork_session,
+        read_meta,
+        session_dir_for,
+        write_index_to,
+    )
+
+    tokens = args.strip().split()
+    turns_to_keep: int | None = None
+    if tokens:
+        try:
+            turns_to_keep = max(1, int(tokens[0]))
+        except ValueError:
+            return CommandResult(message="Usage: /fork [TURNS]")
+
+    source_sid = context.session_id
+    if not source_sid or read_meta(context.cwd, source_sid) is None:
+        return CommandResult(message="No session to fork. Send a message first.")
+
+    new_sid = await asyncio.to_thread(
+        fork_session, context.cwd, source_sid, turns_to_keep
+    )
+    if not new_sid:
+        return CommandResult(message=f"Session not found: {source_sid}")
+
+    # 恢复新会话（与 /resume 相同的落载管线）
+    session_dir = session_dir_for(context.cwd, new_sid)
+    store = CheckpointStore(session_dir, new_sid)
+    result = await store.restore()
+    context.engine.attach_session(store)
+    context.engine.apply_restore(result)
+    context.engine.load_file_history(checkpoint_count=store.next_checkpoint_id)
+    write_index_to(session_dir, new_sid)
+
+    scope = f" (kept first {turns_to_keep} turn(s))" if turns_to_keep else ""
+    return CommandResult(
+        message=f"Forked session {source_sid} -> {new_sid}{scope}",
+        replay_messages=result.messages,
+        restored_session_id=new_sid,
+        refresh_state=True,
+        clear_screen=True,
+    )
+
+
 async def rewind_handler(args: str, context: CommandContext) -> CommandResult:
     """回退对话回合
 

@@ -31,6 +31,7 @@ meta.json 以及 pending 类文件。
 from __future__ import annotations
 
 import json
+import re
 import time
 from hashlib import sha1
 from pathlib import Path
@@ -39,6 +40,9 @@ from typing import Any
 from illusion.config.paths import get_sessions_dir
 from illusion.engine.messages import ConversationMessage
 from illusion.utils.atomic_write import atomic_write_text
+
+# 会话标题/摘要中的 fork 备份前缀（如 "[fork 3] 原标题"）
+_FORK_PREFIX_RE = re.compile(r"^\[fork (\d+)\]")
 
 
 class InvalidSessionIdError(ValueError):
@@ -261,6 +265,277 @@ def list_session_snapshots(cwd: str | Path, limit: int = 20) -> list[dict[str, A
         })
     sessions.sort(key=lambda s: s.get("updated_at", 0), reverse=True)
     return sessions[:limit]
+
+
+def _is_real_turn_user_record(record: dict[str, Any]) -> bool:
+    """判断 context.jsonl 的一行记录是否为"真实轮次"的用户消息。
+
+    与前端轮次分组（build_replay_items 过滤 + useStableTurns 切分）口径
+    一致：role=user、有非空文本、非后台任务完成通知、非 goal 注入消息。
+    fork 截断与轮次大纲都以此为轮界。
+
+    Args:
+        record: 反序列化后的 JSONL 行
+
+    Returns:
+        bool: 是否为开轮的用户消息
+    """
+    if record.get("role") != "user":
+        return False
+    message = record.get("message")
+    if not isinstance(message, dict):
+        return False
+    text = ""
+    for block in message.get("content") or []:
+        if isinstance(block, dict) and block.get("type") == "text":
+            text += block.get("text", "")
+    text = text.strip()
+    if not text:
+        return False
+    from illusion.goal.prompts import is_goal_system_message
+    from illusion.tasks.types import is_task_notification
+
+    return not is_task_notification(text) and not is_goal_system_message(text)
+
+
+def _fork_file_history(
+    src_dir: Path,
+    new_dir: Path,
+    source_sid: str,
+    new_sid: str,
+    max_checkpoint_id: int | None = None,
+) -> None:
+    """复制文件历史状态与备份目录到新会话（fork 后 /rewind both 可用）。
+
+    两部分缺一不可：
+    - ``{会话目录}/file_history.json``：快照索引。内嵌的 session_id
+      必须改写为新 id——load() 以它构建 FileHistoryState.session_id，
+      rewind_to 用其定位备份目录，不改写会导致 fork 会话的文件回退
+      误读源会话的备份。截断 fork 时（max_checkpoint_id 非 None）
+      同步丢弃 checkpoint_id >= 上限的快照并重写 turn_counter，使
+      落盘状态自洽——不能依赖载入方的 checkpoint_count 对齐，否则
+      任何未对齐的载入路径（如 _ensure_file_history）都会让 rewind
+      把文件恢复到 fork 点之后的状态；
+    - ``~/.illusion/data/file-history/{sid}/``：文件内容备份。整目录
+      复制（被裁掉快照引用的多余备份无害，后续 rewind 的清理逻辑
+      会自然回收）。
+
+    任一部分缺失/损坏都静默跳过：fork 会话降级为无文件历史（仅对话
+    可回退），不阻断分叉主流程。
+
+    Args:
+        src_dir: 源会话数据目录
+        new_dir: 新会话数据目录（已创建）
+        source_sid: 源会话 ID
+        new_sid: 新会话 ID
+        max_checkpoint_id: 保留快照的 checkpoint_id 上界（不含）；
+            None = 全量保留
+    """
+    import shutil as _shutil
+
+    from illusion.config.paths import get_config_dir
+
+    src_state = src_dir / "file_history.json"
+    if src_state.is_file():
+        try:
+            data = json.loads(src_state.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+            data = None
+        if isinstance(data, dict):
+            data["session_id"] = new_sid
+            if max_checkpoint_id is not None:
+                snapshots = [
+                    s for s in data.get("snapshots", [])
+                    if isinstance(s, dict)
+                    and s.get("checkpoint_id", 0) < max_checkpoint_id
+                ]
+                data["snapshots"] = snapshots
+                data["turn_counter"] = len(snapshots)
+            try:
+                atomic_write_text(
+                    new_dir / "file_history.json",
+                    json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                )
+            except OSError:
+                pass
+    src_backups = get_config_dir() / "file-history" / source_sid
+    if src_backups.is_dir():
+        try:
+            _shutil.copytree(
+                src_backups, get_config_dir() / "file-history" / new_sid,
+                dirs_exist_ok=True,
+            )
+        except OSError:
+            pass  # 备份复制失败不阻断 fork（rewind both 降级为仅回退对话）
+
+
+def _next_fork_number(cwd: str | Path) -> int:
+    """返回下一个可用的 fork 备份序号（全项目已有 "[fork N]" 最大值 + 1）。
+
+    扫描项目全部会话 meta 的 title 与 summary（fork 无 title 时前缀写在
+    summary 上，两处都要统计）。取最大而非计数，避免删除中间 fork 后
+    序号复用产生重名。
+
+    Args:
+        cwd: 项目工作目录
+
+    Returns:
+        int: 新 fork 的序号（无任何已有 fork 时为 1）
+    """
+    project_dir = get_project_session_dir_no_create(cwd)
+    if not project_dir.exists():
+        return 1
+    max_n = 0
+    for sub in project_dir.iterdir():
+        meta_path = sub / "meta.json"
+        if not meta_path.is_file():
+            continue
+        try:
+            data = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        for value in (data.get("title"), data.get("summary")):
+            if isinstance(value, str):
+                match = _FORK_PREFIX_RE.match(value.strip())
+                if match:
+                    max_n = max(max_n, int(match.group(1)))
+    return max_n + 1
+
+
+def _strip_fork_prefix(text: str) -> str:
+    """去掉文本开头堆积的 "[fork N]" 前缀（fork of fork 场景只保留一层）。"""
+    value = text.strip()
+    while True:
+        match = _FORK_PREFIX_RE.match(value)
+        if not match:
+            break
+        value = value[match.end():].lstrip()
+    return value
+
+
+def _mark_meta_as_fork(meta: dict[str, Any], fork_no: int) -> None:
+    """给 fork 会话的 meta 打上 "[fork N]" 备份前缀。
+
+    有 title 加在 title 前（title 列表展示优先，且 /rename 前持续存在）；
+    无 title 加在 summary 前（列表回退展示 summary）。源文本先剥离已
+    有前缀，fork of fork 不产生 "[fork 3] [fork 2] ..." 叠加。
+    """
+    prefix = f"[fork {fork_no}] "
+    title = str(meta.get("title") or "").strip()
+    if title:
+        meta["title"] = (prefix + _strip_fork_prefix(title))[:80]
+        return
+    summary = str(meta.get("summary") or "").strip()
+    if summary:
+        meta["summary"] = (prefix + _strip_fork_prefix(summary))[:80]
+
+
+def fork_session(
+    cwd: str | Path,
+    source_session_id: str,
+    turns_to_keep: int | None = None,
+) -> str | None:
+    """分叉会话：把源会话（可截断到前 N 轮）复制为一份新会话。
+
+    逐行拷贝源 context.jsonl 到新 {sid}/ 目录；turns_to_keep=N 时在
+    "第 N+1 个真实轮次的用户消息"处截断，并连同截去其轮首 _checkpoint
+    行（checkpoint 由 query_engine 在每条用户消息前追加，紧邻 user 行），
+    保证 fork 后 /rewind 的轮次计数不偏移。meta 基于源改写（新 id、
+    时间戳、重算的消息/轮次计数、forked_from 溯源），title/summary 打上
+    "[fork N]" 备份前缀（无 title 时写在 summary 前），文件历史
+    （file_history.json + 备份目录）一并复制，fork 不争夺 index.json 的
+    latest（激活/恢复新会话时才写入）。
+
+    Args:
+        cwd: 项目工作目录
+        source_session_id: 源会话 ID
+        turns_to_keep: 保留前 N 个真实轮次（None = 全量复制）
+
+    Returns:
+        str | None: 新会话 ID；源会话不存在时返回 None
+    """
+    _validate_session_id(source_session_id)
+    src_dir = session_dir_for(cwd, source_session_id)
+    src_file = src_dir / "context.jsonl"
+    if not src_file.is_file():
+        return None
+
+    from uuid import uuid4
+
+    new_session_id = uuid4().hex[:12]
+    new_dir = get_project_session_dir(cwd) / new_session_id
+    new_dir.mkdir(parents=True, exist_ok=True)
+
+    kept_lines: list[str] = []
+    message_count = 0
+    turn_count = 0
+    turns_seen = 0
+    checkpoint_count = 0
+    # 截断时需要回退的最后 一个_checkpoint 行位置（属于第 N+1 轮轮首）
+    last_checkpoint_idx = -1
+    truncated = False
+    try:
+        with open(src_file, encoding="utf-8") as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    record = json.loads(stripped)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                if record.get("role") == "_checkpoint":
+                    last_checkpoint_idx = len(kept_lines)
+                elif _is_real_turn_user_record(record):
+                    turns_seen += 1
+                    if turns_to_keep is not None and turns_seen > turns_to_keep:
+                        truncated = True
+                        break
+                if record.get("role") in ("user", "assistant"):
+                    message_count += 1
+                if record.get("role") == "_checkpoint":
+                    checkpoint_count += 1
+                kept_lines.append(stripped)
+    except OSError:
+        # 读源失败：清理半成品目录，返回 None（不产生损坏的新会话）
+        import shutil
+
+        shutil.rmtree(new_dir, ignore_errors=True)
+        return None
+
+    if truncated and last_checkpoint_idx >= 0:
+        # 截掉第 N+1 轮轮首的 _checkpoint 行（已拷入 kept_lines 尾部）
+        kept_lines = kept_lines[:last_checkpoint_idx]
+        checkpoint_count -= 1
+        turn_count = turns_to_keep or 0
+    else:
+        turn_count = turns_seen
+
+    with open(new_dir / "context.jsonl", "w", encoding="utf-8") as f:
+        f.writelines(kept + "\n" for kept in kept_lines)
+
+    now = time.time()
+    meta: dict[str, Any] = dict(read_meta_from(src_dir, source_session_id) or {})
+    meta.update({
+        "session_id": new_session_id,
+        "created_at": now,
+        "updated_at": now,
+        "message_count": message_count,
+        "turn_count": turn_count,
+        "forked_from": source_session_id,
+    })
+    # 备份标记：title/summary 加 "[fork N]" 前缀（N 为全项目 fork 序号）
+    _mark_meta_as_fork(meta, _next_fork_number(cwd))
+    write_meta_to(new_dir, new_session_id, meta)
+    # 文件历史（快照索引 + 内容备份）一并复制并按保留的 checkpoint 截断，
+    # fork 后 /rewind both 可用且不会恢复到 fork 点之后的状态
+    _fork_file_history(
+        src_dir, new_dir, source_session_id, new_session_id,
+        max_checkpoint_id=checkpoint_count if truncated else None,
+    )
+    return new_session_id
 
 
 def delete_session_by_id(cwd: str | Path, session_id: str) -> bool:

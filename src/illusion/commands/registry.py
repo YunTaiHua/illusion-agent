@@ -217,6 +217,7 @@ def create_default_command_registry() -> CommandRegistry:
         compact_handler,
         context_handler,
         delete_handler,
+        fork_handler,
         new_handler,
         rename_handler,
         resume_handler,
@@ -251,6 +252,7 @@ def create_default_command_registry() -> CommandRegistry:
     registry.register(SlashCommand("memory", "Inspect and manage project memory, or toggle the memory feature", memory_handler))
     registry.register(SlashCommand("hooks", "Show configured hooks", hooks_handler))
     registry.register(SlashCommand("resume", "Restore the latest saved session", resume_handler, usage="/resume [session_id|#N]"))
+    registry.register(SlashCommand("fork", "Fork the current session into a new one (optionally keeping only the first N turns)", fork_handler, usage="/fork [TURNS]"))
     registry.register(SlashCommand("export", "Export the current transcript", export_handler))
     registry.register(SlashCommand("share", "Create a shareable transcript snapshot", share_handler))
     registry.register(SlashCommand("copy", "Copy the latest response or provided text", copy_handler))

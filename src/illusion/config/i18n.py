@@ -627,6 +627,7 @@ COMMAND_DESCRIPTIONS_ZH: dict[str, str] = {
     "memory": "查看和管理项目记忆",
     "hooks": "显示已配置 hooks",
     "resume": "恢复最近保存的会话",
+    "fork": "分叉当前会话为新会话（可只保留前 N 轮）",
     "export": "导出当前转录",
     "share": "创建可分享的转录快照",
     "copy": "复制最新回复或指定文本",
