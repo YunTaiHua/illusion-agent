@@ -159,7 +159,7 @@ def _get_agents_dir(scope: str, cwd: str | Path) -> Path:
 
 def validate_agent_definition(
     fields: dict[str, Any],
-    cwd: str | Path = ".",
+    cwd: str | None = None,
 ) -> dict[str, str]:
     """校验代理定义字段，返回错误字典。
 
@@ -553,7 +553,7 @@ async def generate_agent_from_description(
     )
 
     chunks: list[str] = []
-    async for event in api_client.stream_message(request):
+    async for event in api_client.stream_message(request):  # type: ignore[attr-defined]
         text = getattr(event, "text", None)
         if text:
             chunks.append(text)

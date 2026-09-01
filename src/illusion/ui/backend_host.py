@@ -1475,12 +1475,12 @@ class ReactBackendHost:
                 ("整合模型已设置为 " + label) if zh else f"Dream model set to {label}"
             )
             return True
-        line = self._build_select_command_line(command, selected)
-        if line is None:
+        built_line = self._build_select_command_line(command, selected)
+        if built_line is None:
             await self._emit(BackendEvent(type="error", message=f"Unknown select command: {command_name}"))
             await self._emit(BackendEvent(type="line_complete"))
             return True
-        return await self._process_line(line, transcript_line=f"/{command}")
+        return await self._process_line(built_line, transcript_line=f"/{command}")
 
     def _build_select_command_line(self, command: str, value: str) -> str | None:
         """构建选择命令的实际命令字符串。"""

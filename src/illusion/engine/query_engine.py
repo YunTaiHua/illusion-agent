@@ -213,7 +213,7 @@ class QueryEngine:
         if resolver is None:
             return None
         try:
-            return resolver()
+            return resolver()  # type: ignore[no-any-return]
         except Exception:
             logger.exception("Failed to resolve model capabilities")
             return None

@@ -1402,14 +1402,14 @@ class WebApiDispatcher:
         from illusion.config.paths import get_config_dir
         from illusion.services import workspace_registry
 
-        dirs: set[str] = {get_config_dir() / "agents"}
+        dirs: set[str] = {str((get_config_dir() / "agents").resolve())}
         # 默认工作区（settings.working_directory）未注册时也属于项目级候选
         try:
             for view in workspace_registry.resolve_workspace_views():
-                dirs.add(Path(view["path"]) / ".illusion" / "agents")
+                dirs.add(str((Path(view["path"]) / ".illusion" / "agents").resolve()))
         except Exception:
             log.exception("读取工作区注册表失败，仅限用户级目录")
-        return {_os.path.normcase(str(p.resolve())) for p in dirs}
+        return {_os.path.normcase(p) for p in dirs}
 
     def _validate_model_value(self, model: Any) -> tuple[bool, str]:
         """规范化模型更新值：inherit/空为继承；其余必须是合法 env 引用。

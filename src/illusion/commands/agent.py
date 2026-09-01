@@ -141,8 +141,8 @@ def _handle_agent_model(args: list[str], context: CommandContext) -> CommandResu
         return CommandResult(message="\n".join(lines))
 
     name = args[0]
-    agent = next((a for a in agents if a.name == name), None)
-    if agent is None:
+    target = next((a for a in agents if a.name == name), None)
+    if target is None:
         return CommandResult(
             message=(
                 f"Agent '{name}' not found. Available agents: "
@@ -150,13 +150,13 @@ def _handle_agent_model(args: list[str], context: CommandContext) -> CommandResu
             )
         )
 
-    override = str(settings.agent_models.get(agent.name, "") or "").strip()
-    current = override or (agent.model or "inherit")
+    override = str(settings.agent_models.get(target.name, "") or "").strip()
+    current = override or (target.model or "inherit")
     if len(args) < 2:
         env_key, _mn, ref = settings.resolve_agent_model_spec(current)
         display = ref or current
         origin = " (settings.json)" if override else (
-            " (.md)" if agent.model else ""
+            " (.md)" if target.model else ""
         )
         return CommandResult(
             message=(
@@ -178,12 +178,12 @@ def _handle_agent_model(args: list[str], context: CommandContext) -> CommandResu
             )
         target_ref = resolved
 
-    if agent.source == "builtin":
+    if target.source == "builtin":
         # 内置 agent：仅固化模型到 settings.json，其余配置不可改
         if target_ref == "inherit":
-            settings.agent_models.pop(agent.name, None)
+            settings.agent_models.pop(target.name, None)
         else:
-            settings.agent_models[agent.name] = target_ref
+            settings.agent_models[target.name] = target_ref
         save_settings(settings)
         return CommandResult(
             message=(
@@ -196,7 +196,7 @@ def _handle_agent_model(args: list[str], context: CommandContext) -> CommandResu
     from illusion.services.agent_creator import update_agent_definition_file
 
     try:
-        path = update_agent_definition_file(agent, {"model": target_ref})
+        path = update_agent_definition_file(target, {"model": target_ref})
     except (ValueError, OSError) as exc:
         return CommandResult(message=f"Failed to update agent: {exc}")
     return CommandResult(
