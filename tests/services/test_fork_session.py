@@ -21,13 +21,13 @@ import pytest
 
 from illusion.engine.messages import ConversationMessage
 from illusion.services import file_history as fh
+from illusion.services.checkpoint_store import CheckpointStore
 from illusion.services.session_storage import (
     fork_session,
     read_meta,
     session_dir_for,
     write_meta,
 )
-from illusion.services.checkpoint_store import CheckpointStore
 from illusion.tools import create_default_tool_registry
 
 

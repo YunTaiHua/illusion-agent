@@ -341,12 +341,14 @@ def _fork_file_history(
     from illusion.config.paths import get_config_dir
 
     src_state = src_dir / "file_history.json"
+    data: dict[str, Any] | None = None
     if src_state.is_file():
         try:
-            data = json.loads(src_state.read_text(encoding="utf-8"))
+            loaded = json.loads(src_state.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError, OSError):
-            data = None
-        if isinstance(data, dict):
+            loaded = None
+        if isinstance(loaded, dict):
+            data = loaded
             data["session_id"] = new_sid
             if max_checkpoint_id is not None:
                 snapshots = [
@@ -356,33 +358,25 @@ def _fork_file_history(
                 ]
                 data["snapshots"] = snapshots
                 data["turn_counter"] = len(snapshots)
-            try:
-                atomic_write_text(
-                    new_dir / "file_history.json",
-                    json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-                )
-            except OSError:
-                pass
-    else:
-        # 源会话无文件历史（未编辑过任何文件）：写入一份空基线，使 fork
-        # 目录的文件形态与 live 会话一致；后续编辑照常从空状态开始跟踪
-        try:
-            atomic_write_text(
-                new_dir / "file_history.json",
-                json.dumps({
-                    "version": 1,
-                    "session_id": new_sid,
-                    "cwd": workspace,
-                    "turn_counter": 0,
-                    "tracked_files": [],
-                    "snapshots": [],
-                }, indent=2, ensure_ascii=False) + "\n",
-            )
-        except OSError:
-            pass
-    # fork 的备份目录始终生成（live 会话在首次 track_edit 时创建，这里
-    # 提前建好使目录形态一致）；源有备份则逐文件复制——单文件失败只记
-    # 警告不阻断其余备份，也不再静默吞掉整个复制过程
+    if data is None:
+        # 源会话无文件历史（未编辑过任何文件）或状态文件损坏：写入一份
+        # 空基线，使 fork 目录的文件形态与 live 会话一致；后续编辑照常
+        # 从空状态开始跟踪
+        data = {
+            "version": 1,
+            "session_id": new_sid,
+            "cwd": workspace,
+            "turn_counter": 0,
+            "tracked_files": [],
+            "snapshots": [],
+        }
+    try:
+        atomic_write_text(
+            new_dir / "file_history.json",
+            json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+        )
+    except OSError:
+        pass
     backups_root = get_config_dir() / "file-history"
     src_backups = backups_root / source_sid
     new_backups_path = backups_root / new_sid
