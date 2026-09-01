@@ -62,11 +62,15 @@ export default function TodoPanel({ items, lang = 'zh-CN' }: TodoPanelProps) {
   const isEmpty = sorted.length === 0;
 
   return (
-    <div className="rounded-xl glass-surface overflow-hidden">
+    // pill-badge-static 禁用 hover 反馈；px-3 缩小字体两侧边距
+    <div
+      className="pill-badge pill-badge-static rounded-lg overflow-hidden flex flex-col"
+      style={{ borderColor: 'var(--border-medium)' }}
+    >
       {/* 头部 */}
       <button
         onClick={() => setCollapsed((c) => !c)}
-        className="w-full px-4 py-2.5 flex items-center gap-2.5 glass-option-hover transition-colors cursor-pointer"
+        className="w-full px-3 py-2.5 flex items-center gap-2.5 cursor-pointer"
       >
         {/* 清单图标 */}
         <svg
@@ -81,13 +85,17 @@ export default function TodoPanel({ items, lang = 'zh-CN' }: TodoPanelProps) {
           <rect x="6.5" y="11.75" width="8" height="1.5" rx="0.75" />
         </svg>
 
-        {/* 折叠态：显示活跃任务预览，或空列表提示（leading-4 与 16px 图标垂直居中对齐） */}
+        {/* 折叠态：显示活跃任务预览，或空列表提示（leading-4 与 16px 图标垂直居中对齐；
+            title 悬浮显示完整文本，避免 truncate 截断看不到全貌） */}
         {collapsed && (isEmpty ? (
           <span className="flex-1 text-[13px] leading-4 text-content-disabled truncate text-left min-w-0">
             {t(lang, 'no_todos')}
           </span>
         ) : activeItem ? (
-          <span className="flex-1 text-[13px] leading-4 text-content-secondary truncate text-left min-w-0">
+          <span
+            title={activeItem.activeForm && activeItem.status === 'in_progress' ? activeItem.activeForm : activeItem.content}
+            className="flex-1 text-[13px] leading-4 text-content-secondary truncate text-left min-w-0"
+          >
             {activeItem.activeForm && activeItem.status === 'in_progress'
               ? activeItem.activeForm
               : activeItem.content}
@@ -117,11 +125,15 @@ export default function TodoPanel({ items, lang = 'zh-CN' }: TodoPanelProps) {
         </svg>
       </button>
 
-      {/* 任务列表（无水平内边距，行内 px-4 与头部清单图标对齐） */}
+      {/* 任务列表（行内 px-3 与头部 px-3 对齐，列表项图标/文字缩进与折叠态预览一致） */}
       {!collapsed && (
         <div className="pb-3 flex flex-col gap-0.5 max-h-40 overflow-y-auto scrollbar-hidden">
           {isEmpty ? (
-            <div className="px-4 py-2 text-[13px] text-content-disabled">{t(lang, 'no_todos')}</div>
+            <div className="flex items-center gap-2.5 px-3 py-2 min-w-0">
+              {/* 图标位占位空格，保持与有 todo 列表项的文字列缩进对齐 */}
+              <div className="shrink-0 w-4 h-4" />
+              <span className="text-[13px] text-content-disabled">{t(lang, 'no_todos')}</span>
+            </div>
           ) : sorted.map((item, idx) => (
             <TodoRow key={`${item.content}-${idx}`} item={item} />
           ))}
@@ -138,11 +150,13 @@ export default function TodoPanel({ items, lang = 'zh-CN' }: TodoPanelProps) {
  * @returns 返回对应状态的圆环字形 SVG
  */
 function StatusGlyph({ status }: { status: TodoItemSnapshot['status'] }) {
+  // 三种字形统一 16px（w-4 h-4）填充图标槽位，与头部清单图标同宽同起点，
+  // 保证展开列表各行图标列、文字列严格对齐
   // 进行中：主色实线圆环（无动画，降低渲染要求）
   if (status === 'in_progress') {
     return (
       <svg
-        className="w-[14px] h-[14px] text-primary"
+        className="w-4 h-4 text-primary"
         viewBox="0 0 14 14" fill="none"
       >
         <circle cx="7" cy="7" r="5.8" stroke="currentColor" strokeWidth="1.4" />
@@ -154,7 +168,7 @@ function StatusGlyph({ status }: { status: TodoItemSnapshot['status'] }) {
   if (status === 'pending') {
     return (
       <svg
-        className="w-[14px] h-[14px] text-content-disabled"
+        className="w-4 h-4 text-content-disabled"
         viewBox="0 0 14 14" fill="none"
       >
         <circle cx="7" cy="7" r="5.8" stroke="currentColor" strokeWidth="1.2" strokeDasharray="2.4 2.4" />
@@ -165,7 +179,7 @@ function StatusGlyph({ status }: { status: TodoItemSnapshot['status'] }) {
   // 已完成：勾选圆环
   return (
     <svg
-      className="w-[14px] h-[14px] text-success"
+      className="w-4 h-4 text-success"
       viewBox="0 0 14 14" fill="none"
     >
       <circle cx="7" cy="7" r="5.8" stroke="currentColor" strokeWidth="1.2" fill="currentColor" fillOpacity="0.12" />
@@ -180,9 +194,9 @@ function StatusGlyph({ status }: { status: TodoItemSnapshot['status'] }) {
 function TodoRow({ item }: { item: TodoItemSnapshot }) {
   const status = item.status;
 
-  // 行内 px-4 与头部清单图标缩进对齐（圆环字形位于 16px 起始）
+  // 行内 px-3 与头部 px-3 对齐：16px 字形容器与头部清单图标同起点，文字与头部预览同起点
   return (
-    <div className="flex items-start gap-2.5 px-4 py-1.5 rounded-md min-w-0">
+    <div className="flex items-start gap-2.5 px-3 py-1.5 rounded-md min-w-0">
       {/* 状态字形 */}
       <div className="shrink-0 w-4 h-4 mt-0.5 flex items-center justify-center">
         <StatusGlyph status={status} />
