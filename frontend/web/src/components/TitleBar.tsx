@@ -14,6 +14,7 @@
  * @module TitleBar
  */
 
+import { useEffect, useRef } from 'react';
 import { t, type UiLanguage } from '../i18n';
 import { isIconVisible, useDesktopUpdater } from '../hooks/useDesktopUpdater';
 
@@ -54,6 +55,48 @@ function WindowButton({
 /** 进度环几何常量（r=6 的圆周长，供 stroke-dasharray 计算） */
 const RING_RADIUS = 6;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+
+/**
+ * 品牌标语：JS 实测文本宽度并校准 letter-spacing，让标语总宽精确填满目标宽度
+ * （品牌区 276px = 左栏卡片右缘 288 − 顶栏左内边距 12；再减去图标 20 + 间距 8）。
+ * 相比硬编码字距/固定容器，测量校准不受字体渲染宽度影响，任何语言/字体都能贴合。
+ * 首次校准后等待自定义字体（Inter）就绪再校准一次，避免字体加载中途宽度变化的偏差。
+ */
+function BrandSlogan() {
+  const ref = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // 目标宽度：276（品牌区）− 20（图标）− 8（图标右间距）= 248px
+    const TARGET = 248;
+    const fit = () => {
+      // 测量文本自然宽度：暂停 flex-1 拉伸，否则测到的是容器宽而非文本宽
+      const prevFlex = el.style.flex;
+      el.style.flex = 'none';
+      el.style.letterSpacing = '0em';
+      const base = el.getBoundingClientRect().width;
+      el.style.flex = prevFlex;
+      const chars = (el.textContent ?? '').length;
+      if (base <= 0 || chars === 0) return;
+      // letter-spacing 逐字符追加（含末字符），实际总宽 = base + ls × chars
+      const ls = (TARGET - base) / chars;
+      el.style.letterSpacing = `${ls}px`;
+    };
+    fit();
+    // Inter 字体异步加载完成后宽度可能变化，二次校准
+    document.fonts?.ready.then(fit).catch(() => {});
+  }, []);
+
+  return (
+    <span
+      ref={ref}
+      className="gradient-text font-body font-bold text-xs select-none whitespace-nowrap flex-1"
+    >
+      FANTASY ✦ FUNCTIONALITY
+    </span>
+  );
+}
 
 /**
  * 顶栏更新图标（最小化按钮附近）。
@@ -173,13 +216,14 @@ export default function TitleBar({ lang }: { lang: UiLanguage }) {
         paddingLeft: isMac ? '80px' : '12px',
       }}
     >
-      {/* 品牌展示（仅 Win/Linux）：图标 + 标语，纯展示无交互；mac 交由原生交通灯区 */}
+      {/* 品牌展示（仅 Win/Linux）：图标 + 标语，纯展示无交互；mac 交由原生交通灯区。
+        品牌区宽 276px：左栏卡片 margin-left 8 + 宽 280 = 右缘 288，顶栏左内边距 12，
+        288 − 12 = 276 —— 品牌区右缘与左栏卡片右缘精确对齐；标语字距由 BrandSlogan
+        运行时测量校准填满剩余 248px，不依赖估算 */}
       {!isMac && (
-        <div className="flex items-center gap-2 mr-3">
-          <img src="/icon.png" alt="" width={20} height={20} draggable={false} className="select-none" />
-          <span className="font-body font-bold text-content-primary text-xs tracking-wider whitespace-nowrap">
-            {t(lang, 'titlebar_slogan')}
-          </span>
+        <div className="flex items-center mr-3" style={{ width: 276 }}>
+          <img src="/icon.png" alt="" width={20} height={20} draggable={false} className="select-none mr-2" />
+          <BrandSlogan />
         </div>
       )}
       <div className="flex-1" />
