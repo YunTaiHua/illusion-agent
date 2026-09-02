@@ -392,6 +392,8 @@ async def rewind_handler(args: str, context: CommandContext) -> CommandResult:
     # 记录被回退轮次中"恢复点"的那条 user 消息（回退后引擎消息已变，
     restored_text: str | None = None
     if turns > 0:
+        from illusion.services.session_reference import is_session_reference_snapshot
+
         removed_user_texts: list[str] = []
         for msg in reversed(context.engine.messages):
             if (
@@ -399,6 +401,7 @@ async def rewind_handler(args: str, context: CommandContext) -> CommandResult:
                 and msg.text.strip()
                 and not is_task_notification(msg.text)
                 and not is_goal_system_message(msg.text)
+                and not is_session_reference_snapshot(msg.text)
             ):
                 removed_user_texts.append(msg.text.strip())
                 if len(removed_user_texts) >= turns:

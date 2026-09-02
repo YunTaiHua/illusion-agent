@@ -67,6 +67,7 @@ from illusion.services.agent_creator import (
     validate_agent_definition,
     write_agent_definition,
 )
+from illusion.services.session_reference import is_session_reference_snapshot
 from illusion.tasks import get_task_manager
 from illusion.tasks.types import is_task_notification
 from illusion.ui.protocol import (
@@ -1607,8 +1608,9 @@ class WebBackendHost:
         if mode not in ("both", "conversation", "code"):
             return True
         messages = session.engine.messages
-        # 计算 target 之后需回退的真实用户轮次（排除后台任务完成通知与 goal 注入消息；
-        # 命令不会进入 engine.messages，真实 / 前缀消息须计入）
+        # 计算 target 之后需回退的真实用户轮次（排除后台任务完成通知、goal
+        # 注入消息与会话引用快照；命令不会进入 engine.messages，真实 /
+        # 前缀消息须计入）
         turns = sum(
             1
             for i, msg in enumerate(messages)
@@ -1617,6 +1619,7 @@ class WebBackendHost:
             and msg.text.strip()
             and not is_task_notification(msg.text)
             and not is_goal_system_message(msg.text)
+            and not is_session_reference_snapshot(msg.text)
         )
         if turns <= 0:
             return True
@@ -1805,7 +1808,11 @@ class WebBackendHost:
         summary = ""
         for msg in messages:
             if msg.role == "user" and msg.text.strip():
-                if is_task_notification(msg.text) or is_goal_system_message(msg.text):
+                if (
+                    is_task_notification(msg.text)
+                    or is_goal_system_message(msg.text)
+                    or is_session_reference_snapshot(msg.text)
+                ):
                     continue
                 summary = msg.text.strip()[:80]
                 break
@@ -1826,6 +1833,7 @@ class WebBackendHost:
             and m.text.strip()
             and not is_task_notification(m.text)
             and not is_goal_system_message(m.text)
+            and not is_session_reference_snapshot(m.text)
         )
         message_count = len(messages)
         # 读取磁盘 meta 获取自定义 title（rename 写入的名称）——
@@ -2963,13 +2971,15 @@ class WebBackendHost:
 
         if command == "rewind":
             messages = session.engine.messages
-            # 过滤后台任务完成通知与 goal harness 注入消息，它们不应出现在回退选项中
+            # 过滤后台任务完成通知、goal harness 注入消息与会话引用快照，
+            # 它们不应出现在回退选项中
             user_msgs = [
                 (i, msg)
                 for i, msg in enumerate(messages)
                 if msg.role == "user" and msg.text.strip()
                 and not is_task_notification(msg.text)
                 and not is_goal_system_message(msg.text)
+                and not is_session_reference_snapshot(msg.text)
             ]
             if not user_msgs:
                 await self._emit_command_error(

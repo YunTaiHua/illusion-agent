@@ -296,9 +296,14 @@ def _is_real_turn_user_record(record: dict[str, Any]) -> bool:
     if not text:
         return False
     from illusion.goal.prompts import is_goal_system_message
+    from illusion.services.session_reference import is_session_reference_snapshot
     from illusion.tasks.types import is_task_notification
 
-    return not is_task_notification(text) and not is_goal_system_message(text)
+    return (
+        not is_task_notification(text)
+        and not is_goal_system_message(text)
+        and not is_session_reference_snapshot(text)
+    )
 
 
 def _fork_file_history(
@@ -684,9 +689,14 @@ def count_turns(messages: list[dict[str, Any]]) -> int:
                         text += block.get("text", "")
                 text = text.strip()
 
-            # 统计非空用户消息（命令不进 messages；真实 / 前缀消息计入轮次）
+            # 统计非空用户消息（命令不进 messages；真实 / 前缀消息计入轮次；
+            # 会话引用快照为注入消息，不计入）
             if text:
-                turn_count += 1
+                from illusion.services.session_reference import (
+                    is_session_reference_snapshot,
+                )
+                if not is_session_reference_snapshot(text):
+                    turn_count += 1
 
     return turn_count
 

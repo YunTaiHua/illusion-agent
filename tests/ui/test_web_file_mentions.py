@@ -151,6 +151,10 @@ class TestFileMentionCandidates:
 class TestHandleWebRequestFileMentions:
     """handler 事件载荷测试"""
 
+    @staticmethod
+    def _make_dispatcher(host: MagicMock) -> WebApiDispatcher:
+        return WebApiDispatcher(host)
+
     @pytest.mark.asyncio
     async def test_emits_candidates_with_request_id_echo(self, tmp_path: Path):
         (tmp_path / "src").mkdir()
@@ -160,7 +164,7 @@ class TestHandleWebRequestFileMentions:
         host._bundle = MagicMock()
         host._bundle.cwd = str(tmp_path)
         host._active_bundle.return_value = host._bundle
-        dispatcher = WebApiDispatcher(host)
+        dispatcher = self._make_dispatcher(host)
 
         req = FrontendRequest(
             type="web_request_file_mentions", query="main", request_id="m1")
@@ -174,6 +178,92 @@ class TestHandleWebRequestFileMentions:
         assert evt.web_file_mentions["query"] == "main"
         assert {"path": "src/main.py", "kind": "file"} in evt.web_file_mentions["candidates"]
         assert evt.web_file_mentions["truncated"] is False
+
+    @pytest.mark.asyncio
+    async def test_emits_session_candidates(self, tmp_path: Path):
+        from illusion.services.session_storage import (
+            get_project_session_dir,
+            write_meta_to,
+        )
+
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        sid = "aaa000000001"
+        session_dir = get_project_session_dir(str(ws)) / sid
+        session_dir.mkdir(parents=True)
+        write_meta_to(session_dir, sid, {
+            "session_id": sid, "cwd": str(ws), "title": "调研笔记",
+            "summary": "", "message_count": 2, "turn_count": 2,
+            "updated_at": 100.0,
+        })
+
+        host = MagicMock()
+        host._emit = AsyncMock()
+        host._bundle = MagicMock()
+        host._bundle.cwd = str(ws)
+        host._active_bundle.return_value = host._bundle
+        # 无工作区状态（回退到 bundle.cwd）与无内存会话；
+        # _sessions.get 必须显式返回 None，否则资源解析命中 MagicMock bundle
+        host._workspaces.values.return_value = []
+        host._sessions.get.return_value = None
+        host._sessions.values.return_value = []
+        dispatcher = self._make_dispatcher(host)
+
+        req = FrontendRequest(
+            type="web_request_file_mentions", query="调研",
+            request_id="m2", session_id="cur000000000")
+        await dispatcher.handle_web_request_file_mentions(req)
+
+        evt: BackendEvent = host._emit.call_args.args[0]
+        payload = evt.web_file_mentions
+        assert payload is not None and "sessions" in payload
+        # 会话候选结构：kind/sessionId/path/描述/cwd（MagicMock 的 ui_language
+        # 非中文 locale，描述走英文文案）
+        assert payload["sessions"] == [{
+            "kind": "session",
+            "sessionId": sid,
+            "path": "调研笔记",
+            "description": payload["sessions"][0]["description"],
+            "cwd": str(ws),
+        }]
+        assert "turns" in payload["sessions"][0]["description"]
+
+    @pytest.mark.asyncio
+    async def test_session_candidates_exclude_current_session(self, tmp_path: Path):
+        from illusion.services.session_storage import (
+            get_project_session_dir,
+            write_meta_to,
+        )
+
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        sid = "aaa000000001"
+        session_dir = get_project_session_dir(str(ws)) / sid
+        session_dir.mkdir(parents=True)
+        write_meta_to(session_dir, sid, {
+            "session_id": sid, "cwd": str(ws), "title": "当前会话",
+            "summary": "", "message_count": 1, "turn_count": 1,
+            "updated_at": 100.0,
+        })
+
+        host = MagicMock()
+        host._emit = AsyncMock()
+        host._bundle = MagicMock()
+        host._bundle.cwd = str(ws)
+        host._active_bundle.return_value = host._bundle
+        host._workspaces.values.return_value = []
+        host._sessions.get.return_value = None
+        host._sessions.values.return_value = []
+        dispatcher = self._make_dispatcher(host)
+
+        req = FrontendRequest(
+            type="web_request_file_mentions", query="",
+            request_id="m3", session_id=sid)
+        await dispatcher.handle_web_request_file_mentions(req)
+
+        evt: BackendEvent = host._emit.call_args.args[0]
+        assert evt.web_file_mentions is not None
+        assert evt.web_file_mentions["sessions"] == []
 
     @pytest.mark.asyncio
     async def test_query_normalized_before_matching(self, tmp_path: Path):

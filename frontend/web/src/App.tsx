@@ -1327,7 +1327,7 @@ export default function App() {
           className={`fixed bottom-8 right-6 z-50 ${toastExiting ? 'animate-toast-out' : 'animate-toast-in'}`}
           onMouseEnter={handleToastMouseEnter} onMouseLeave={handleToastMouseLeave}
         >
-          <div className="glass-surface border border-black/10 rounded-2xl max-w-[420px] overflow-hidden relative">
+          <div className="glass-surface border border-black/10 rounded-2xl max-w-[360px] overflow-hidden relative">
             {/* 滚动容器全宽：右 padding 只是内容让位区（不改变滚动条位置），
                 因此滚动条始终贴卡片最右侧；关闭按钮绝对定位悬浮于右上角，
                 脱离文档流、不挤占正文与滚动条的任何空间 */}

@@ -162,6 +162,7 @@ The terminal (`illusion`) and Web UI (`illusion web`) are two independent, first
 | Web UI Security | [docs/en/security.md](docs/en/security.md) | [docs/zh-CN/security.md](docs/zh-CN/security.md) |
 | Token Metering & Compaction | [docs/en/token-metering.md](docs/en/token-metering.md) | [docs/zh-CN/token-metering.md](docs/zh-CN/token-metering.md) |
 | Messaging Channels | [docs/en/channels.md](docs/en/channels.md) | [docs/zh-CN/channels.md](docs/zh-CN/channels.md) |
+| @ Mentions (Skills / Sessions / Files) | [docs/en/mentions.md](docs/en/mentions.md) | [docs/zh-CN/mentions.md](docs/zh-CN/mentions.md) |
 | Desktop Edition | [docs/en/desktop.md](docs/en/desktop.md) | [docs/zh-CN/desktop.md](docs/zh-CN/desktop.md) |
 
 ---

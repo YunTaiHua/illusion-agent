@@ -4,7 +4,8 @@
  * Web 前端的用户输入组件，支持：
  * - 多行文本输入
  * - 命令自动补全（/ 前缀触发）
- * - 文件提及补全（@ 前缀触发；仅插入路径文本，内容由模型自行读取）
+ * - @ 提及补全（会话引用 / 文件 / 技能；仅插入提及文本，文件内容由模型
+ *   自行读取，会话内容由引擎在提交边界以只读快照注入）
  * - 内联选项选择
  * - 快捷键支持（Enter 发送、Ctrl+Enter 换行、Esc 关闭）
  * - 忙碌状态下的停止按钮
@@ -65,7 +66,8 @@ interface MentionToken {
  *
  * 规则：'@' 必须位于输入开头或空白字符之后（邮箱等文本不触发）；
  * 未加引号时 token 内不允许空格；@" 开启的引号形式允许空格，
- * 出现闭合引号即视为提及结束。
+ * 出现闭合引号即视为提及结束。会话引用文法（@[label](illusion-session:id)，
+ * '[' 开头）由引擎在提交边界解析，不触发文件/技能补全菜单。
  *
  * @param text - 输入框全文
  * @param pos - 光标位置
@@ -77,6 +79,7 @@ export function detectMentionToken(text: string, pos: number): MentionToken | nu
   if (at === -1) return null;
   if (at > 0 && !/\s/.test(before[at - 1] ?? '')) return null;
   const rest = before.slice(at + 1);
+  if (rest.startsWith('[')) return null; // 会话引用文法：光标处于 @[... 提及内
   if (rest.startsWith('"')) {
     if (rest.indexOf('"', 1) !== -1 || rest.includes('\n')) return null; // 引号已闭合或跨行：提及结束
     return { start: at, end: pos, query: rest.slice(1), quoted: true };
@@ -87,6 +90,8 @@ export function detectMentionToken(text: string, pos: number): MentionToken | nu
 
 /**
  * 格式化提及插入文本：
+ * 会话引用为规范形式 @[label](illusion-session:id)（label 转义 \ 与 ]，
+ * 与后端 session_reference 文法一致——转义规则修改需同步后端与终端端）；
  * 名称含空格或引号时用 @"..." 形式；目录保留尾部 / 继续下钻，
  * 文件与技能追加空格闭合 token。
  *
@@ -94,6 +99,10 @@ export function detectMentionToken(text: string, pos: number): MentionToken | nu
  * @returns 插入到输入框的完整文本
  */
 export function formatMentionInsertion(candidate: FileMentionCandidate): string {
+  if (candidate.kind === 'session' && candidate.sessionId) {
+    const label = candidate.path.replace(/\\/g, '\\\\').replace(/\]/g, '\\]');
+    return `@[${label}](illusion-session:${candidate.sessionId}) `;
+  }
   const needsQuote = /[\s"]/.test(candidate.path);
   if (candidate.kind === 'dir') return needsQuote ? `@"${candidate.path}/` : `@${candidate.path}/`;
   return needsQuote ? `@"${candidate.path}" ` : `@${candidate.path} `;
@@ -204,6 +213,8 @@ export interface PromptInputHandle {
 }
 
 const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function PromptInput({ lang, busy, stopping, hasActiveTasks, connected, commands, onSubmit, onStop, inlineOptions, onInlineSelect, onInlineClose, workspaces, activeCwd, welcomeVisible, onPickWorkspace, onAddWorkspace, onManageWorkspaces, children, initialDraft, onConsumeInitialDraft, subscribeFileMentions, onRequestFileMentions, activeMenu, onMenuOpen }, ref) {
+  // 草稿统一为规范文本（rewind 回填的 user 消息即库内原样 text，
+  // 输入框与提交内容一致，无需任何转换）
   const [value, setValue] = useState(initialDraft ?? '');
 
   // 挂载时若携带初始草稿（欢迎界面重挂载回填），通知父组件消费清空，避免残留
@@ -366,15 +377,23 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
   );
   const mentionCandidates = useMemo(() => {
     if (!mentionCache || !mentionToken) return [] as FileMentionCandidate[];
-    return normalizedTokenQuery
-      ? mentionCache.filter((c) => c.path.toLowerCase().includes(normalizedTokenQuery))
-      : mentionCache;
+    if (!normalizedTokenQuery) return mentionCache;
+    // 会话候选额外按 sessionId 匹配（后端支持 id 命中，本地过滤口径对齐）
+    return mentionCache.filter(
+      (c) => c.path.toLowerCase().includes(normalizedTokenQuery)
+        || (c.kind === 'session' && c.sessionId?.toLowerCase().includes(normalizedTokenQuery)),
+    );
   }, [mentionCache, mentionToken, normalizedTokenQuery]);
   const showMentionMenu = mentionToken !== null && !mentionDismissed && mentionCandidates.length > 0 && !inlineOptions;
 
-  // 菜单分区：技能在前、文件在后（候选顺序即导航顺序）；行元素带 data-mention-row 供滚动定位
-  const mentionFileRows = mentionCandidates.filter((c) => c.kind !== 'skill');
-  const mentionSkillCount = mentionCandidates.length - mentionFileRows.length;
+  // 菜单分区：技能最前、会话居中、文件在后（优先级 Skills > Sessions > Files，
+  // 候选顺序即导航顺序，hook 侧已按 skills → sessions → files 合并）；
+  // 行元素带 data-mention-row 供滚动定位
+  const mentionSessionCount = mentionCandidates.filter((c) => c.kind === 'session').length;
+  const mentionSkillCount = mentionCandidates.filter((c) => c.kind === 'skill').length;
+  // 各分区起始行号：Sessions 紧随 Skills 之后，Files 在两者之后
+  const sessionsStart = mentionSkillCount;
+  const filesStart = mentionSkillCount + mentionSessionCount;
 
   useEffect(() => {
     // 索引 0 直接回顶：nearest 会把首行顶到滚动区上缘，标题（Skills/Files）被推出可视区
@@ -611,32 +630,36 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
         </div>
       )}
 
-      {/* @ 提及补全弹窗（与斜杠命令弹窗同位置同样式；分区标题沿用英文 uppercase 惯例） */}
+      {/* @ 提及补全弹窗（与斜杠命令弹窗同位置同样式；分区标题沿用英文 uppercase 惯例，
+          分区顺序 Skills → Sessions → Files 与候选顺序一致） */}
       {showMentionMenu && (
         <div
           ref={mentionListRef}
           className="absolute bottom-full left-0 right-0 mb-1 bg-surface-card-alt border border-border-medium rounded-3xl max-h-56 overflow-y-auto p-1 z-20 scrollbar-hidden dropdown-panel"
         >
-          {mentionSkillCount > 0 && (
-            <div className="px-3 py-1.5 text-[10px] text-content-disabled font-semibold uppercase tracking-widest text-center border-b border-border-light mb-1">Skills</div>
-          )}
           {mentionCandidates.map((c, idx) => {
             const name = c.path.split('/').pop() || c.path;
             const dir = c.kind === 'dir';
             const skill = c.kind === 'skill';
+            const session = c.kind === 'session';
             return (
-              <Fragment key={`${c.kind}:${c.path}`}>
-                {/* 文件区标题在首个文件行前渲染（有技能区时在其后，无技能区时在列表头）。
-                    标题与行同级共存，data-mention-row 的 DOM 序号才与候选/选中序号一致，
-                    高亮、Enter 采纳与滚动定位才不会错位（对应纯文件模式"上移越界一行"） */}
-                {!skill && idx === (mentionSkillCount > 0 ? mentionSkillCount : 0) && (
-                  <div className={`px-3 pt-2 pb-1 text-[10px] text-content-disabled font-semibold uppercase tracking-widest text-center ${mentionSkillCount > 0 ? 'border-t border-border-light mt-1' : ''} border-b border-border-light mb-1`}>Files</div>
+              <Fragment key={`${c.kind}:${c.sessionId ?? c.path}`}>
+                {/* 分区标题与行同级渲染（标题不占 data-mention-row 序号），
+                    DOM 序号与候选/选中序号一致，高亮、Enter 采纳与滚动定位才不会错位 */}
+                {skill && idx === 0 && (
+                  <div className="px-3 py-1.5 text-[10px] text-content-disabled font-semibold uppercase tracking-widest text-center border-b border-border-light mb-1">Skills</div>
+                )}
+                {session && idx === sessionsStart && (
+                  <div className={`px-3 py-1.5 text-[10px] text-content-disabled font-semibold uppercase tracking-widest text-center border-b border-border-light mb-1 ${mentionSkillCount > 0 ? 'border-t border-border-light mt-1' : ''}`}>Sessions</div>
+                )}
+                {!skill && !session && idx === filesStart && (
+                  <div className={`px-3 pt-2 pb-1 text-[10px] text-content-disabled font-semibold uppercase tracking-widest text-center ${filesStart > 0 ? 'border-t border-border-light mt-1' : ''} border-b border-border-light mb-1`}>Files</div>
                 )}
                 <button
                   data-mention-row
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => applyMention(c)}
-                  title={c.path}
+                  title={session ? (c.description ?? c.path) : c.path}
                   className={`w-full flex items-center gap-2 px-3 py-2 border border-transparent hover:border-border-light text-sm transition-colors cursor-pointer animate-fade ${
                     idx === mentionIndex ? 'glass-option-active text-content-primary glass-option-hover' : 'text-content-secondary glass-option-hover'
                   }`}
@@ -644,6 +667,11 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
                 {dir ? (
                   <svg className="w-3.5 h-3.5 shrink-0 text-primary/70" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M1.5 4.5v7a1.5 1.5 0 001.5 1.5h10a1.5 1.5 0 001.5-1.5V6.5a1.5 1.5 0 00-1.5-1.5H8L6.4 3.1a1.5 1.5 0 00-1.1-.6H3a1.5 1.5 0 00-1.5 1.5v.5z" />
+                  </svg>
+                ) : session ? (
+                  <svg className="w-3.5 h-3.5 shrink-0 text-primary/70" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                    {/* 会话：对话气泡（与提及渲染的 session 图标同造型） */}
+                    <path d="M14 10a1.3 1.3 0 01-1.3 1.3H4.7L2 13.9V3.3A1.3 1.3 0 013.3 2h9.4A1.3 1.3 0 0114 3.3V10z" />
                   </svg>
                 ) : skill ? (
                   <svg className="w-3.5 h-3.5 shrink-0 text-primary/70" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
@@ -659,8 +687,8 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(function Pro
                     <path d="M9 1.5V5h4" />
                   </svg>
                 )}
-                <span className={`truncate flex-1 text-left font-mono ${dir ? '' : 'text-content-primary'}`}>{c.path}</span>
-                {skill
+                <span className={`truncate flex-1 text-left ${dir || skill ? 'font-mono' : ''}`}>{c.path}</span>
+                {session || skill
                   ? c.description && <span className="text-xs text-content-disabled shrink-0 max-w-[45%] truncate">{c.description}</span>
                   : <span className="text-xs text-content-disabled shrink-0">{name}</span>}
                 </button>

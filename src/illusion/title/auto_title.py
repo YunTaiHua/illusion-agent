@@ -173,13 +173,14 @@ def _clean_title(raw: str) -> str:
 
 
 def _user_messages(engine: Any) -> list[str]:
-    """收集真实用户消息文本（排除后台任务通知与 goal 注入消息）。
+    """收集真实用户消息文本（排除后台任务通知、goal 注入与会话引用快照）。
 
     注：/goal 创建命令原文已作为真实 user 消息入库（record_goal_command），
     会被收集作为标题素材；goal harness 注入的 <goal_round> 等消息被排除。
     """
     from illusion.engine.messages import ToolResultBlock
     from illusion.goal.prompts import is_goal_system_message
+    from illusion.services.session_reference import is_session_reference_snapshot
     from illusion.tasks.types import is_task_notification
 
     texts: list[str] = []
@@ -191,8 +192,12 @@ def _user_messages(engine: Any) -> list[str]:
         text = msg.text.strip()
         if not text:
             continue
-        # 后台任务通知与 goal harness 注入消息不是用户输入，排除
-        if is_task_notification(text) or is_goal_system_message(text):
+        # 后台任务通知、goal harness 注入消息与会话引用快照不是用户输入，排除
+        if (
+            is_task_notification(text)
+            or is_goal_system_message(text)
+            or is_session_reference_snapshot(text)
+        ):
             continue
         texts.append(text)
     return texts

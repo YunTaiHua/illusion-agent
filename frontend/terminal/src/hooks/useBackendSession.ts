@@ -721,14 +721,21 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 		}
 		if (event.type === 'web_file_mentions') {
 			// @ 提及补全候选：requestId 不匹配的迟到响应由 App 层丢弃；
-			// skills 排在文件前面（搜索结果 skills 优先），kind='skill' 供菜单分区
+			// 分区顺序 skills → sessions → files（优先级 Skills > Sessions > Files，
+			// 与 web 端一致），kind 供菜单分区渲染
 			const payload = event.web_file_mentions;
 			if (payload) {
 				setFileMentions({
-					requestId: payload.request_id ?? event.request_id ?? '',
+					requestId: event.request_id ?? '',
 					query: payload.query,
 					candidates: [
 						...(payload.skills ?? []).map((s) => ({path: s.name, kind: 'skill' as const, description: s.description})),
+						...(payload.sessions ?? []).map((s) => ({
+							path: s.path,
+							kind: 'session' as const,
+							description: s.description,
+							sessionId: s.sessionId,
+						})),
 						...(payload.candidates ?? []),
 					],
 				});

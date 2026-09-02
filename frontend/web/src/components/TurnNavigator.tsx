@@ -160,7 +160,7 @@ const TurnNavigator = memo(function TurnNavigator({ lang, items, activeTurn, bus
                 onFocus={(e) => setHover({ turn: item.turn, offsetTop: e.currentTarget.offsetTop })}
                 onBlur={() => setHover(null)}
                 onClick={() => onNavigate(item)}
-                className="group/nav flex h-[10px] w-full items-center cursor-pointer"
+                className="group/nav flex h-[10px] w-full items-center cursor-default"
               >
                 {/* 统一 2px 细刻度，宽度内联样式（px 定值）随悬停阶梯过渡 */}
                 {/* 刻度用主题感知的浅色实色（nav-tick-* 变量，浅/深主题

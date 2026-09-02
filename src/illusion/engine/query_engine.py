@@ -93,6 +93,7 @@ def _collect_task_context(
     from illusion.engine.messages import ToolResultBlock
     from illusion.goal.prompts import is_goal_system_message
     from illusion.memory.log import truncate
+    from illusion.services.session_reference import is_session_reference_snapshot
     from illusion.tasks.types import is_task_notification
 
     recent: list[str] = []
@@ -101,6 +102,9 @@ def _collect_task_context(
             continue
         text = msg.text.strip()
         if not text or is_task_notification(text) or is_goal_system_message(text):
+            continue
+        # 会话引用快照是注入的背景上下文，不是用户输入
+        if is_session_reference_snapshot(text):
             continue
         # 含工具结果的 user 消息（hook additionalContext 以 system-reminder
         # 附于其上）不是真实用户输入，跳过——对齐 auto_title._user_messages 口径
@@ -725,11 +729,34 @@ class QueryEngine:
         # 不再依赖 runtime 手动同步 session_id。
         self._ensure_file_history()
 
+        # 解析 @ 会话提及（跨会话只读快照）：用户消息保持规范提及文本
+        # @[label](illusion-session:<id>) 原样入库（输入框/重放转录/与
+        # context.jsonl 一致），紧随注入一条源会话快照消息（不可信背景
+        # 上下文，捕获时点定稿并持久化，重放一致）。读取失败仅记录日志，
+        # 不阻断消息提交。
+        snapshot_text: str | None = None
+        try:
+            from illusion.services.session_reference import resolve_session_references
+            prompt, snapshot_text = await resolve_session_references(
+                prompt,
+                current_session_id=self._session_id,
+                current_cwd=str(self._cwd),
+            )
+        except Exception:
+            logger.exception("解析会话提及失败")
+
         # 将用户文本转换为消息并添加到历史记录
         self._messages.append(ConversationMessage.from_user_text(prompt))
         # 持久化 user message
         if self._checkpoint_store is not None:
             await self._checkpoint_store.append_message(self._messages[-1])
+
+        # 注入会话引用快照（紧随直接消息的第二条 user 消息，
+        # deepseek-harness recall 语义：一次性捕获，此后不可变）
+        if snapshot_text is not None:
+            self._messages.append(ConversationMessage.from_user_text(snapshot_text))
+            if self._checkpoint_store is not None:
+                await self._checkpoint_store.append_message(self._messages[-1])
 
         # 人类直接输入：goal 权威来源切换为 human
         if self._goal_manager is not None:

@@ -35,7 +35,7 @@ import {normalizeLanguage, t, UiLanguage} from './i18n.js';
 import {ThemeProvider, useTheme} from './theme/ThemeContext.js';
 import type {FrontendConfig, FileMentionCandidate} from './types.js';
 import {fmtTokens} from './utils/fmtTokens.js';
-import {detectMentionToken, formatMentionInsertion} from './utils/mention.js';
+import {detectMentionToken, formatMentionInsertion, normalizeMentionQuery} from './utils/mention.js';
 import {VERSION} from './version.js';
 
 /**
@@ -275,12 +275,18 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 		}
 	}, [session.fileMentions]);
 
-	// 候选基于缓存 + 当前 token 查询串实时过滤（新请求在途时旧候选按当前输入过滤，保持菜单稳定且响应式）
+	// 候选基于缓存 + 当前 token 查询串实时过滤（新请求在途时旧候选按当前输入过滤，
+	// 保持菜单稳定且响应式）；查询串先本地规范化（与后端 normalize 口径一致：
+	// 反斜杠→斜杠、去 ./ 前缀），会话候选额外按 sessionId 匹配
 	const tokenQuery = mentionToken?.query ?? '';
 	const mentionCandidates = useMemo(() => {
 		if (!mentionCache) return [];
-		const q = tokenQuery.toLowerCase();
-		return q ? mentionCache.candidates.filter((c) => c.path.toLowerCase().includes(q)) : mentionCache.candidates;
+		const q = normalizeMentionQuery(tokenQuery).toLowerCase();
+		if (!q) return mentionCache.candidates;
+		return mentionCache.candidates.filter(
+			(c) => c.path.toLowerCase().includes(q)
+				|| (c.kind === 'session' && c.sessionId?.toLowerCase().includes(q)),
+		);
 	}, [mentionCache, tokenQuery]);
 
 	const showMentionMenu =
@@ -298,9 +304,9 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 	}, [mentionCandidates.length]);
 
 	/** 应用选中的提及候选：替换 @token 为插入文本并定位光标到插入点之后 */
-	const applyMention = useCallback((candidatePath: string, kind: 'dir' | 'file' | 'skill') => {
+	const applyMention = useCallback((candidate: FileMentionCandidate) => {
 		if (!mentionToken) return;
-		const insertion = formatMentionInsertion({path: candidatePath, kind});
+		const insertion = formatMentionInsertion(candidate);
 		const nextCaret = mentionToken.start + insertion.length;
 		setInput((prev) => prev.slice(0, mentionToken.start) + insertion + prev.slice(mentionToken.end));
 		// 重挂载 MultilineTextInput 并把光标定位到插入点之后（与 web 端 setSelectionRange 对称）
@@ -309,11 +315,12 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 	}, [mentionToken]);
 
 	// 消费 pendingCaret：重挂载（cursorReset 变化）已完成初始化后清理，
-	// 避免残留值污染未来其他路径的 cursorReset 递增（正确光标位置）
+	// 避免残留值污染未来其他路径的 cursorReset 递增（正确光标位置）。
+	// Node 环境无 requestAnimationFrame，用 setTimeout(0) 等价异步清理
 	useEffect(() => {
 		if (pendingCaret === null) return;
-		const raf = requestAnimationFrame(() => setPendingCaret(null));
-		return () => cancelAnimationFrame(raf);
+		const timer = setTimeout(() => setPendingCaret(null), 0);
+		return () => clearTimeout(timer);
 	}, [cursorReset, pendingCaret]);
 
 	/**
@@ -775,7 +782,7 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 			}
 			if (key.return || key.tab) {
 				const picked = mentionCandidates[mentionIndex];
-				if (picked) applyMention(picked.path, picked.kind);
+				if (picked) applyMention(picked);
 				return;
 			}
 			if (key.escape) {
@@ -911,6 +918,8 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 			setInput('');
 			return;
 		}
+		// 输入草稿即规范形式（选中会话插入 @[label](illusion-session:<id>)），
+		// 直接提交，由引擎解析并注入快照
 		session.sendRequest({type: 'submit_line', line: trimmed});
 		setInput('');
 		session.setBusy(true);

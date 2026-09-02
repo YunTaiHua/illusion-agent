@@ -61,6 +61,7 @@ from illusion.services.agent_creator import (
     validate_agent_definition,
     write_agent_definition,
 )
+from illusion.services.session_reference import is_session_reference_snapshot
 from illusion.tasks import TaskRecord, get_task_manager
 from illusion.tasks.types import is_task_notification
 from illusion.ui.protocol import (
@@ -1310,13 +1311,15 @@ class ReactBackendHost:
         if mode not in ("both", "conversation"):
             return True
         messages = self._bundle.engine.messages
-        # 计算 target 之后需回退的真实用户轮次（排除后台任务完成通知与 goal 注入消息；
-        # 命令不会进入 engine.messages，真实 / 前缀消息须计入）
+        # 计算 target 之后需回退的真实用户轮次（排除后台任务完成通知、goal
+        # 注入消息与会话引用快照；命令不会进入 engine.messages，真实 /
+        # 前缀消息须计入）
         turns = sum(
             1 for i, msg in enumerate(messages)
             if i >= target_idx and msg.role == "user" and msg.text.strip()
             and not is_task_notification(msg.text)
             and not is_goal_system_message(msg.text)
+            and not is_session_reference_snapshot(msg.text)
         )
         if turns <= 0:
             return True
@@ -1754,12 +1757,14 @@ class ReactBackendHost:
 
         if command == "rewind":
             messages = self._bundle.engine.messages
-            # 过滤后台任务完成通知与 goal harness 注入消息，它们不应出现在回退选项中
+            # 过滤后台任务完成通知、goal harness 注入消息与会话引用快照，
+            # 它们不应出现在回退选项中
             user_msgs = [
                 (i, msg) for i, msg in enumerate(messages)
                 if msg.role == "user" and msg.text.strip()
                 and not is_task_notification(msg.text)
                 and not is_goal_system_message(msg.text)
+                and not is_session_reference_snapshot(msg.text)
             ]
             if not user_msgs:
                 await self._emit(BackendEvent(
@@ -2653,12 +2658,15 @@ class ReactBackendHost:
         """收集 @ 提及补全候选并推送 web_file_mentions 事件。
 
         与 web 端 handle_web_request_file_mentions 对称：仅返回工作区内
-        路径与技能名候选（不读内容），选中后的提及文本保持普通 prompt
-        文本。request_id 原样回显供前端丢弃过期响应。
+        路径、技能名与会话候选（不读内容）。会话候选只查元数据，排除
+        当前会话（自引用无意义）；选中后的会话提及为规范文本
+        ``@[label](illusion-session:<id>)``，由引擎在提交边界解析注入。
+        request_id 原样回显供前端丢弃过期响应。
 
         Args:
-            req: 前端请求（query 为 @ 后的路径片段；request_id 回显键）
+            req: 前端请求（query 为 @ 后的片段；request_id 回显键）
         """
+        from illusion.services.session_reference import session_mention_candidates
         from illusion.ui.file_mentions import (
             file_mention_candidates,
             normalize_mention_query,
@@ -2670,6 +2678,19 @@ class ReactBackendHost:
         query = normalize_mention_query(req.query)
         candidates, truncated = await asyncio.to_thread(file_mention_candidates, cwd, query)
         skills = await asyncio.to_thread(skill_mention_candidates, cwd, query)
+        locale = str(
+            self._bundle.app_state.get().ui_language
+            or self._bundle.current_settings().ui_language
+        )
+        sessions = await asyncio.to_thread(
+            session_mention_candidates,
+            workspaces=[cwd],
+            in_memory=[],
+            query=query,
+            exclude_session_id=self._bundle.engine.session_id or None,
+            preferred_cwd=cwd,
+            zh=locale.lower().startswith("zh"),
+        )
         await self._emit(BackendEvent(
             type="web_file_mentions",
             cwd=cwd,
@@ -2678,6 +2699,7 @@ class ReactBackendHost:
                 "query": query,
                 "candidates": candidates,
                 "skills": skills,
+                "sessions": sessions,
                 "truncated": truncated,
             },
         ))

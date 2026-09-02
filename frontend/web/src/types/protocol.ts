@@ -285,12 +285,14 @@ export interface FileTreeNode {
  * web_file_mentions 推送的单个候选（仅名称/路径文本，不读内容）。
  */
 export interface FileMentionCandidate {
-  /** 工作区内相对路径（/ 分隔）；skill 类型为技能名 */
+  /** 工作区内相对路径（/ 分隔）；skill 类型为技能名；session 类型为会话标题 */
   path: string;
-  /** 条目类型：'dir' | 'file' | 'skill'（目录选中后继续下钻，其余选中后闭合提及） */
-  kind: 'dir' | 'file' | 'skill';
-  /** 技能描述（仅 skill 类型，菜单副标题展示） */
+  /** 条目类型：'dir' | 'file' | 'skill' | 'session'（目录选中后继续下钻，其余选中后闭合提及） */
+  kind: 'dir' | 'file' | 'skill' | 'session';
+  /** 技能描述（仅 skill 类型）或会话描述「轮次 · 时间」（仅 session 类型），菜单副标题展示 */
   description?: string;
+  /** 源会话 ID（仅 session 类型，插入提及文本用） */
+  sessionId?: string;
 }
 
 /**
@@ -566,8 +568,15 @@ export interface BackendEvent {
   };
   /** web_file_tree 推送的目录条目（可选；path 为请求的相对目录，空串为根） */
   web_file_tree?: { path: string; entries: FileTreeNode[]; truncated?: boolean };
-  /** web_file_mentions 推送的 @ 提及补全候选（query 为规范化后的查询串，request_id 回显） */
-  web_file_mentions?: { query: string; candidates: FileMentionCandidate[]; skills?: { name: string; description: string }[]; truncated?: boolean; request_id?: string };
+  /** web_file_mentions 推送的 @ 提及补全候选（query 为规范化后的查询串；
+   *  request_id 在事件顶层字段回显，不在本载荷内） */
+  web_file_mentions?: {
+    query: string;
+    candidates: FileMentionCandidate[];
+    skills?: { name: string; description: string }[];
+    sessions?: { sessionId: string; path: string; description?: string; cwd?: string }[];
+    truncated?: boolean;
+  };
   /** web_git_status 推送的 Git 状态快照（可选） */
   web_git_status?: GitStatusSnapshot;
   /** web_file_content 推送的文件预览载荷（可选） */

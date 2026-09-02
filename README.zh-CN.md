@@ -157,6 +157,7 @@ illusion -m env_1.model_2 -e high -p "重构此模块"
 | Web UI 安全 | [docs/en/security.md](docs/en/security.md) | [docs/zh-CN/security.md](docs/zh-CN/security.md) |
 | Token 计量与压缩 | [docs/en/token-metering.md](docs/en/token-metering.md) | [docs/zh-CN/token-metering.md](docs/zh-CN/token-metering.md) |
 | 消息渠道 | [docs/en/channels.md](docs/en/channels.md) | [docs/zh-CN/channels.md](docs/zh-CN/channels.md) |
+| @ 提及（技能 / 会话 / 文件） | [docs/en/mentions.md](docs/en/mentions.md) | [docs/zh-CN/mentions.md](docs/zh-CN/mentions.md) |
 | 桌面版 | [docs/en/desktop.md](docs/en/desktop.md) | [docs/zh-CN/desktop.md](docs/zh-CN/desktop.md) |
 
 ---

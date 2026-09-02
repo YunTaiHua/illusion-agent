@@ -1,27 +1,38 @@
 /**
  * @fileoverview @ 提及文本高亮工具
  *
- * 识别文本中的 @ 提及 token（文件路径 / 技能名），供两处渲染复用：
- * - PromptInput 的镜像层（输入框内 @token 主题色渲染）
- * - MessageBubble 的 user 消息气泡（发送后的 @token 主题色渲染）
+ * 识别文本中的 @ 提及 token（会话引用 / 文件路径 / 技能名），在输入框
+ * 镜像层与用户气泡中以主题色渲染原始文本（无图标、无背景等美化）。
  *
- * 语法与补全检测（PromptInput.detectMentionToken）一致：
- * '@' 须位于行首或空白后（邮箱不触发）；@"..." 引号形式允许空格，
- * 闭合引号后提及结束。
+ * 会话提及为规范 Markdown 链接形式 `@[label](illusion-session:<id>)`：
+ * 输入框插入、提交、持久化与重放转录全程保持该格式一致（引擎在提交
+ * 边界解析并注入只读快照）。纯文本中的 @xxx（无 URI）不是会话引用。
+ *
+ * 语法与补全检测（PromptInput.detectMentionToken）一致：'@' 须位于行首
+ * 或空白后；@"..." 引号形式允许空格。
  *
  * @module mention
  */
 
 import type { ReactNode } from 'react';
 
-/**
- * @ 提及 token 匹配正则
- *
- * 捕获组：1 = 前导空白/行首（原样保留）；2 = 完整提及（@ + 路径/技能名）。
- * 引号形式：@"..."（含闭合）或 @"...（未闭合，输入中状态）。
- * 未引号形式：@ 后跟非空白字符序列（裸 @ 也命中，覆盖正在输入的瞬间）。
- */
-const MENTION_REGEX = /(^|\s)(@"[^"\n]*"?|@[^\s"]*)/g;
+// ---------------------------------------------------------------------------
+// token 文法（与后端 session_reference.MENTION_PATTERN、补全检测逐字对齐，
+// 修改需同步）
+// ---------------------------------------------------------------------------
+
+/** 会话引用规范形式（持久化/提交线格式；id 量词与后端 _SESSION_ID_RE 一致） */
+const SESSION_CANONICAL_SRC = '@\\[(?:\\\\.|[^\\\\\\]\n])*\\]\\(illusion-session:[0-9a-fA-F]{6,64}\\)';
+/** 引号形式（路径/标题含空格） */
+const QUOTED_SRC = '@"[^"\\n]*"';
+/** 未引号形式（路径/技能名；排除 [ ] ( ) 避免吞并规范形式） */
+const PLAIN_SRC = '@[^\\s"\\[\\]()]+';
+
+/** @ 提及 token 总匹配（规范形式最前；裸 @ 也命中覆盖输入中的瞬间） */
+const MENTION_REGEX = new RegExp(
+  `(^|\\s)(${SESSION_CANONICAL_SRC}|${QUOTED_SRC}|${PLAIN_SRC})`,
+  'g',
+);
 
 /**
  * 将文本按提及 token 切分为渲染节点：提及片段渲染主题色，其余原样。
@@ -30,7 +41,10 @@ const MENTION_REGEX = /(^|\s)(@"[^"\n]*"?|@[^\s"]*)/g;
  * @param mentionClassName - 提及片段的样式类（默认主题色）
  * @returns 渲染节点数组（key 已设置）
  */
-export function highlightMentions(text: string, mentionClassName = 'text-primary'): ReactNode[] {
+export function highlightMentions(
+  text: string,
+  mentionClassName = 'text-primary',
+): ReactNode[] {
   const nodes: ReactNode[] = [];
   let last = 0;
   let key = 0;

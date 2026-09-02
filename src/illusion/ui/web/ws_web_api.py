@@ -43,6 +43,9 @@ from illusion.permissions import PermissionMode
 from illusion.services.file_history import (
     cleanup_file_history as _cleanup_file_history,
 )
+from illusion.services.session_reference import (
+    session_mention_candidates as _session_mention_candidates,
+)
 from illusion.services.session_storage import (
     delete_session_by_id as _delete_session_by_id,
 )
@@ -87,15 +90,17 @@ def build_replay_items(replay_messages: list[Any] | None) -> list[dict[str, Any]
         return []
     from illusion.engine.messages import ToolResultBlock, ToolUseBlock
     from illusion.goal.prompts import is_goal_system_message
+    from illusion.services.session_reference import is_session_reference_snapshot
     from illusion.tasks.types import is_task_notification
     items: list[dict[str, Any]] = []
     # 保存 tool_use_id -> tool_name 的映射
     tool_name_map: dict[str, str] = {}
     for msg in replay_messages:
         if msg.role == "user":
-            # 跳过后台任务完成通知与 goal harness 注入消息：仅注入 LLM，
-            # 不参与前端重放渲染
-            if msg.text.strip() and not is_task_notification(msg.text) and not is_goal_system_message(msg.text):
+            # 跳过后台任务完成通知、goal harness 注入消息与会话引用快照：
+            # 仅注入 LLM，不参与前端重放渲染
+            if msg.text.strip() and not is_task_notification(msg.text) and not is_goal_system_message(msg.text) \
+                    and not is_session_reference_snapshot(msg.text):
                 items.append({"role": "user", "text": msg.text})
             for block in msg.content:
                 if isinstance(block, ToolResultBlock):
@@ -1287,13 +1292,15 @@ class WebApiDispatcher:
     async def handle_web_request_file_mentions(self, request: FrontendRequest) -> None:
         """收集 @ 提及补全候选并推送 web_file_mentions 事件。
 
-        仅返回工作区内路径与技能名候选（不读内容），选中后的提及文本保持
-        普通 prompt 文本，内容由模型自行调用 read 工具获取。
-        安全边界与 web_request_file_tree 一致：BFS 限定在目标工作区
-        根内，过滤规则复用文件树可见性。
+        仅返回工作区内路径、技能名与会话候选（不读内容）。会话候选只查
+        元数据（id/标题/摘要/轮次，磁盘快照 + 内存运行时合并，同工作区
+        优先），排除发起请求的当前会话；选中后的会话提及为规范文本
+        ``@[label](illusion-session:<id>)``，内容由引擎在提交边界以只读
+        快照注入。文件候选安全边界与 web_request_file_tree 一致：BFS
+        限定在目标工作区根内。
 
         Args:
-            request: 前端请求（query 可选：@ 后的路径片段；
+            request: 前端请求（query 可选：@ 后的片段；
                 session_id/cwd 同资源解析；request_id 原样回显供前端丢弃过期响应）
         """
         host = self._host
@@ -1303,6 +1310,34 @@ class WebApiDispatcher:
         query = _normalize_mention_query(request.query)
         candidates, truncated = await asyncio.to_thread(_file_mention_candidates, bundle.cwd, query)
         skills = await asyncio.to_thread(_skill_mention_candidates, bundle.cwd, query)
+
+        # 会话候选：全部工作区磁盘快照 + 内存运行时合并（线程池扫描，
+        # 同 _push_sessions 范式）；排除发起请求的会话（自引用无意义）
+        lang_bundle = host._active_bundle() or bundle
+        locale = str(lang_bundle.app_state.get().ui_language or lang_bundle.current_settings().ui_language)
+        zh = locale.lower().startswith("zh")
+        cwds = [state.cwd for state in host._workspaces.values()] or [bundle.cwd]
+        in_memory = [
+            {
+                "id": sr.session_id,
+                "title": sr.title,
+                "summary": sr.summary,
+                "cwd": sr.bundle.cwd,
+                "turn_count": sr.turn_count,
+                "message_count": sr.message_count,
+                "updated_at": sr.created_at,
+            }
+            for sr in host._sessions.values()
+        ]
+        sessions = await asyncio.to_thread(
+            _session_mention_candidates,
+            workspaces=cwds,
+            in_memory=in_memory,
+            query=query,
+            exclude_session_id=request.session_id,
+            preferred_cwd=bundle.cwd,
+            zh=zh,
+        )
         await self._emit(BackendEvent(
             type="web_file_mentions",
             cwd=bundle.cwd,
@@ -1311,6 +1346,7 @@ class WebApiDispatcher:
                 "query": query,
                 "candidates": candidates,
                 "skills": skills,
+                "sessions": sessions,
                 "truncated": truncated,
             },
         ))

@@ -76,6 +76,7 @@ from illusion.permissions import PermissionChecker
 from illusion.plugins.loader import load_plugins
 from illusion.plugins.types import LoadedPlugin
 from illusion.prompts import build_runtime_system_prompt
+from illusion.services.session_reference import is_session_reference_snapshot
 from illusion.state import AppState, AppStateStore
 from illusion.tasks.types import TaskRecord, is_task_notification
 from illusion.tools import ToolRegistry, create_default_tool_registry
@@ -844,7 +845,8 @@ def _last_user_text(messages: list[ConversationMessage]) -> str:
     """获取最后一条用户消息的文本。
 
     跳过后台任务完成通知（<task-notification>）：通知是系统注入给 LLM 的
-    XML，不应作为 latest_user_prompt 进入系统提示词。
+    XML，不应作为 latest_user_prompt 进入系统提示词。会话引用快照同为
+    注入消息，一并跳过。
 
     Args:
         messages: 会话消息列表
@@ -852,9 +854,11 @@ def _last_user_text(messages: list[ConversationMessage]) -> str:
     Returns:
         str: 最后一条用户消息文本（如果不存在则返回空字符串）
     """
+    from illusion.services.session_reference import is_session_reference_snapshot
+
     for msg in reversed(messages):
         if msg.role == "user" and msg.text.strip():
-            if is_task_notification(msg.text):
+            if is_task_notification(msg.text) or is_session_reference_snapshot(msg.text):
                 continue
             return msg.text.strip()
     return ""
@@ -1100,11 +1104,16 @@ def _update_session_meta(bundle: RuntimeBundle) -> None:
     summary = ""
     for msg in bundle.engine.messages:
         if msg.role == "user" and msg.text.strip():
-            # 跳过后台任务完成通知与 goal harness 注入消息（避免成为会话摘要）。
+            # 跳过后台任务完成通知、goal harness 注入消息与会话引用快照
+            # （避免成为会话摘要）。
             # 命令从不进入 engine.messages（handle_line 命令分支直接拦截），
             # 因此 messages 中以 / 开头的 user 消息必为真实用户输入，
             # 不能再按 / 前缀排除——否则真斜杠消息会被误吞。
-            if is_task_notification(msg.text) or is_goal_system_message(msg.text):
+            if (
+                is_task_notification(msg.text)
+                or is_goal_system_message(msg.text)
+                or is_session_reference_snapshot(msg.text)
+            ):
                 continue
             summary = msg.text.strip()[:80]
             break
@@ -1126,6 +1135,7 @@ def _update_session_meta(bundle: RuntimeBundle) -> None:
         and m.text.strip()
         and not is_task_notification(m.text)
         and not is_goal_system_message(m.text)
+        and not is_session_reference_snapshot(m.text)
     )
     # 保留原始 created_at（首次调用时不存在则用当前时间）
     existing = read_meta_from(session_dir, session_id) or {}
@@ -1443,9 +1453,14 @@ async def _render_command_result(
 		replay_items: list[dict[str, Any]] = []
 		for msg in result.replay_messages:
 			if msg.role == "user":
-				# 跳过后台任务完成通知与 goal harness 注入消息：
+				# 跳过后台任务完成通知、goal harness 注入消息与会话引用快照：
 				# 仅注入 LLM，不参与前端重放渲染
-				if msg.text.strip() and not is_task_notification(msg.text) and not is_goal_system_message(msg.text):
+				if (
+					msg.text.strip()
+					and not is_task_notification(msg.text)
+					and not is_goal_system_message(msg.text)
+					and not is_session_reference_snapshot(msg.text)
+				):
 					replay_items.append({"role": "user", "text": msg.text})
 				for block in msg.content:
 					if isinstance(block, ToolResultBlock):
@@ -1510,9 +1525,14 @@ async def _render_command_result(
 			tool_uses_by_id2: dict[str, dict[str, Any]] = {}
 			for msg in result.replay_messages:
 				if msg.role == "user":
-					# 跳过后台任务完成通知与 goal harness 注入消息：
+					# 跳过后台任务完成通知、goal harness 注入消息与会话引用快照：
 					# 仅注入 LLM，不参与前端重放渲染
-					if msg.text.strip() and not is_task_notification(msg.text) and not is_goal_system_message(msg.text):
+					if (
+						msg.text.strip()
+						and not is_task_notification(msg.text)
+						and not is_goal_system_message(msg.text)
+						and not is_session_reference_snapshot(msg.text)
+					):
 						if replay_transcript_item is not None:
 							await replay_transcript_item({"role": "user", "text": msg.text})
 						else:
