@@ -294,8 +294,12 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
       setSandbox(s.sandbox ?? null);
       // 权限风险分级配置（LOW/MEDIUM/HIGH 三层级）
       setPermission(s.permission ?? null);
-      // 后端 ui_language 为 en-US / zh-CN / 空串；空串默认 zh-CN
-      setUiLang(s.ui_language === 'en-US' ? 'en-US' : 'zh-CN');
+      // 后端 ui_language 为 en-US / zh-CN / 空串；空串默认 zh-CN。
+      // 仅在挂载加载时回读；保存后静默刷新（quiet）时保留本地选择——该字段
+      // 走 WebSocket 即时同步，GET 回传可能尚未落库，覆盖会引发语言瞬时回弹
+      if (!quiet) {
+        setUiLang(s.ui_language === 'en-US' ? 'en-US' : 'zh-CN');
+      }
       // 主题由 useTheme 独立加载并校正，无需在此赋值
       setEnvs(e.envs);
       setActiveEnvKey(e.active_env_key);
@@ -434,6 +438,22 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
     setSaving(true);
     setSaveError(null);
     try {
+      // 0. 模型参数预校验（context_window / max_tokens / max_turns）：
+      //    放在任何写操作之前，避免"env 已创建但参数非法提前返回"导致新建
+      //    env 不进入列表/草稿不清空的非对称状态。字符串态自由编辑：清空/
+      //    输入不钳制，保存时统一校验为正整数（max_turns 1~512），非法输入
+      //    报错终止保存；空字段视为不改动
+      const tdCw = parseInt(contextWindow, 10);
+      const tdMt = parseInt(maxTokens, 10);
+      const tdTurns = parseInt(maxTurns, 10);
+      const cwValid = contextWindow.trim() === '' || (Number.isInteger(tdCw) && tdCw > 0);
+      const mtValid = maxTokens.trim() === '' || (Number.isInteger(tdMt) && tdMt > 0);
+      const turnsValid = maxTurns.trim() === '' || (Number.isInteger(tdTurns) && tdTurns >= 1 && tdTurns <= 512);
+      if (!cwValid || !mtValid || !turnsValid) {
+        setSaving(false);
+        setSaveError(t(lang, 'modelParamsInvalid'));
+        return;
+      }
       // 1. ui_language 改动走 WebSocket 即时同步
       if (settings && uiLang !== settings.ui_language) {
         onSetUiLanguage(uiLang);
@@ -447,20 +467,7 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
       if (settings && (workDir.trim() || '') !== (settings.working_directory ?? '')) {
         await settingsApi.updateWorkingDirectory(workDir.trim());
       }
-      // 3.1 模型参数改动（context_window / max_tokens / max_turns）
-      // 字符串态自由编辑：清空/输入不钳制，保存时统一校验为正整数（max_turns 1~512），
-      // 非法输入报错终止保存，避免"清空即变 1"的反人类体验；空字段视为不改动
-      const tdCw = parseInt(contextWindow, 10);
-      const tdMt = parseInt(maxTokens, 10);
-      const tdTurns = parseInt(maxTurns, 10);
-      const cwValid = contextWindow.trim() === '' || (Number.isInteger(tdCw) && tdCw > 0);
-      const mtValid = maxTokens.trim() === '' || (Number.isInteger(tdMt) && tdMt > 0);
-      const turnsValid = maxTurns.trim() === '' || (Number.isInteger(tdTurns) && tdTurns >= 1 && tdTurns <= 512);
-      if (!cwValid || !mtValid || !turnsValid) {
-        setSaving(false);
-        setSaveError(t(lang, 'modelParamsInvalid'));
-        return;
-      }
+      // 3.1 模型参数改动（已在上方预校验通过，此处仅比较差异后提交）
       const modelParamsPayload: { context_window?: number; max_tokens?: number; max_turns?: number } = {};
       if (contextWindow.trim() !== '' && cwValid) modelParamsPayload.context_window = tdCw;
       if (maxTokens.trim() !== '' && mtValid) modelParamsPayload.max_tokens = tdMt;
