@@ -12,7 +12,7 @@
  *
  * 生命周期对应 docs/zh-CN/desktop.md "托盘行为" 与 "守护进程生命周期"。
  */
-import { app, BrowserWindow, shell, dialog, Menu, ipcMain, Notification } from 'electron';
+import { app, BrowserWindow, shell, dialog, Menu, ipcMain, Notification, session } from 'electron';
 import { spawn } from 'node:child_process';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
@@ -152,6 +152,18 @@ app.whenReady().then(async () => {
       mainWindow.focus();
     }
   });
+
+  // 启动即清空会话 cookie（须在单实例锁之后：仅持有锁的实例清理，
+  // 否则重复启动触发的第二个实例会清掉运行中实例的登录 cookie）。
+  // 桌面版每次启动都在随机端口上拉起后端，登录流程签发的认证 cookie
+  // 曾按端口哈希命名，动态端口下旧 cookie 永不被覆盖、无限累积，请求
+  // 头膨胀到服务器上限后 WS 握手被 400 拒绝（界面卡在遮罩层）。启动
+  // 时清一次：本会话的登录 cookie 由随后 token 交换重新签发，恒为空起步。
+  try {
+    await session.defaultSession.clearStorageData({ storages: ['cookies'] });
+  } catch {
+    // 清除失败不阻塞启动（后续 token 交换会签发新 cookie）
+  }
 
   // --- 自动更新 ---
   // 仅打包版生效（开发模式无 app-update.yml，updater 内部跳过）。

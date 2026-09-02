@@ -28,6 +28,12 @@ LOOPBACK = "http://127.0.0.1"
 AUTH_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
 
 
+def _mint_cookie_value(auth, authority: str) -> str:
+    """签发 ``name=value`` 形态的 cookie 头片段（供 cookie_valid 直接用）。"""
+    name, value, _ = auth.mint_cookie(authority)
+    return f"{name}={value}"
+
+
 # ---- 单元级 ----
 
 class TestUnitAuth:
@@ -94,9 +100,24 @@ class TestCookieUnit:
     def test_mint_and_validate(self, tmp_path) -> None:
         auth = create_web_auth(tmp_path / "s.json")
         name, value, max_age = auth.mint_cookie("127.0.0.1:3000")
-        assert name.startswith("illusion-auth-")
+        assert name == "illusion-auth-"  # 固定名：覆盖更新而非按端口累积
         assert max_age > 0
         assert auth.cookie_valid("127.0.0.1:3000", f"{name}={value}; other=x")
+
+    def test_mint_same_name_across_authorities(self, tmp_path) -> None:
+        """回归：动态端口场景（桌面版每次启动随机端口）下，不同 authority
+        签发的 cookie 必须同名——同名 cookie 被下一次 token 交换覆盖更新，
+        若按端口哈希命名会在浏览器 jar 里无限累积，请求头膨胀到服务器
+        上限后 WS 握手被 400 拒绝（遮罩层卡死）。"""
+        auth = create_web_auth(tmp_path / "s.json")
+        name_a, _, _ = auth.mint_cookie("127.0.0.1:3000")
+        name_b, _, _ = auth.mint_cookie("127.0.0.1:58392")
+        assert name_a == name_b == "illusion-auth-"
+        # authority 绑定仍在 payload：跨端口借用同一 cookie 拒绝
+        assert not auth.cookie_valid("127.0.0.1:58392", f"{name_a}=x")
+        cookie_a = _mint_cookie_value(auth, "127.0.0.1:3000")
+        assert auth.cookie_valid("127.0.0.1:3000", cookie_a)
+        assert not auth.cookie_valid("127.0.0.1:58392", cookie_a)
 
     def test_tampered_cookie_rejected(self, tmp_path) -> None:
         auth = create_web_auth(tmp_path / "s.json")
@@ -156,9 +177,10 @@ def launch_token(auth):
     return auth.launch_token
 
 
-def _exchange_cookie(client, token: str, path="/") -> str | None:
+def _exchange_cookie(client, token: str, path="/", host: str | None = None) -> str | None:
     """执行 token→cookie 交换，返回签发的 ``name=value``（或 None）。"""
-    resp = client.get(f"{path}?token={token}", follow_redirects=False)
+    headers = {"Host": host} if host else {}
+    resp = client.get(f"{path}?token={token}", follow_redirects=False, headers=headers)
     assert resp.status_code in (303, 200)
     sc = resp.headers.get("set-cookie")
     if not sc:
@@ -203,6 +225,19 @@ class TestIndexExchange:
         # follow_redirects=True：303 跟随后 cookie 自动携带，dev 下拿到 200 交换页
         resp = client.get(f"/?token={launch_token}")
         assert resp.status_code == 200
+
+    def test_dynamic_port_exchange_keeps_cookie_name(self, client, launch_token):
+        """回归：桌面版每次启动随机端口（authority 变化），多次 token 交换
+        签发的 cookie 名必须恒定——同名覆盖更新，浏览器 jar 不累积；
+        按端口哈希的旧命名会无限堆积 cookie，请求头膨胀至服务器上限后
+        WS 握手 400 拒绝、界面卡在遮罩层。"""
+        names: list[str] = []
+        for port in ("3000", "58392", "61021", "45011"):
+            cookie = _exchange_cookie(client, launch_token, host=f"127.0.0.1:{port}")
+            assert cookie is not None
+            names.append(cookie.split("=", 1)[0])
+        assert len(set(names)) == 1
+        assert names[0] == "illusion-auth-"
 
 
 class TestRestAuth:

@@ -11,7 +11,10 @@
 - **签名 cookie**：浏览器首次携带 token 访问首页时，服务端校验通过后
   签发一个 HMAC-SHA256 签名的 cookie（HttpOnly + SameSite=Strict +
   authority 绑定 + 有效期），并 303 跳转到不带 token 的干净 URL。此后
-  浏览器请求凭 cookie 通过认证，地址栏不残留 token。
+  浏览器请求凭 cookie 通过认证，地址栏不残留 token。cookie 名为固定值
+  （authority 绑定在签名 payload 内），每次 token 交换覆盖更新而非
+  按端口累积——保证动态端口场景（桌面版每次启动随机端口）下浏览器
+  jar 恒为单条 cookie。
 - **持久化签名 secret**：cookie 的签名密钥持久化于配置目录（
   ``~/.illusion/web_auth_secret.json``），后端重启后已签发的 cookie 依旧
   有效 —— 用户无需在每次重启后重新打开打印的 URL。
@@ -51,7 +54,10 @@ __all__ = [
 COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 # 首页 token 交换查询参数名
 TOKEN_QUERY = "token"
-# cookie 名前缀（后接 authority 的 sha256，authority 绑定）
+# cookie 名（固定，不按 authority 变化）：authority 绑定记录在签名 payload
+# 中，同名 cookie 每次 token 交换覆盖更新而非累积——若按端口哈希命名，
+# 桌面版（每次启动动态端口）会在浏览器 jar 里无限堆积旧 cookie，请求头
+# 膨胀到服务器上限后 WS 握手被 400 拒绝，界面卡死
 _COOKIE_PREFIX = "illusion-auth-"
 _COOKIE_VERSION = 1
 _SECRET_FILE_NAME = "web_auth_secret.json"
@@ -204,10 +210,15 @@ class WebAuth:
 
     # ---- 签名 cookie ----
 
-    def cookie_name(self, authority: str) -> str:
-        """authority 绑定的 cookie 名（名中含其 sha256，互不冲突）。"""
-        digest = hashlib.sha256(authority.encode("utf-8")).digest()
-        return _COOKIE_PREFIX + _b64url_encode(digest)
+    def cookie_name(self) -> str:
+        """签名 cookie 的固定名（不随 authority 变化）。
+
+        同名 cookie 被新一次的 token 交换覆盖更新，浏览器 jar 里恒为单条，
+        避免历史按端口哈希的旧命名在动态端口场景下无限累积（请求头膨胀
+        至服务器上限导致 WS 握手 400）。authority 绑定由签名 payload 承担，
+        跨端口/跨进程借用同一 cookie 时认证仍按 fail-closed 拒绝。
+        """
+        return _COOKIE_PREFIX
 
     def mint_cookie(
         self,
@@ -229,11 +240,11 @@ class WebAuth:
         }
         body = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
         signature = _b64url_encode(hmac.new(self.secret, body.encode("ascii"), hashlib.sha256).digest())
-        return self.cookie_name(authority), f"v1.{body}.{signature}", max_age
+        return self.cookie_name(), f"v1.{body}.{signature}", max_age
 
     def cookie_valid(self, authority: str, cookie_value: str) -> bool:
         """校验 cookie：签名匹配、authority 与请求一致、未过期。"""
-        name = self.cookie_name(authority)
+        name = self.cookie_name()
         found = cookie_header_value(cookie_value, name)
         if found is None:
             return False

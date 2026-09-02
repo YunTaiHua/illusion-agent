@@ -113,7 +113,7 @@ The authentication layer gates *who may use this web UI* :
 
 * **Launch token**: generated randomly on every startup (valid for the process lifetime). The CLI prints the full access URL with the token (`http://host:port/?token=...`). Non-browser clients (scripts, tests) can authenticate with an `Authorization: Bearer <token>` header or a `?token=` query parameter.
 
-* **Signed cookie**: on the first visit carrying the token, the server mints an HMAC-SHA256 signed cookie (HttpOnly + SameSite=Strict + authority binding + 30-day lifetime) and 303-redirects to a clean URL without the token — the address bar keeps no token, subsequent requests authenticate via the cookie.
+* **Signed cookie**: on the first visit carrying the token, the server mints an HMAC-SHA256 signed cookie (HttpOnly + SameSite=Strict + authority binding + 30-day lifetime) and 303-redirects to a clean URL without the token — the address bar keeps no token, subsequent requests authenticate via the cookie. The cookie name is fixed and each token exchange overwrites it (authority binding lives in the signed payload), so dynamic ports (the desktop app picks a random port on every launch) or concurrent instances never accumulate cookies in the browser jar; the desktop app additionally clears session cookies once at startup (after acquiring the single-instance lock), keeping the jar empty at boot.
 
 * **Persistent signing secret**: the cookie signing key is persisted in the config directory (`~/.illusion/web_auth_secret.json`, a 32-byte random). Cookies survive backend restarts, so you don't have to reopen the printed URL.
 

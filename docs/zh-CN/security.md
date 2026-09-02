@@ -113,7 +113,7 @@ illusion web --host 0.0.0.0
 
 * **launch token**：每次启动随机生成（进程生命周期有效），CLI 打印带 token 的完整访问 URL（`http://host:port/?token=...`）。非浏览器客户端（脚本、测试）可用 `Authorization: Bearer <token>` 头或 `?token=` 查询参数直接访问。
 
-* **签名 cookie**：浏览器首次携带 token 访问首页时，服务端校验通过后签发 HMAC-SHA256 签名 cookie（HttpOnly + SameSite=Strict + authority 绑定 + 30 天有效期）并 303 跳转到不带 token 的干净 URL——地址栏不残留 token，之后的请求凭 cookie 自动通过。
+* **签名 cookie**：浏览器首次携带 token 访问首页时，服务端校验通过后签发 HMAC-SHA256 签名 cookie（HttpOnly + SameSite=Strict + authority 绑定 + 30 天有效期）并 303 跳转到不带 token 的干净 URL——地址栏不残留 token，之后的请求凭 cookie 自动通过。cookie 名为固定值，每次 token 交换覆盖更新（authority 绑定在签名 payload 内）：桌面版每次启动随机端口、并发多实例都不会在浏览器 jar 里累积 cookie；桌面版还会在启动时（持有单实例锁后）清空一次会话 cookie，保证 jar 恒为空起步。
 
 * **持久化签名 secret**：cookie 签名密钥持久化于配置目录（`~/.illusion/web_auth_secret.json`，32 字节随机），后端重启后已签发的 cookie 依旧有效，无需重新打开打印的 URL。
 
