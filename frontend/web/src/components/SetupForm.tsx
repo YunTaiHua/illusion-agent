@@ -14,6 +14,7 @@
  *
  * 数据流：
  * - 挂载时并行加载 settings / envs / channels（REST）
+ * - 保存成功后静默重新加载三者，表单回显最新持久化配置（防误以为未保存重复点击）
  * - ui_language 改动通过 onSetUiLanguage 走 WebSocket 同步（即时生效）
  * - env 增删改 / working_directory / channels 通过 REST 提交
  * - copilot/codex 走 OAuth 设备码流程，token 由后端全局管理，env 创建时 api_key 留空
@@ -231,8 +232,6 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
   const [sandbox, setSandbox] = useState<SandboxSettings | null>(null);
   /** 沙箱保存错误 */
   const [sandboxError, setSandboxError] = useState<string | null>(null);
-  /** 沙箱保存成功提示 */
-  const [sandboxSaved, setSandboxSaved] = useState(false);
   /** 权限风险分级配置（LOW/MEDIUM/HIGH 三层级，后端内置只读展示） */
   const [permission, setPermission] = useState<PermissionRiskSettings | null>(null);
   /** 界面语言选择值（后端格式 zh-CN / en-US） */
@@ -250,51 +249,70 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
   /** 操作错误（env 列表即时操作的错误） */
   const [opError, setOpError] = useState<string | null>(null);
 
+  // 组件是否仍挂载：reload 异步完成后避免对已卸载组件 setState
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  /**
+   * 重新加载 settings / envs / channels
+   *
+   * 挂载时与保存成功后共用。保存成功后刷新表单回读最新持久化配置
+   * （如首次配置生成的 env 出现在列表、新增草稿被清空），让用户直接
+   * 看到保存结果，避免“保存后页面无变化被误认为未保存而重复点击保存”。
+   *
+   * @param quiet 静默刷新（保存后调用）：不翻转 loading 避免页面闪烁，
+   *   刷新失败也忽略——保存已成功，保留当前表单数据即可。
+   */
+  const reload = useCallback(async (quiet = false) => {
+    if (!quiet) setLoading(true);
+    try {
+      const [s, e, c] = await Promise.all([settingsApi.get(), envApi.list(), channelsApi.get()]);
+      if (!mountedRef.current) return;
+      setSettings(s);
+      setWorkDir(s.working_directory ?? '');
+      setMemEnabled(s.memory?.enabled ?? true);
+      setMemAutoExtract(s.memory?.auto_extract ?? true);
+      setMemExtractModel(s.memory?.extract_model ?? '');
+      setMemDreamModel(s.memory?.dream_model ?? '');
+      setMemDir(s.memory?.directory ?? '');
+      setTitleEnabled(s.title?.enabled ?? false);
+      setTitleModel(s.title?.model ?? '');
+      // 通知开关（旧后端响应缺省时按全开兜底）
+      setToastEnabled(s.notifications?.enabled ?? true);
+      setToastSound(s.notifications?.sound ?? true);
+      // 模型参数（默认值与后端 Settings 模型对齐）
+      setContextWindow(String(s.context_window ?? 200000));
+      setMaxTokens(String(s.max_tokens ?? 16384));
+      setMaxTurns(String(s.max_turns ?? 200));
+      // 权限 LLM 自动审核配置（auto 模式高危操作与沙箱拦截由 LLM 审核放行）
+      setReviewAuto(s.permission_review?.auto_review ?? false);
+      setReviewModel(s.permission_review?.review_model ?? '');
+      // 沙箱配置（默认值由后端保证返回）
+      setSandbox(s.sandbox ?? null);
+      // 权限风险分级配置（LOW/MEDIUM/HIGH 三层级）
+      setPermission(s.permission ?? null);
+      // 后端 ui_language 为 en-US / zh-CN / 空串；空串默认 zh-CN
+      setUiLang(s.ui_language === 'en-US' ? 'en-US' : 'zh-CN');
+      // 主题由 useTheme 独立加载并校正，无需在此赋值
+      setEnvs(e.envs);
+      setActiveEnvKey(e.active_env_key);
+      setChannels(c as unknown as ChannelsCfg);
+      if (!quiet) setLoadError(null);
+    } catch (err) {
+      if (!mountedRef.current) return;
+      if (!quiet) setLoadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (!quiet && mountedRef.current) setLoading(false);
+    }
+  }, []);
+
   // 挂载时并行加载 settings / envs / channels
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const [s, e, c] = await Promise.all([settingsApi.get(), envApi.list(), channelsApi.get()]);
-        if (cancelled) return;
-        setSettings(s);
-        setWorkDir(s.working_directory ?? '');
-        setMemEnabled(s.memory?.enabled ?? true);
-        setMemAutoExtract(s.memory?.auto_extract ?? true);
-        setMemExtractModel(s.memory?.extract_model ?? '');
-        setMemDreamModel(s.memory?.dream_model ?? '');
-        setMemDir(s.memory?.directory ?? '');
-        setTitleEnabled(s.title?.enabled ?? false);
-        setTitleModel(s.title?.model ?? '');
-        // 通知开关（旧后端响应缺省时按全开兜底）
-        setToastEnabled(s.notifications?.enabled ?? true);
-        setToastSound(s.notifications?.sound ?? true);
-        // 模型参数（默认值与后端 Settings 模型对齐）
-        setContextWindow(String(s.context_window ?? 200000));
-        setMaxTokens(String(s.max_tokens ?? 16384));
-        setMaxTurns(String(s.max_turns ?? 200));
-        // 权限 LLM 自动审核配置（auto 模式高危操作与沙箱拦截由 LLM 审核放行）
-        setReviewAuto(s.permission_review?.auto_review ?? false);
-        setReviewModel(s.permission_review?.review_model ?? '');
-        // 沙箱配置（默认值由后端保证返回）
-        setSandbox(s.sandbox ?? null);
-        // 权限风险分级配置（LOW/MEDIUM/HIGH 三层级）
-        setPermission(s.permission ?? null);
-        // 后端 ui_language 为 en-US / zh-CN / 空串；空串默认 zh-CN
-        setUiLang(s.ui_language === 'en-US' ? 'en-US' : 'zh-CN');
-        // 主题由 useTheme 独立加载并校正，无需在此赋值
-        setEnvs(e.envs);
-        setActiveEnvKey(e.active_env_key);
-        setChannels(c as unknown as ChannelsCfg);
-        setLoading(false);
-      } catch (err) {
-        if (cancelled) return;
-        setLoadError(err instanceof Error ? err.message : String(err));
-        setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
+    reload();
+  }, [reload]);
 
   // Esc 键关闭（首次登录时禁用，强制用户完成配置）
   useEffect(() => {
@@ -421,7 +439,8 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
         onSetUiLanguage(uiLang);
       }
       // 2. 首次模式或修改模式展开新增 env：创建 env
-      if ((firstLogin || showAddEnv) && draftValid(draft)) {
+      const createdEnv = (firstLogin || showAddEnv) && draftValid(draft);
+      if (createdEnv) {
         await createEnvFromDraft(draft);
       }
       // 3. 工作目录改动
@@ -522,20 +541,29 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
       if (sandbox) {
         try {
           await settingsApi.updateSandbox(sandbox as Parameters<typeof settingsApi.updateSandbox>[0]);
-          setSandboxSaved(true);
           setSandboxError(null);
         } catch (err) {
           setSandboxError(err instanceof Error ? err.message : String(err));
         }
       }
       // 6. 权限风险分级为内置只读（LOW/MEDIUM/HIGH），无需保存
+      // 7. 保存成功后刷新表单：保持 saving=true 禁用保存按钮（避免刷新窗口内
+      //    重复点击造成重复保存），静默回读最新持久化配置，让用户看到保存结果
+      await reload(true);
+      // 表单可能已在刷新期间被关闭（修改模式 Esc / 遮罩点击）：不再更新本地状态、不再触发回调
+      if (!mountedRef.current) return;
+      // 新增的 env 已持久化并进入列表：清空新增草稿、收起新增表单
+      if (createdEnv) {
+        setDraft(makeInitialDraft());
+        setShowAddEnv(false);
+      }
       setSaving(false);
       onSaved();
     } catch (err) {
       setSaving(false);
       setSaveError(err instanceof Error ? err.message : String(err));
     }
-  }, [settings, uiLang, workDir, contextWindow, maxTokens, maxTurns, memEnabled, memAutoExtract, memExtractModel, memDreamModel, memDir, titleEnabled, titleModel, toastEnabled, toastSound, reviewAuto, reviewModel, channels, workspaces, firstLogin, showAddEnv, draft, draftValid, createEnvFromDraft, onSetUiLanguage, onSaved, sandbox, lang]);
+  }, [settings, uiLang, workDir, contextWindow, maxTokens, maxTurns, memEnabled, memAutoExtract, memExtractModel, memDreamModel, memDir, titleEnabled, titleModel, toastEnabled, toastSound, reviewAuto, reviewModel, channels, workspaces, firstLogin, showAddEnv, draft, draftValid, createEnvFromDraft, onSetUiLanguage, onSaved, sandbox, lang, reload]);
 
   /** 删除环境（即时 API） */
   const handleDeleteEnv = useCallback(async (envKey: string) => {
@@ -751,7 +779,6 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
               sandbox={sandbox}
               onSandboxChange={setSandbox}
               error={sandboxError}
-              saved={sandboxSaved}
               permission={permission}
             />
           ) : (
@@ -1865,12 +1892,11 @@ interface SandboxTabProps {
   sandbox: SandboxSettings | null;
   onSandboxChange: (s: SandboxSettings) => void;
   error: string | null;
-  saved: boolean;
   permission: PermissionRiskSettings | null;
 }
 
 /** 沙箱配置 Tab：文件系统/网络/高级选项 + 风险分级（LOW/MEDIUM/HIGH）只读展示 */
-function SandboxTab({ lang, sandbox, onSandboxChange, error, saved, permission }: SandboxTabProps) {
+function SandboxTab({ lang, sandbox, onSandboxChange, error, permission }: SandboxTabProps) {
   if (!sandbox) {
     return <div className="text-sm text-content-disabled py-4">{t(lang, 'setupFormLoadFailed')}</div>;
   }
@@ -1883,7 +1909,6 @@ function SandboxTab({ lang, sandbox, onSandboxChange, error, saved, permission }
   return (
     <div className="space-y-3">
       {error && <div className="text-xs text-danger">{t(lang, 'setupSandboxSaveFailed')}: {error}</div>}
-      {saved && <div className="text-xs text-success">{t(lang, 'setupSandboxSaveSuccess')}</div>}
 
       {/* 平台与排除命令 */}
       <SandboxSection lang={lang} titleKey="setupFieldSandboxPlatform" >

@@ -486,7 +486,6 @@ const ZH: Record<string, string> = {
   setupFieldSandbox: '文件系统限制',
   setupFieldSandboxPlatform: '平台与命令',
   setupFieldSandboxRiskHint: '高危操作（删除/还原等）始终请求确认，即使路径已允许',
-  setupSandboxSaveSuccess: '沙箱配置已保存',
   setupSandboxSaveFailed: '保存沙箱配置失败',
   // ---- 风险分级（LOW/MEDIUM/HIGH 三层级）----
   setupFieldSandboxRiskLevels: '风险分级',
@@ -1037,7 +1036,6 @@ const EN: Record<string, string> = {
   setupFieldSandbox: 'Filesystem restrictions',
   setupFieldSandboxPlatform: 'Platform & commands',
   setupFieldSandboxRiskHint: 'High-risk operations (delete/restore) always prompt, even if the path was already allowed',
-  setupSandboxSaveSuccess: 'Sandbox config saved',
   setupSandboxSaveFailed: 'Failed to save sandbox config',
   // ---- Risk levels (LOW / MEDIUM / HIGH) ----
   setupFieldSandboxRiskLevels: 'Risk Levels',
