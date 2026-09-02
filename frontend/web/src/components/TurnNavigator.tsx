@@ -97,7 +97,12 @@ const TurnNavigator = memo(function TurnNavigator({ lang, items, activeTurn, bus
     rail.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
   }, [activeTurn, items]);
 
-  if (items.length < 2) return null;
+  // 轮次不足 2 个时不渲染刻度，但保留同宽空位（w-[40px] 与刻度带等宽）：
+  // 会话轮次增长后导航条若突然出现/消失会压缩聊天列、引起内容回流抖动，
+  // 预留常驻位置保证布局零变化（sm 以下与导航条本体一样隐藏）
+  if (items.length < 2) {
+    return <div className="relative w-[40px] shrink-0 self-stretch hidden sm:block" aria-hidden="true" />;
+  }
 
   const hoveredTurn = hover?.turn ?? null;
   const hoveredIdx = hoveredTurn == null
