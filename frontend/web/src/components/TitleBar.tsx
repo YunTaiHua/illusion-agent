@@ -21,6 +21,24 @@ import { isIconVisible, useDesktopUpdater } from '../hooks/useDesktopUpdater';
 /** 是否运行在桌面壳内（模块加载时求值一次） */
 const isDesktop = typeof window !== 'undefined' && !!window.illusionDesktop;
 
+/**
+ * 把点击处理挂到原生 click 监听（而非 React 合成 onClick）。
+ *
+ * Electron 无边框窗口的实测中，真实鼠标点击可能通过 DOM 事件派发却不触发
+ * React 委托的合成 onClick（表现为仅顶栏按钮无响应）。原生监听跟随真实
+ * 输入；只走原生路径也避免合成与原生同时触发导致操作执行两次。
+ */
+function useNativeClick(onClick?: () => void) {
+  const ref = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !onClick) return;
+    el.addEventListener('click', onClick);
+    return () => el.removeEventListener('click', onClick);
+  }, [onClick]);
+  return ref;
+}
+
 /** 窗口控制按钮（min/max/close） */
 function WindowButton({
   onClick,
@@ -33,9 +51,11 @@ function WindowButton({
   children: React.ReactNode;
   title: string;
 }) {
+  const ref = useNativeClick(onClick);
   return (
     <button
-      onClick={onClick}
+      ref={ref}
+      type="button"
       title={title}
       aria-label={title}
       className="w-11 h-9 group flex items-center justify-center text-content-secondary"
@@ -210,34 +230,37 @@ export default function TitleBar({ lang }: { lang: UiLanguage }) {
   const api = window.illusionDesktop;
 
   return (
-    <div
-      className="app-region-drag app-titlebar flex items-center h-9 shrink-0 select-none relative z-50"
-      style={{
-        paddingLeft: isMac ? '80px' : '12px',
-      }}
-    >
-      {/* 品牌展示（仅 Win/Linux）：图标 + 标语，纯展示无交互；mac 交由原生交通灯区。
-        品牌区宽 276px：左栏卡片 margin-left 8 + 宽 280 = 右缘 288，顶栏左内边距 12，
-        288 − 12 = 276 —— 品牌区右缘与左栏卡片右缘精确对齐；标语字距由 BrandSlogan
-        运行时测量校准填满剩余 248px，不依赖估算 */}
-      {!isMac && (
-        <div className="flex items-center mr-3" style={{ width: 276 }}>
-          <img src="/icon.png" alt="" width={20} height={20} draggable={false} className="select-none mr-2" />
-          <BrandSlogan />
-        </div>
-      )}
-      <div className="flex-1" />
+    // 拖拽区只覆盖非交互区（品牌 + 弹性空白）；窗口按钮、更新图标等交互
+    // 元素完全置于拖拽区之外——Electron(Windows) 在原生层按元素吞掉拖拽
+    // 区内的点击，历史上 no-drag 子区域命中并不可靠，结构上分离最稳妥。
+    <div className="app-titlebar flex items-center h-9 shrink-0 select-none relative z-50">
+      <div
+        className="app-region-drag h-full flex-1 min-w-0 flex items-center"
+        style={{ paddingLeft: isMac ? '80px' : '12px' }}
+      >
+        {/* 品牌展示（仅 Win/Linux）：图标 + 标语，纯展示无交互；mac 交由原生交通灯区。
+          品牌区宽 276px：左栏卡片 margin-left 8 + 宽 280 = 右缘 288，顶栏左内边距 12，
+          288 − 12 = 276 —— 品牌区右缘与左栏卡片右缘精确对齐；标语字距由 BrandSlogan
+          运行时测量校准填满剩余 248px，不依赖估算 */}
+        {!isMac && (
+          <div className="flex items-center mr-3" style={{ width: 276 }}>
+            <img src="/icon.png" alt="" width={20} height={20} draggable={false} className="select-none mr-2" />
+            <BrandSlogan />
+          </div>
+        )}
+        <div className="flex-1" />
+      </div>
 
       {/* macOS：原生交通灯在左侧，更新图标置于顶栏右侧 */}
       {isMac && (
-        <div className="app-region-no-drag pr-3 flex items-center">
+        <div className="pr-3 flex items-center">
           <UpdateButton lang={lang} />
         </div>
       )}
 
       {/* Windows/Linux：更新图标紧邻最小化按钮，右侧自定义窗口控制按钮 */}
       {!isMac && api && (
-        <div className="app-region-no-drag flex items-center">
+        <div className="flex items-center">
           <UpdateButton lang={lang} />
           <WindowButton onClick={api.minimize} variant="normal" title={t(lang, 'window_minimize')}>
             <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round">

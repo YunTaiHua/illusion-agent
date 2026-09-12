@@ -745,17 +745,18 @@ pre code.hljs,
   background: var(--bg-card, #ffffff);
   border: 1px solid var(--border-light, #e8ebf0);
   border-radius: 12px;
-  /* 单边边距由各栏修饰类控制；高度为 100% - 上下边距（8+8），避免溢出被裁 */
-  height: calc(100% - 16px);
+  /* 单边边距由各栏修饰类控制；顶栏与主区域无缝衔接（顶部无间距），
+     仅底部保留 8px 边距，高度为 100% - 8px 避免溢出被裁 */
+  height: calc(100% - 8px);
   overflow: hidden;
 }
-/* 左栏：四边留边距（上/左/下），右侧与聊天区紧贴 */
+/* 左栏：除顶部外留边距（左/下），右侧与聊天区紧贴 */
 .panel-card-sidebar {
-  margin: 8px 0 8px 8px;
+  margin: 0 0 8px 8px;
 }
-/* 右栏/预览：四边留边距（右侧与预览的间隔由右栏右侧 8px 承担，左侧不留） */
+/* 右栏/预览：除顶部外留边距（右侧与预览的间隔由右栏右侧 8px 承担，左侧不留） */
 .panel-card-right-stack {
-  margin: 8px 8px 8px 0;
+  margin: 0 8px 8px 0;
 }
 
 /* 文件预览卡：去线框，与其他卡片风格一致 */
