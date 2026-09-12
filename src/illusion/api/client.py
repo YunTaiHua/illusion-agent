@@ -341,6 +341,13 @@ class AnthropicApiClient:
             kwargs["api_key"] = self._api_key
         if self._base_url:
             kwargs["base_url"] = self._base_url
+        # SDK 自建 http 栈默认用 certifi 验证 TLS——系统代理（Steam++ 等
+        # 工具的 MITM）下会 CERTIFICATE_VERIFY_FAILED。注入系统证书库，
+        # 与 utils.http.create_async_client 的工厂约定对齐；传输模块按 SD
+        # 版本自适应（anthropic>=1.0 基于 httpx2，新版 SDK 拒绝 httpx）。
+        from illusion.utils.http import create_sdk_transport_client
+
+        kwargs["http_client"] = create_sdk_transport_client()
         return AsyncAnthropic(**kwargs)
 
     async def stream_message(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:

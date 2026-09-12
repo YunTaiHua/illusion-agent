@@ -707,6 +707,12 @@ class OpenAICompatibleClient:
             kwargs["base_url"] = base_url
         if extra_headers:
             kwargs["default_headers"] = extra_headers
+        # 同 AnthropicApiClient：SDK 自建栈注入系统证书库（Steam++ MITM 兼容）
+        import httpx
+
+        from illusion.utils.http import create_trusted_ssl_context
+
+        kwargs["http_client"] = httpx.AsyncClient(verify=create_trusted_ssl_context())
         self._client = AsyncOpenAI(**kwargs)
         self._force_reasoning_field = False
         self._disable_thinking = False
