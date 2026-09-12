@@ -140,19 +140,36 @@ export default function App() {
     // 过渡前几帧会被挂载长任务挤掉，表现为起步卡顿。故先保持遮罩完全不
     // 透明（重挂载被盖在背后，卡顿不可见），双 rAF 确认该帧绘制完成、主
     // 线程空闲后再启动过渡；此后 opacity 走合成器，稳定顺滑。
+    //
+    // 兜底截止（deadline）：桌面壳窗口被遮挡/最小化时 Chromium 会暂停后台
+    // 页面的 requestAnimationFrame（background throttling），双 rAF 链可能
+    // 永远不落地，白色遮罩将冻结在打开的设置表单上方——首次登录场景下表单
+    // 藏于遮罩之后，应用表现为"始终卡在遮罩层"。deadline 用 setTimeout 推进
+    // （后台仅是节流到秒级、仍会触发），保证遮罩必然进入淡出状态；rAF 链
+    // 正常落地时先取消 deadline，保留原有的帧对齐收益。
     let raf1 = 0;
     let raf2 = 0;
     let beat = 0;
+    const deadline = window.setTimeout(() => {
+      // 后台节流下 rAF 链永不落地：取消链上还挂着的回调，避免恢复可见性后
+      // 再执行一次重复的（幂等）fade 推进；随后直接置 fading 启动淡出
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+      clearTimeout(beat);
+      setOverlayFading(true);
+    }, 650);
     raf1 = requestAnimationFrame(() => {
       raf2 = requestAnimationFrame(() => {
         // 再让出一拍（~90ms）：挂载后紧跟的增量布局/字体/图片解码等
         // 长尾工作在遮罩仍不透明时冲刷完毕，过渡启动时主线程真正空闲
+        clearTimeout(deadline);
         beat = window.setTimeout(() => setOverlayFading(true), 90);
       });
     });
     return () => {
       cancelAnimationFrame(raf1);
       cancelAnimationFrame(raf2);
+      clearTimeout(deadline);
       clearTimeout(beat);
     };
   }, [overlayVisible, overlayMounted]);
@@ -1052,7 +1069,7 @@ export default function App() {
         collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
         width={sidebarWidth} restoringSessionId={session.restoringSessionId}
         onOpenSettings={() => { setSetupInitialTab('settings'); setShowSetupForm(true); }} />
-      <div className="flex flex-col flex-1 min-w-0 min-h-0 relative mt-2">
+      <div className="flex flex-col flex-1 min-w-0 min-h-0 relative">
         <ChatArea lang={lang} staticItems={session.staticItems} assistantBuffer={session.assistantBuffer}
           streamingReasoning={session.streamingReasoning} pendingToolCalls={session.pendingToolCalls}
           reasoningStreaming={session.reasoningStreaming}

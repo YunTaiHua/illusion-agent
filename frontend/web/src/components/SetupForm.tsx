@@ -641,7 +641,7 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 backdrop-blur-md animate-fade-in" onClick={firstLogin ? undefined : onClose}>
+    <div className={`fixed inset-0 ${firstLogin ? 'z-[70]' : 'z-50'} flex items-center justify-center bg-black/35 backdrop-blur-md animate-fade-in`} onClick={firstLogin ? undefined : onClose}>
       <div
         className="relative bg-surface-card rounded-2xl border border-border-light shadow-card w-[760px] h-[600px] max-w-[95vw] max-h-[90vh] flex flex-col animate-scale-in modal-origin-center"
         onClick={(e) => e.stopPropagation()}
