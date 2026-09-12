@@ -431,7 +431,7 @@ export default function Sidebar({
       style={{ width: collapsed ? 0 : width, margin: collapsed ? 0 : undefined }}
     >
       {phase !== 'collapsed' && (
-      <div className={`h-full flex flex-col ${phase === 'expanding' ? 'panel-expanding' : ''}`} style={{ width: `${width}px` }}>
+      <div className={`h-full flex flex-col min-w-0 max-w-full ${phase === 'expanding' ? 'panel-expanding' : ''}`} style={{ width: `${width}px` }}>
       <div className="flex items-center justify-between px-5 pt-4 pb-3">
         <button
           onClick={onToggle}
