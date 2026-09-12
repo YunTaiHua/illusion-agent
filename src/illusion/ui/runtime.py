@@ -589,9 +589,12 @@ async def build_runtime(
         # 终端模式：打印简短提示后 sys.exit(1)
         if "illusion.ui.web.ws_host" in sys.modules:
             logging.getLogger(__name__).warning("API client init failed (web mode, degraded): %s", exc)
-            # 占位客户端：实际不会调用，用户配置后 _rebuild_api_client 会替换
+            # 占位客户端：实际不会调用，用户配置后 _rebuild_api_client 会替换。
+            # api_key 用非空占位值而非空串：openai>=3 的 AsyncOpenAI 在构造时
+            # 即校验 api_key 存在性，空串会抛 Missing credentials——Web 首次
+            # 登录（未配置认证走降级路径）会在此崩溃，界面卡在连接遮罩层。
             resolved_api_client = OpenAICompatibleClient(  # type: ignore[assignment]
-                api_key="",
+                api_key="sk-degraded-placeholder",
                 base_url=settings.base_url,
             )
             _web_auth_missing = True
