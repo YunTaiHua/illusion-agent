@@ -15,7 +15,7 @@ class TestSettingsEffort:
     def test_effort_default_value(self):
         """测试 effort 字段默认值"""
         settings = Settings()
-        assert settings.effort == "medium"
+        assert settings.effort == "high"
 
     def test_effort_set_valid_value(self):
         """测试设置有效的 effort 值"""

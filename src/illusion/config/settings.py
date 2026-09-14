@@ -402,11 +402,11 @@ class Settings(BaseModel):
     model: str = "env_1.model_1"
 
     # 全局配置
-    context_window: int = 200_000
+    context_window: int = 1_000_000
 
     # 保留的非模型字段
-    max_tokens: int = 16384
-    max_turns: int = 200
+    max_tokens: int = 131072
+    max_turns: int = 500
     permission: PermissionSettings = Field(default_factory=PermissionSettings)
     hooks: dict[str, Any] = Field(default_factory=dict)
     memory: MemorySettings = Field(default_factory=MemorySettings)
@@ -414,15 +414,12 @@ class Settings(BaseModel):
     goal: GoalSettings = Field(default_factory=GoalSettings)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     notifications: NotificationSettings = Field(default_factory=NotificationSettings)
-    # 内置 agent 的默认模型固化（agent 名 → "inherit" | "env_N.model_M"）。
-    # 用户/项目级 agent 的模型直接写入各自 .md 文件，不经此字段。
-    # 声明在 notifications 之后，save_settings 按声明顺序输出字段。
-    agent_models: dict[str, str] = Field(default_factory=dict)
+    agent_models: dict[str, str] = Field(default_factory=dict)  # 内置 agent 的默认模型固化（agent 名 → "inherit" | "env_N.model_M"）。
     enabled_plugins: dict[str, bool] = Field(default_factory=dict)
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)
     ui_language: str = ""  # 空字符串表示未设置，由 _ensure_language 引导选择
     show_thinking: bool = True
-    effort: str = "medium"
+    effort: str = "high"
     working_directory: str | None = None  # 固定工作目录
     theme: str = "light"
 

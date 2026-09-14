@@ -95,9 +95,7 @@ path = "scripts/hatch_build.py"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-# test_stderr_redirect.py 修改 root logger handler，与 logging plugin 的
-# caplog handler 恢复机制冲突（AttributeError: getvalue），需禁用 logging plugin
-# 运行该测试时用：pytest tests/test_utils/test_stderr_redirect.py -p no:logging
+addopts = "--capture=sys"
 
 [tool.ruff]
 line-length = 100

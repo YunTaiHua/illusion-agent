@@ -21,8 +21,8 @@ class TestSettings:
         assert s.api_key == ""
         assert s.model == "env_1.model_1"
         assert s.active_model_name == "claude-sonnet-4-6"
-        assert s.max_tokens == 16384
-        assert s.max_turns == 200
+        assert s.max_tokens == 131072
+        assert s.max_turns == 500
         assert s.permission.mode == "default"
         assert s.sandbox.filesystem.allow_write == ["."]
 
@@ -88,7 +88,7 @@ class TestLoadSaveSettings:
         s = load_settings(path)
         assert s.model == "env_1.model_1"
         assert s.active_model_name == "claude-sonnet-4-6"
-        assert s.max_tokens == 16384
+        assert s.max_tokens == 131072
 
     def test_load_existing_file(self, tmp_path: Path):
         path = tmp_path / "settings.json"
