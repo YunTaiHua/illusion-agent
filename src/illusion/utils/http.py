@@ -81,6 +81,6 @@ def _sdk_transport_module() -> Any:
         return httpx
     if Version(anthropic.__version__) < Version("1.0"):
         return httpx
-    import httpx2  # type: ignore[import-untyped, import-not-found]
+    import httpx2
 
     return httpx2
