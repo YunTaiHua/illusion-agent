@@ -49,7 +49,7 @@ const TurnFilesBar = memo(function TurnFilesBar({ lang, rawPaths, stats, onOpenF
 
   return (
     /* 明显背景色 + 边框的卡片容器：区别于透明底的正文章节 */
-    <div className="my-4 rounded-lg border border-border-medium bg-surface-card-alt overflow-hidden">
+    <div className="my-1 rounded-lg border border-border-medium bg-surface-card-alt overflow-hidden">
       {/* 区块头：仿右栏 CollapsibleSection —— 图标槽位 hover 时淡出为三角指示器，
           标题 + 右侧计数徽标；整行为点击目标 */}
       <button

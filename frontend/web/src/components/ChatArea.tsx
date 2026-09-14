@@ -174,12 +174,12 @@ const TaskCompleteSection = memo(function TaskCompleteSection({
   );
 
   return (
-    <div className="my-2">
+    <div className="my-1">
       {/* 三级标题：与最终回复 markdown 渲染的 h3（.prose h3 = 1.125em/700/主色）保持一致 */}
       <h3 className="text-lg font-bold text-content-primary">
         <button
           onClick={handleToggle}
-          className="flex items-center gap-2 transition-colors py-1.5 cursor-pointer"
+          className="flex items-center gap-2 transition-colors py-1 cursor-pointer"
         >
           <span>
             {t(lang, streaming ? "task_in_progress" : "task_complete")}
@@ -202,7 +202,7 @@ const TaskCompleteSection = memo(function TaskCompleteSection({
       {/* 展开/折叠微动画（简洁 fade：纯透明度 150ms） */}
       {hasContent && open && (
         <div className="animate-fade">
-          <div className="mt-1.5" onContextMenu={handleContentContextMenu}>
+          <div className="mt-1" onContextMenu={handleContentContextMenu}>
             {children}
           </div>
         </div>
@@ -1140,7 +1140,7 @@ export default function ChatArea({
 
 function ThinkingIndicator({ lang }: { lang: UiLanguage }) {
   return (
-    <div className="flex items-center gap-2.5 py-2">
+    <div className="flex items-center gap-2.5 py-1">
       <span className="flex gap-1">
         <span
           className="w-1.5 h-1.5 rounded-full bg-primary animate-bounce"

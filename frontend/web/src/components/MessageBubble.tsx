@@ -435,7 +435,7 @@ function MessageBubble({
 }: MessageBubbleProps) {
   if (item.role === "user") {
     return (
-      <div className="flex justify-end py-1.5 group">
+      <div className="flex justify-end py-1 group">
         <div className="flex flex-col items-end max-w-[min(82%,64ch)]">
           {/* overflow-wrap:anywhere（而非 break-words）：断点计入 min-content，
               长文件名等无空格长串在容器边界强制折行、不撑破最大宽度；
@@ -463,7 +463,7 @@ function MessageBubble({
         <ThinkingBlock text={item.reasoning} lang={lang} />
       ) : null;
     return (
-      <div className="py-1.5 group">
+      <div className="py-1 group">
         {reasoning}
         <div className="text-content-primary text-sm prose max-w-full select-text">
           <ReactMarkdown
@@ -514,7 +514,7 @@ function MessageBubble({
   }
 
   return (
-    <div className="py-1.5 text-xs text-content-disabled italic">
+    <div className="py-1 text-xs text-content-disabled italic">
       {item.text}
     </div>
   );
@@ -640,7 +640,7 @@ const ToolResultBubble = memo(function ToolResultBubble({
       : null;
 
   return (
-    <div data-tool-row className="py-1.5">
+    <div data-tool-row className="py-1">
       <button
         onClick={() => hasContent && setOpen(!open)}
         className={`flex items-start text-base transition-colors cursor-pointer text-left ${hasContent ? "text-content-secondary hover:text-content-primary" : ""}`}
@@ -815,12 +815,12 @@ export const ThinkingBlock = memo(function ThinkingBlock({
   );
 
   return (
-    <div data-thinking-block className="mb-1.5">
+    <div data-thinking-block>
       <button
         onClick={handleToggle}
-        className="flex items-center gap-1.5 text-base text-content-primary leading-[1.8] transition-colors py-1.5 cursor-pointer"
+        className="flex items-center gap-1.5 text-base text-content-primary transition-colors py-1 cursor-pointer"
       >
-        {/* 大脑图标：思考过程标识（行高与中间 text 的 prose 1.8 对齐；流式时与工具行圆点一致的脉冲动画） */}
+        {/* 大脑图标：思考过程标识（items-center 垂直居中；流式时与工具行圆点一致的脉冲动画） */}
         <svg
           className={`w-3.5 h-3.5 shrink-0 text-primary ${streaming ? "animate-pulse-scale" : ""}`}
           viewBox="0 0 24 24"
@@ -851,7 +851,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({
       {open && (
         <div className="animate-fade">
           <div onContextMenu={handleContentContextMenu} className="relative">
-            <div className="text-sm text-content-secondary leading-relaxed select-text mt-1.5 opacity-80 py-1">
+            <div className="text-sm text-content-secondary leading-relaxed select-text mt-1 opacity-80">
               <div className="prose prose-sm max-w-full [overflow-wrap:anywhere]">
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm, remarkSuperscript]}
@@ -933,7 +933,7 @@ export const PendingToolBubble = memo(function PendingToolBubble({
     userScrolledRef.current = el.scrollTop < max - 24; // 滚到接近底部视为"跟随模式"
   }, []);
   return (
-    <div data-tool-row className="py-1.5">
+    <div data-tool-row className="py-1">
       <button
         onClick={() => progressMessages.length > 0 && setOpen(!open)}
         className={`flex items-start text-base transition-colors cursor-pointer text-left ${progressMessages.length > 0 ? "text-content-secondary hover:text-content-primary" : ""}`}
@@ -1178,7 +1178,7 @@ export function StreamingBuffer({
   const hasText = !!smoothText && !!smoothText.trim();
 
   return (
-    <div className="py-1.5">
+    <div className="py-1">
       {hasReasoning && (
         <ThinkingBlock
           text={smoothReasoning}
