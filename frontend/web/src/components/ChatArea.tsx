@@ -11,15 +11,38 @@
  * @module ChatArea
  */
 
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { t, type UiLanguage } from '../i18n';
-import MessageBubble, { PendingToolBubble, StreamingBuffer, ThinkingBlock, useContentCollapse } from './MessageBubble';
-import { computeTurnFileStats, type TurnFileStat, useStableTurns, useStableToolInputMap } from '../utils/turnGrouping';
-import TurnFilesBar from './TurnFilesBar';
-import TurnNavigator, { type TurnNavItem } from './TurnNavigator';
-import WelcomeScreen from './WelcomeScreen';
-import { PermissionCard, QuestionCard } from './ModalCard';
-import type { PendingToolCall, TranscriptItem, TurnOutlineEntry } from '../types/protocol';
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { t, type UiLanguage } from "../i18n";
+import MessageBubble, {
+  PendingToolBubble,
+  StreamingBuffer,
+  ThinkingBlock,
+  useContentCollapse,
+} from "./MessageBubble";
+import {
+  computeTurnFileStats,
+  type TurnFileStat,
+  useStableTurns,
+  useStableToolInputMap,
+} from "../utils/turnGrouping";
+import TurnFilesBar from "./TurnFilesBar";
+import TurnNavigator, { type TurnNavItem } from "./TurnNavigator";
+import WelcomeScreen from "./WelcomeScreen";
+import { PermissionCard, QuestionCard } from "./ModalCard";
+import type {
+  PendingToolCall,
+  TranscriptItem,
+  TurnOutlineEntry,
+} from "../types/protocol";
 
 /** 消息列表收缩阈值：超过此轮次时折叠更早的消息 */
 const COLLAPSE_TURN_THRESHOLD = 5;
@@ -53,10 +76,10 @@ function splitTurnItems(items: TranscriptItem[], streaming: boolean = false) {
   // plan 角色由 ModalCard 专门展示，不在对话流中重复显示
   if (streaming) {
     for (const item of items) {
-      if (item.role === 'plan') {
+      if (item.role === "plan") {
         continue; // 跳过 plan 消息，由 ModalCard 处理
       }
-      if (item.role === 'user') {
+      if (item.role === "user") {
         userItems.push(item);
       } else {
         thinkingItems.push(item);
@@ -68,7 +91,7 @@ function splitTurnItems(items: TranscriptItem[], streaming: boolean = false) {
   // 完成态：找最后一条有非空 text 的 assistant 消息作为"最终回复"
   let lastAssistantIdx = -1;
   for (let i = items.length - 1; i >= 0; i--) {
-    if (items[i]!.role === 'assistant' && items[i]!.text.trim()) {
+    if (items[i]!.role === "assistant" && items[i]!.text.trim()) {
       lastAssistantIdx = i;
       break;
     }
@@ -76,10 +99,10 @@ function splitTurnItems(items: TranscriptItem[], streaming: boolean = false) {
 
   for (let i = 0; i < items.length; i++) {
     const item = items[i]!;
-    if (item.role === 'plan') {
+    if (item.role === "plan") {
       continue; // 跳过 plan 消息，由 ModalCard 处理
     }
-    if (item.role === 'user') {
+    if (item.role === "user") {
       userItems.push(item);
     } else if (i === lastAssistantIdx) {
       finalAssistant = item;
@@ -112,7 +135,17 @@ function splitTurnItems(items: TranscriptItem[], streaming: boolean = false) {
  * @param props.hasContent - 折叠内容是否非空（空内容时展开态不渲染内容区）
  * @param props.children - 折叠内容（中间 text、工具行、思考过程）
  */
-const TaskCompleteSection = memo(function TaskCompleteSection({ streaming, lang, hasContent, children }: { streaming: boolean; lang: UiLanguage; hasContent: boolean; children: ReactNode }) {
+const TaskCompleteSection = memo(function TaskCompleteSection({
+  streaming,
+  lang,
+  hasContent,
+  children,
+}: {
+  streaming: boolean;
+  lang: UiLanguage;
+  hasContent: boolean;
+  children: ReactNode;
+}) {
   const [open, setOpen] = useState(streaming);
   // 用户是否手动操作过（展开/折叠）：手动操作后自动状态变化不再覆盖
   const interactedRef = useRef(false);
@@ -132,10 +165,13 @@ const TaskCompleteSection = memo(function TaskCompleteSection({ streaming, lang,
 
   // 右键内容区域快速折叠（对齐思考过程的右键折叠）；忽略内层独立折叠区
   // （思考过程块、工具行）与交互元素，右键中间 text 空白处即收起整个区
-  const { handleContextMenu: handleContentContextMenu } = useContentCollapse(() => {
-    interactedRef.current = true;
-    setOpen(false);
-  }, '[data-thinking-block], [data-tool-row]');
+  const { handleContextMenu: handleContentContextMenu } = useContentCollapse(
+    () => {
+      interactedRef.current = true;
+      setOpen(false);
+    },
+    "[data-thinking-block], [data-tool-row]",
+  );
 
   return (
     <div className="my-2">
@@ -145,9 +181,11 @@ const TaskCompleteSection = memo(function TaskCompleteSection({ streaming, lang,
           onClick={handleToggle}
           className="flex items-center gap-2 transition-colors py-1.5 cursor-pointer"
         >
-          <span>{t(lang, streaming ? 'task_in_progress' : 'task_complete')}</span>
+          <span>
+            {t(lang, streaming ? "task_in_progress" : "task_complete")}
+          </span>
           <svg
-            className={`w-4 h-4 transition-transform duration-150 ${open ? 'rotate-90' : ''}`}
+            className={`w-4 h-4 transition-transform duration-150 ${open ? "rotate-90" : ""}`}
             viewBox="0 0 12 12"
             fill="none"
             stroke="currentColor"
@@ -202,7 +240,7 @@ interface TurnViewProps {
   /** 是否为列表首轮（控制轮间间距） */
   hasTopGap: boolean;
   /** 点击变更文件打开预览：added/modified 传 'diff'，否则 + 'content'（引用稳定） */
-  onOpenSessionFile: (path: string, kind: 'content' | 'diff') => void;
+  onOpenSessionFile: (path: string, kind: "content" | "diff") => void;
 }
 
 /**
@@ -217,8 +255,19 @@ interface TurnViewProps {
  * @returns 单轮对话的 JSX
  */
 const TurnView = memo(function TurnView({
-  turn, turnNumber, isLastTurn, turnsToRewind, busy, hasPendingTools, lang, toolInputMap,
-  onRewindToTurn, onRegenerate, onForkTurn, hasTopGap, onOpenSessionFile,
+  turn,
+  turnNumber,
+  isLastTurn,
+  turnsToRewind,
+  busy,
+  hasPendingTools,
+  lang,
+  toolInputMap,
+  onRewindToTurn,
+  onRegenerate,
+  onForkTurn,
+  hasTopGap,
+  onOpenSessionFile,
 }: TurnViewProps) {
   // 轮是否仍在流式：busy=true 与 user 消息（transcript_item）存在网络往返
   // 窗口期——若仅按 busy && isLastTurn 判定，窗口期内旧轮会被误判为流式轮，
@@ -227,7 +276,7 @@ const TurnView = memo(function TurnView({
   // pendingToolCalls 非空，排除）。
   const turnFinished =
     turn.length > 0 &&
-    turn[turn.length - 1]!.role === 'assistant' &&
+    turn[turn.length - 1]!.role === "assistant" &&
     !hasPendingTools;
   const turnStreaming = busy && isLastTurn && !turnFinished;
 
@@ -240,7 +289,10 @@ const TurnView = memo(function TurnView({
   // 单轮变更统计（本轮对话增量，本地从工具结果累计；流式期间结果未到齐不渲染）。
   // changedFiles 取首次出现的原样路径（map 键为归一化路径），供展示与预览
   const turnFileStats = useMemo(
-    () => (turnStreaming ? new Map<string, TurnFileStat>() : computeTurnFileStats(turn)),
+    () =>
+      turnStreaming
+        ? new Map<string, TurnFileStat>()
+        : computeTurnFileStats(turn),
     [turn, turnStreaming],
   );
   const changedFiles = useMemo(
@@ -252,7 +304,7 @@ const TurnView = memo(function TurnView({
   // 上方。统计为该轮转录的纯本地派生（引用随 turn 稳定），不依赖会话级
   // 缓存，历史轮的 memo(MessageBubble) 不受其他轮次影响。
   const turnFilesFooter = useMemo(
-    () => (
+    () =>
       changedFiles.length > 0 ? (
         <TurnFilesBar
           lang={lang}
@@ -260,8 +312,7 @@ const TurnView = memo(function TurnView({
           stats={turnFileStats}
           onOpenFile={onOpenSessionFile}
         />
-      ) : null
-    ),
+      ) : null,
     [changedFiles, turnFileStats, lang, onOpenSessionFile],
   );
 
@@ -278,15 +329,16 @@ const TurnView = memo(function TurnView({
   // 折叠区 children 引用稳定：thinkingItems / toolInputMap 不变则复用，
   // 保证 memo(TaskCompleteSection) 生效
   const thinkingChildren = useMemo(
-    () => thinkingItems.map((item, msgIdx) => (
-      <MessageBubble
-        key={`t-${msgIdx}`}
-        item={item}
-        toolInputMap={toolInputMap}
-        lang={lang}
-        showActions={false}
-      />
-    )),
+    () =>
+      thinkingItems.map((item, msgIdx) => (
+        <MessageBubble
+          key={`t-${msgIdx}`}
+          item={item}
+          toolInputMap={toolInputMap}
+          lang={lang}
+          showActions={false}
+        />
+      )),
     [thinkingItems, toolInputMap, lang],
   );
 
@@ -296,14 +348,16 @@ const TurnView = memo(function TurnView({
     () => (
       <>
         {thinkingChildren}
-        {finalAssistant?.reasoning?.trim() && <ThinkingBlock text={finalAssistant.reasoning} lang={lang} />}
+        {finalAssistant?.reasoning?.trim() && (
+          <ThinkingBlock text={finalAssistant.reasoning} lang={lang} />
+        )}
       </>
     ),
     [thinkingChildren, finalAssistant, lang],
   );
 
   return (
-    <div className={hasTopGap ? 'pt-12' : ''} data-turn={turnNumber}>
+    <div className={hasTopGap ? "pt-12" : ""} data-turn={turnNumber}>
       {userItems.map((item, msgIdx) => (
         <MessageBubble
           key={`u-${msgIdx}`}
@@ -317,11 +371,15 @@ const TurnView = memo(function TurnView({
           （中间 text、工具行、思考过程、最终回复的思考过程）；
           流式阶段（turnStreaming）强制渲染显示"任务进行中"标题
           （即使中间内容尚未推入），完成后自动折叠 */}
-      {(turnStreaming || thinkingItems.length > 0 || finalAssistant?.reasoning?.trim()) && (
+      {(turnStreaming ||
+        thinkingItems.length > 0 ||
+        finalAssistant?.reasoning?.trim()) && (
         <TaskCompleteSection
           streaming={turnStreaming}
           lang={lang}
-          hasContent={thinkingItems.length > 0 || !!finalAssistant?.reasoning?.trim()}
+          hasContent={
+            thinkingItems.length > 0 || !!finalAssistant?.reasoning?.trim()
+          }
         >
           {sectionChildren}
         </TaskCompleteSection>
@@ -342,7 +400,6 @@ const TurnView = memo(function TurnView({
     </div>
   );
 });
-
 
 /**
  * ChatArea 组件属性接口
@@ -367,7 +424,12 @@ interface ChatAreaProps {
   /** 模态对话框配置 */
   modal: Record<string, unknown> | null;
   /** 权限响应回调 */
-  onPermissionResponse: (requestId: string, allowed: boolean, sessionAllow: boolean, toolName: string) => void;
+  onPermissionResponse: (
+    requestId: string,
+    allowed: boolean,
+    sessionAllow: boolean,
+    toolName: string,
+  ) => void;
   /** 问答响应回调 */
   onQuestionResponse: (requestId: string, answer: string) => void;
   /** 正在恢复的会话 ID（可选，非空时显示居中加载卡片覆盖转录区） */
@@ -389,7 +451,7 @@ interface ChatAreaProps {
   /** 转录整体替换信号（rewind/compact 时 bump）：收到后强制回到底部 */
   transcriptReplaceTick: number;
   /** 点击变更文件打开预览：added/modified 传 'diff'，否则 + 'content'（引用稳定） */
-  onOpenSessionFile: (path: string, kind: 'content' | 'diff') => void;
+  onOpenSessionFile: (path: string, kind: "content" | "diff") => void;
   /** 欢迎态注入到标题下方的内容（输入框 + 工具栏卡片；非欢迎态不渲染） */
   children?: ReactNode;
 }
@@ -403,11 +465,32 @@ interface ChatAreaProps {
  * @returns 返回聊天区域的 JSX 元素
  */
 export default function ChatArea({
-  lang, staticItems, assistantBuffer, streamingReasoning, pendingToolCalls, reasoningStreaming, busy, connected,
-  modal, onPermissionResponse, onQuestionResponse, restoringSessionId, onRewindToTurn, onRegenerate,
-  onForkTurn, turnOutline, firstLoadedTurn, loadingHistory, onRequestHistory, transcriptReplaceTick, onOpenSessionFile, children,
+  lang,
+  staticItems,
+  assistantBuffer,
+  streamingReasoning,
+  pendingToolCalls,
+  reasoningStreaming,
+  busy,
+  connected,
+  modal,
+  onPermissionResponse,
+  onQuestionResponse,
+  restoringSessionId,
+  onRewindToTurn,
+  onRegenerate,
+  onForkTurn,
+  turnOutline,
+  firstLoadedTurn,
+  loadingHistory,
+  onRequestHistory,
+  transcriptReplaceTick,
+  onOpenSessionFile,
+  children,
 }: ChatAreaProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  /** 流式缓冲区容器：ResizeObserver 跟随已揭示文本的高度增长（rAF 揭示不经过 assistantBuffer） */
+  const streamBufferRef = useRef<HTMLDivElement>(null);
   const [showScrollDown, setShowScrollDown] = useState(false);
   // 本地折叠：除最新 COLLAPSE_TURN_THRESHOLD 轮外，点"加载更多"每次多显示
   // LOCAL_REVEAL_TURNS 轮；与服务端分页（unloadedTurns）共用同一个按钮
@@ -431,9 +514,14 @@ export default function ChatArea({
   // 由服务端分页（加载更多）继续向前取数
   const visibleTurns = useMemo(() => {
     const visibleCount = COLLAPSE_TURN_THRESHOLD + expandedCount;
-    return turns.length <= visibleCount ? turns : turns.slice(turns.length - visibleCount);
+    return turns.length <= visibleCount
+      ? turns
+      : turns.slice(turns.length - visibleCount);
   }, [turns, expandedCount]);
-  const localHidden = Math.max(0, turns.length - (COLLAPSE_TURN_THRESHOLD + expandedCount));
+  const localHidden = Math.max(
+    0,
+    turns.length - (COLLAPSE_TURN_THRESHOLD + expandedCount),
+  );
 
   // 计算可见轮次在原 turns 中的起始偏移
   const turnOffset = turns.length - visibleTurns.length;
@@ -471,7 +559,7 @@ export default function ChatArea({
   // 用该标志抑制，保证最终回复结束后不再闪现"思考中"。
   const lastReplyDone = useMemo(() => {
     if (staticItems.length === 0) return false;
-    return staticItems[staticItems.length - 1]!.role === 'assistant';
+    return staticItems[staticItems.length - 1]!.role === "assistant";
   }, [staticItems]);
 
   // onRegenerate / onRewindToTurn 经 ref 稳定包装：App 传入的 onRegenerate
@@ -504,13 +592,19 @@ export default function ChatArea({
     const outline = turnOutline ?? [];
     const unloaded: TurnNavItem[] = outline
       .slice(0, Math.max(0, firstLoadedTurn - 1))
-      .map((o) => ({ turn: o.turn, prompt: o.prompt, response: o.response, loaded: false }));
+      .map((o) => ({
+        turn: o.turn,
+        prompt: o.prompt,
+        response: o.response,
+        loaded: false,
+      }));
     const loaded: TurnNavItem[] = turns.map((turn, i) => {
-      let prompt = '';
-      let response = '';
+      let prompt = "";
+      let response = "";
       for (const item of turn) {
-        if (item.role === 'user' && !prompt) prompt = item.text.slice(0, 80);
-        if (item.role === 'assistant' && item.text.trim()) response = item.text.trim().slice(0, 120);
+        if (item.role === "user" && !prompt) prompt = item.text.slice(0, 80);
+        if (item.role === "assistant" && item.text.trim())
+          response = item.text.trim().slice(0, 120);
       }
       return { turn: firstLoadedTurn + i, prompt, response, loaded: true };
     });
@@ -522,18 +616,22 @@ export default function ChatArea({
   const syncActiveTurn = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const rows = el.querySelectorAll<HTMLElement>('[data-turn]');
+    const rows = el.querySelectorAll<HTMLElement>("[data-turn]");
     if (rows.length === 0) {
       setActiveTurn(null);
       return;
     }
     // 已滚动到（接近）底部：最后两轮常同屏，顶部阅读线会命中倒数第二
     // 轮——底部即视为阅读最后一轮（回到底部按钮/自动跟随都走此分支）
-    if (el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_THRESHOLD_PX) {
+    if (
+      el.scrollHeight - el.scrollTop - el.clientHeight <=
+      BOTTOM_THRESHOLD_PX
+    ) {
       setActiveTurn(firstLoadedTurn + turns.length - 1);
       return;
     }
-    const readingLine = el.getBoundingClientRect().top + Math.min(96, el.clientHeight * 0.2);
+    const readingLine =
+      el.getBoundingClientRect().top + Math.min(96, el.clientHeight * 0.2);
     let current = Number(rows[0]!.dataset.turn);
     for (const row of rows) {
       if (row.getBoundingClientRect().top <= readingLine) {
@@ -558,25 +656,32 @@ export default function ChatArea({
     // 离开 live tail：跳转后不恢复底部跟随（用户向上浏览历史）
     followingRef.current = false;
     setShowScrollDown(true);
-    const top = row.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop - 8;
+    const top =
+      row.getBoundingClientRect().top -
+      el.getBoundingClientRect().top +
+      el.scrollTop -
+      8;
     el.scrollTo({ top: Math.max(0, top) });
     setActiveTurn(turn);
     return true;
   }, []);
 
-  const handleNavigate = useCallback((item: TurnNavItem) => {
-    if (item.loaded) {
-      // 已载入：直接滚动（可能在折叠区，先全部展开保证行存在）
+  const handleNavigate = useCallback(
+    (item: TurnNavItem) => {
+      if (item.loaded) {
+        // 已载入：直接滚动（可能在折叠区，先全部展开保证行存在）
+        setExpandedCount(9999);
+        requestAnimationFrame(() => scrollToTurn(item.turn));
+        return;
+      }
+      // 未载入：挂起目标并逐页向前加载，落地由下方 effect 编排
+      pendingJumpRef.current = item.turn;
+      setBusyJumpTurn(item.turn);
       setExpandedCount(9999);
-      requestAnimationFrame(() => scrollToTurn(item.turn));
-      return;
-    }
-    // 未载入：挂起目标并逐页向前加载，落地由下方 effect 编排
-    pendingJumpRef.current = item.turn;
-    setBusyJumpTurn(item.turn);
-    setExpandedCount(9999);
-    onRequestHistoryRef.current?.();
-  }, [scrollToTurn]);
+      onRequestHistoryRef.current?.();
+    },
+    [scrollToTurn],
+  );
 
   // 挂起跳转的落地循环：目标已载入 → 滚动并清除；仍未载入 → 继续翻页
   useEffect(() => {
@@ -675,7 +780,13 @@ export default function ChatArea({
       el.scrollTop += grew;
       scrollAnchorRef.current = null;
     }
-  }, [staticItems, firstLoadedTurn, expandedCount, transcriptReplaceTick, turns.length]);
+  }, [
+    staticItems,
+    firstLoadedTurn,
+    expandedCount,
+    transcriptReplaceTick,
+    turns.length,
+  ]);
 
   // 转录变化（恢复/历史前插/新轮）后同步一次阅读线轮次
   // （无滚动事件时导航高亮也要对齐）
@@ -692,7 +803,10 @@ export default function ChatArea({
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    if (performance.now() - lastSmoothScrollAtRef.current < SMOOTH_EVENT_IGNORE_MS) {
+    if (
+      performance.now() - lastSmoothScrollAtRef.current <
+      SMOOTH_EVENT_IGNORE_MS
+    ) {
       // 平滑滚动动画早期事件：只刷新导航高亮
       lastScrollTopRef.current = el.scrollTop;
       syncActiveTurn();
@@ -711,7 +825,10 @@ export default function ChatArea({
       // 用户向上滚动：停止跟随，显示回到底部按钮
       followingRef.current = false;
       setShowScrollDown(true);
-    } else if (dist <= BOTTOM_THRESHOLD_PX && top > lastScrollTopRef.current + 1) {
+    } else if (
+      dist <= BOTTOM_THRESHOLD_PX &&
+      top > lastScrollTopRef.current + 1
+    ) {
       // 用户向下滚动回底部附近：恢复跟随
       followingRef.current = true;
       setShowScrollDown(false);
@@ -731,8 +848,9 @@ export default function ChatArea({
     setShowScrollDown(false);
     setActiveTurn(firstLoadedTurn + turns.length - 1);
     lastSmoothScrollAtRef.current = performance.now();
-    smoothScrollGuardUntilRef.current = performance.now() + SMOOTH_SCROLL_GUARD_MS;
-    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    smoothScrollGuardUntilRef.current =
+      performance.now() + SMOOTH_SCROLL_GUARD_MS;
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
     lastScrollTopRef.current = el.scrollHeight;
   }, [firstLoadedTurn, turns.length]);
 
@@ -741,7 +859,7 @@ export default function ChatArea({
   // 恢复跟随只能通过用户向下滚回底部附近或点击"回到底部"按钮。
   // 卡片弹出时强制回到底部：模态卡片是交互元素，必须保证卡片可见。
   const prevModalRef = useRef<boolean | null>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     // 先更新状态机再取容器：restore 分支（无滚动容器）下 ref 保持最新，
     // 避免恢复会话后首个 modal 的"出现"检测被陈旧值干扰
     const modalAppeared = prevModalRef.current === false && !!modal;
@@ -760,17 +878,48 @@ export default function ChatArea({
     // 平滑滚动动画中（刚点击回到底部按钮）跳过 instant 跟随，避免打断动画
     if (performance.now() < smoothScrollGuardUntilRef.current) return;
     const prevTop = el.scrollTop;
+    // useLayoutEffect + 直接贴底：在 paint 前完成跟随，流式揭示增长时不会闪一帧旧位置
     el.scrollTop = el.scrollHeight;
     if (el.scrollTop !== prevTop) programmaticScrollRef.current = true;
     setShowScrollDown(false); // 跟随到底后隐藏"回到底部"按钮
-  }, [staticItems, assistantBuffer, streamingReasoning, pendingToolCalls, modal]);
+  }, [
+    staticItems,
+    assistantBuffer,
+    streamingReasoning,
+    pendingToolCalls,
+    modal,
+  ]);
+
+  // 平滑揭示在 rAF 中分批写 DOM，高度增长不一定伴随 assistantBuffer 变化；
+  // 用 ResizeObserver 盯住流式块，揭示长出新行时同样贴底跟随。
+  // 依赖用「块是否挂载」布尔值：若用 buffer 字符串，每个 token 都会拆掉重建 RO
+  const hasStreamBlock = !!(busy && (assistantBuffer || streamingReasoning));
+  useEffect(() => {
+    const el = scrollRef.current;
+    const streamEl = streamBufferRef.current;
+    if (!el || !streamEl) return;
+    const ro = new ResizeObserver(() => {
+      if (!followingRef.current) return;
+      if (performance.now() < smoothScrollGuardUntilRef.current) return;
+      const prevTop = el.scrollTop;
+      el.scrollTop = el.scrollHeight;
+      if (el.scrollTop !== prevTop) programmaticScrollRef.current = true;
+    });
+    ro.observe(streamEl);
+    return () => ro.disconnect();
+  }, [hasStreamBlock]);
 
   // 用户发送新消息时强制回到底部（忽略用户是否已停止跟随）。
   // 判据必须是"新 user 消息追加在末尾"而非数量增加：加载更早轮次会把
   // 历史 user 消息前插进转录，数量同样增长——若只看数量，每次加载更多
   // 都会把视口强行拽回底部（与视口稳定锚点相互打架）
-  const userMsgCount = useMemo(() => staticItems.filter((i) => i.role === 'user').length, [staticItems]);
-  const lastItemIsUser = staticItems.length > 0 && staticItems[staticItems.length - 1]!.role === 'user';
+  const userMsgCount = useMemo(
+    () => staticItems.filter((i) => i.role === "user").length,
+    [staticItems],
+  );
+  const lastItemIsUser =
+    staticItems.length > 0 &&
+    staticItems[staticItems.length - 1]!.role === "user";
   const prevUserMsgCountRef = useRef(0);
   useEffect(() => {
     if (userMsgCount > prevUserMsgCountRef.current && lastItemIsUser) {
@@ -794,7 +943,12 @@ export default function ChatArea({
     setShowScrollDown(false);
   }, [staticItems.length === 0]);
 
-  const hasContent = staticItems.length > 0 || assistantBuffer || streamingReasoning || pendingToolCalls.length > 0 || !!modal;
+  const hasContent =
+    staticItems.length > 0 ||
+    assistantBuffer ||
+    streamingReasoning ||
+    pendingToolCalls.length > 0 ||
+    !!modal;
 
   // 会话恢复中 / 新建会话等待中：显示居中加载卡片，覆盖正常转录区
   // （'__pending_new__' 为新建会话等待态的哨兵值，文案区分创建/恢复）
@@ -803,12 +957,32 @@ export default function ChatArea({
     return (
       <div className="flex-1 flex items-center justify-center">
         <div className="flex flex-col items-center gap-3">
-          <svg className="animate-spin w-8 h-8 text-primary" viewBox="0 0 24 24" fill="none">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          <svg
+            className="animate-spin w-8 h-8 text-primary"
+            viewBox="0 0 24 24"
+            fill="none"
+          >
+            <circle
+              className="opacity-25"
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              strokeWidth="4"
+            />
+            <path
+              className="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+            />
           </svg>
           <span className="text-sm text-content-secondary">
-            {t(lang, restoringSessionId === '__pending_new__' ? 'creating_session' : 'restoring_session')}
+            {t(
+              lang,
+              restoringSessionId === "__pending_new__"
+                ? "creating_session"
+                : "restoring_session",
+            )}
           </span>
         </div>
       </div>
@@ -827,97 +1001,138 @@ export default function ChatArea({
         onNavigate={handleNavigate}
       />
       <div className="flex-1 min-w-0 min-h-0 relative flex flex-col">
-      <div className="flex-1 min-w-0 min-h-0 overflow-y-auto mr-1.5 chat-scroll-cap [overflow-anchor:none]" ref={scrollRef} onScroll={handleScroll} style={{ scrollbarGutter: 'stable' }}>
-      {!connected && !hasContent && (
-        <div className="flex items-center justify-center h-full text-content-disabled text-sm font-medium">
-          {t(lang, 'connecting')}
-        </div>
-      )}
-      {connected && !hasContent && !busy && (
-        <WelcomeScreen>{children}</WelcomeScreen>
-      )}
+        <div
+          className="flex-1 min-w-0 min-h-0 overflow-y-auto mr-1.5 chat-scroll-cap [overflow-anchor:none]"
+          ref={scrollRef}
+          onScroll={handleScroll}
+          style={{ scrollbarGutter: "stable" }}
+        >
+          {!connected && !hasContent && (
+            <div className="flex items-center justify-center h-full text-content-disabled text-sm font-medium">
+              {t(lang, "connecting")}
+            </div>
+          )}
+          {connected && !hasContent && !busy && (
+            <WelcomeScreen>{children}</WelcomeScreen>
+          )}
 
-      {(hasContent || busy) && (
-      <div className="mx-auto max-w-[var(--chat-content-width)] px-6 md:px-10 lg:px-16 pt-6 pb-8">
-        {/* "加载更多"统一入口：服务端未载入轮次优先（每次 5 轮），
+          {(hasContent || busy) && (
+            <div className="mx-auto max-w-[var(--chat-content-width)] px-6 md:px-10 lg:px-16 pt-6 pb-8">
+              {/* "加载更多"统一入口：服务端未载入轮次优先（每次 5 轮），
             本地折叠轮次其次（每次 5 轮）；点击后按高度锚点补偿滚动，
             新内容在上方展开而用户当前视口不跳动 */}
-        {(unloadedTurns > 0 || localHidden > 0) && (
-          <div className="flex justify-center mb-4">
-            <button
-              onClick={handleLoadMore}
-              disabled={loadingHistory}
-              className="px-4 py-2 text-sm text-content-secondary hover:text-content-primary glass-surface rounded-full transition-colors cursor-pointer hover:scale-105 active:scale-95 disabled:opacity-60 disabled:cursor-default"
-            >
-              {loadingHistory ? t(lang, 'turn_nav_loading') : t(lang, 'load_more')}
-            </button>
-          </div>
-        )}
+              {(unloadedTurns > 0 || localHidden > 0) && (
+                <div className="flex justify-center mb-4">
+                  <button
+                    onClick={handleLoadMore}
+                    disabled={loadingHistory}
+                    className="px-4 py-2 text-sm text-content-secondary hover:text-content-primary glass-surface rounded-full transition-colors cursor-pointer hover:scale-105 active:scale-95 disabled:opacity-60 disabled:cursor-default"
+                  >
+                    {loadingHistory
+                      ? t(lang, "turn_nav_loading")
+                      : t(lang, "load_more")}
+                  </button>
+                </div>
+              )}
 
-        {visibleTurns.map((turn, visIdx) => {
-          const turnIdx = turnOffset + visIdx;
-          const isCommandTurn = turnIsCommand[turnIdx] ?? false;
-          return (
-            <TurnView
-              key={firstLoadedTurn + turnIdx}
-              turn={turn}
-              turnNumber={firstLoadedTurn + turnIdx}
-              isLastTurn={turnIdx === turns.length - 1}
-              turnsToRewind={turnRewindCounts[turnIdx] ?? turns.length - turnIdx}
-              busy={busy}
-              hasPendingTools={pendingToolCalls.length > 0}
-              lang={lang}
-              toolInputMap={toolInputMap}
-              onRewindToTurn={!isCommandTurn ? stableOnRewindToTurn : undefined}
-              onRegenerate={stableOnRegenerate}
-              onForkTurn={!isCommandTurn ? stableOnForkTurn : undefined}
-              hasTopGap={visIdx > 0}
-              onOpenSessionFile={onOpenSessionFile}
-            />
-          );
-        })}
-        {pendingToolCalls.length > 0 && (
-          <div className={turns.length > 0 ? 'mt-4' : ''}>
-            {pendingToolCalls.map((call) => (
-              <PendingToolBubble key={call.tool_use_id} call={call} />
-            ))}
-          </div>
-        )}
-        {busy && !assistantBuffer && !streamingReasoning && pendingToolCalls.length === 0 && !lastReplyDone && (
-          <div className={turns.length > 0 ? 'mt-4' : ''}>
-            <ThinkingIndicator lang={lang} />
-          </div>
-        )}
-        {busy && (assistantBuffer || streamingReasoning) && (
-          <div className={turns.length > 0 ? 'mt-4' : ''}>
-            <StreamingBuffer text={assistantBuffer} reasoning={streamingReasoning} reasoningStreaming={reasoningStreaming} lang={lang} />
-          </div>
-        )}
-        {modal?.kind === 'permission' && (
-          <PermissionCard modal={modal} lang={lang} onRespond={onPermissionResponse} />
-        )}
-        {/* key 绑定 request_id：新模态框（新问题）到来时整体重置 QuestionCard 内部状态；
+              {visibleTurns.map((turn, visIdx) => {
+                const turnIdx = turnOffset + visIdx;
+                const isCommandTurn = turnIsCommand[turnIdx] ?? false;
+                return (
+                  <TurnView
+                    key={firstLoadedTurn + turnIdx}
+                    turn={turn}
+                    turnNumber={firstLoadedTurn + turnIdx}
+                    isLastTurn={turnIdx === turns.length - 1}
+                    turnsToRewind={
+                      turnRewindCounts[turnIdx] ?? turns.length - turnIdx
+                    }
+                    busy={busy}
+                    hasPendingTools={pendingToolCalls.length > 0}
+                    lang={lang}
+                    toolInputMap={toolInputMap}
+                    onRewindToTurn={
+                      !isCommandTurn ? stableOnRewindToTurn : undefined
+                    }
+                    onRegenerate={stableOnRegenerate}
+                    onForkTurn={!isCommandTurn ? stableOnForkTurn : undefined}
+                    hasTopGap={visIdx > 0}
+                    onOpenSessionFile={onOpenSessionFile}
+                  />
+                );
+              })}
+              {pendingToolCalls.length > 0 && (
+                <div className={turns.length > 0 ? "mt-4" : ""}>
+                  {pendingToolCalls.map((call) => (
+                    <PendingToolBubble key={call.tool_use_id} call={call} />
+                  ))}
+                </div>
+              )}
+              {busy &&
+                !assistantBuffer &&
+                !streamingReasoning &&
+                pendingToolCalls.length === 0 &&
+                !lastReplyDone && (
+                  <div className={turns.length > 0 ? "mt-4" : ""}>
+                    <ThinkingIndicator lang={lang} />
+                  </div>
+                )}
+              {busy && (assistantBuffer || streamingReasoning) && (
+                <div
+                  ref={streamBufferRef}
+                  className={turns.length > 0 ? "mt-4" : ""}
+                >
+                  <StreamingBuffer
+                    text={assistantBuffer}
+                    reasoning={streamingReasoning}
+                    reasoningStreaming={reasoningStreaming}
+                    lang={lang}
+                  />
+                </div>
+              )}
+              {modal?.kind === "permission" && (
+                <PermissionCard
+                  modal={modal}
+                  lang={lang}
+                  onRespond={onPermissionResponse}
+                />
+              )}
+              {/* key 绑定 request_id：新模态框（新问题）到来时整体重置 QuestionCard 内部状态；
             多问题切题时由 QuestionCard 回调 onTabChange 复用本组件的回到底部滚动 */}
-        {modal?.kind === 'question' && (
-          <QuestionCard key={modal?.request_id ? String(modal.request_id) : 'q'} modal={modal} lang={lang} onRespond={onQuestionResponse} onTabChange={scrollToBottom} />
-        )}
-      </div>
-      )}
-
-      </div>
-      {/* 一键回到底部浮动按钮：绝对定位于内层列容器（非滚动）底部，紧贴输入框上方，
+              {modal?.kind === "question" && (
+                <QuestionCard
+                  key={modal?.request_id ? String(modal.request_id) : "q"}
+                  modal={modal}
+                  lang={lang}
+                  onRespond={onQuestionResponse}
+                  onTabChange={scrollToBottom}
+                />
+              )}
+            </div>
+          )}
+        </div>
+        {/* 一键回到底部浮动按钮：绝对定位于内层列容器（非滚动）底部，紧贴输入框上方，
           随输入框高度自动调整；不硬编码视口 bottom 偏移 */}
-      {showScrollDown && (
-        <button
-          onClick={scrollToBottom}
-          className="absolute left-1/2 -translate-x-1/2 bottom-3 z-30 w-9 h-9 flex items-center justify-center rounded-full glass-surface text-content-secondary hover:text-content-primary shadow-lg transition-all duration-200 hover:scale-110 active:scale-95 cursor-pointer animate-fade-in-up"
-          title={t(lang, 'scroll_to_bottom')}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 5v14M5 12l7 7 7-7" />
-          </svg>
-        </button>
-      )}
+        {showScrollDown && (
+          <button
+            onClick={scrollToBottom}
+            className="absolute left-1/2 -translate-x-1/2 bottom-3 z-30 w-9 h-9 flex items-center justify-center rounded-full glass-surface text-content-secondary hover:text-content-primary shadow-lg transition-all duration-200 hover:scale-110 active:scale-95 cursor-pointer animate-fade-in-up"
+            title={t(lang, "scroll_to_bottom")}
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M12 5v14M5 12l7 7 7-7" />
+            </svg>
+          </button>
+        )}
       </div>
     </div>
   );
@@ -927,12 +1142,21 @@ function ThinkingIndicator({ lang }: { lang: UiLanguage }) {
   return (
     <div className="flex items-center gap-2.5 py-2">
       <span className="flex gap-1">
-        <span className="w-1.5 h-1.5 rounded-full bg-primary animate-bounce" style={{ animationDelay: '0ms' }} />
-        <span className="w-1.5 h-1.5 rounded-full bg-primary animate-bounce" style={{ animationDelay: '150ms' }} />
-        <span className="w-1.5 h-1.5 rounded-full bg-primary animate-bounce" style={{ animationDelay: '300ms' }} />
+        <span
+          className="w-1.5 h-1.5 rounded-full bg-primary animate-bounce"
+          style={{ animationDelay: "0ms" }}
+        />
+        <span
+          className="w-1.5 h-1.5 rounded-full bg-primary animate-bounce"
+          style={{ animationDelay: "150ms" }}
+        />
+        <span
+          className="w-1.5 h-1.5 rounded-full bg-primary animate-bounce"
+          style={{ animationDelay: "300ms" }}
+        />
       </span>
       <span className="text-xs text-content-secondary animate-pulse">
-        {t(lang, 'thinking')}
+        {t(lang, "thinking")}
       </span>
     </div>
   );

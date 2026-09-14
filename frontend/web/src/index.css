@@ -713,6 +713,30 @@ pre code.hljs,
   color: var(--text-primary);
 }
 
+/* 输入框镜像层方案：textarea 正文必须透明（可见文字由下方镜像层绘制）。
+   不能用 Tailwind 任意属性写在 className 上——-webkit-text-fill-color 会连
+   placeholder 一起刷没。这里集中控制：正文透明，占位符/选区单独恢复。 */
+.prompt-ta {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+.prompt-ta::placeholder {
+  color: var(--text-disabled, rgba(0, 0, 0, 0.35));
+  -webkit-text-fill-color: var(--text-disabled, rgba(0, 0, 0, 0.35));
+  opacity: 1;
+}
+/* 选区：只画主题墨绿底。文字由镜像层原色透出，避免全局 ::selection 把透明正文
+   刷成深色叠在镜像上（又暗又糊）。 */
+.prompt-ta::selection {
+  background: var(--primary-light);
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+.prompt-ta::-moz-selection {
+  background: var(--primary-light);
+  color: transparent;
+}
+
 /* ========== 焦点样式 ==========
  * 移除全局绿色 outline 边框（视觉突兀），改为透明 outline 仅保留无障碍语义；
  * 具体交互元素（输入框/下拉触发器）通过各自的 focus:shadow-glow 实现柔和散光聚焦态，

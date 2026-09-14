@@ -11,23 +11,33 @@
  * @module MessageBubble
  */
 
-import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
-import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkSuperscript from '../remarkSuperscript';
-import { highlightMentions } from '../utils/mention';
-import rehypeHighlight from 'rehype-highlight';
-import rehypeRaw from 'rehype-raw';
-import rehypeSanitize, { defaultSchema, type Options as SanitizeOptions } from 'rehype-sanitize';
-import type { PluggableList } from 'unified';
-import 'highlight.js/styles/github.css';
-import { t, type UiLanguage } from '../i18n';
-import { toolDisplayName } from '../utils/toolDisplayName';
-import { renderAnsi } from '../utils/ansi';
-import { openImagePreview } from '../utils/imagePreview';
-import type { TranscriptItem, PendingToolCall } from '../types/protocol';
-import { parseToolResultStat } from '../utils/turnGrouping';
-import { CheckIcon, CopyIcon, GitForkIcon, RegenerateIcon, RewindIcon } from './icons';
+import React, { memo, useCallback, useEffect, useRef, useState } from "react";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+import remarkGfm from "remark-gfm";
+import remarkSuperscript from "../remarkSuperscript";
+import { highlightMentions } from "../utils/mention";
+import rehypeHighlight from "rehype-highlight";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize, {
+  defaultSchema,
+  type Options as SanitizeOptions,
+} from "rehype-sanitize";
+import type { PluggableList } from "unified";
+import "highlight.js/styles/github.css";
+import { t, type UiLanguage } from "../i18n";
+import { useSmoothReveal } from "../hooks/useSmoothReveal";
+import { toolDisplayName } from "../utils/toolDisplayName";
+import { renderAnsi } from "../utils/ansi";
+import { openImagePreview } from "../utils/imagePreview";
+import type { TranscriptItem, PendingToolCall } from "../types/protocol";
+import { parseToolResultStat } from "../utils/turnGrouping";
+import {
+  CheckIcon,
+  CopyIcon,
+  GitForkIcon,
+  RegenerateIcon,
+  RewindIcon,
+} from "./icons";
 
 /**
  * HTML 消毒 schema（防 XSS，对齐 opencode 的 DOMPurify 处理）
@@ -41,23 +51,27 @@ const sanitizeSchema: SanitizeOptions = {
   ...defaultSchema,
   attributes: {
     ...defaultSchema.attributes,
-    '*': [...(defaultSchema.attributes?.['*'] ?? []), 'className'],
+    "*": [...(defaultSchema.attributes?.["*"] ?? []), "className"],
   },
   protocols: {
     ...defaultSchema.protocols,
-    src: [...(defaultSchema.protocols?.src ?? []), 'data'],
+    src: [...(defaultSchema.protocols?.src ?? []), "data"],
   },
 };
 
 /** 所有 markdown 渲染共用的 rehype 插件链：代码高亮 → 原始 HTML → 消毒 */
-const rehypePlugins: PluggableList = [rehypeHighlight, rehypeRaw, [rehypeSanitize, sanitizeSchema]];
+const rehypePlugins: PluggableList = [
+  rehypeHighlight,
+  rehypeRaw,
+  [rehypeSanitize, sanitizeSchema],
+];
 
 /** 行内代码内容为纯 URL 时渲染为可点击链接（对齐 opencode markCodeLinks） */
 const URL_PATTERN = /^https?:\/\/[^\s<>()`"']+$/;
 
 /** 提取 code 文本中的有效 URL（去除尾部标点），无效返回 undefined */
 function codeUrl(text: string): string | undefined {
-  const href = text.trim().replace(/[),.;!?]+$/, '');
+  const href = text.trim().replace(/[),.;!?]+$/, "");
   if (!URL_PATTERN.test(href)) return undefined;
   try {
     return new URL(href).toString();
@@ -68,7 +82,7 @@ function codeUrl(text: string): string | undefined {
 
 /** 从 rehype-highlight 注入的 className 中提取语言名 */
 function extractLanguage(props: Record<string, unknown>): string | undefined {
-  const className = (props.className as string) || '';
+  const className = (props.className as string) || "";
   const match = className.match(/language-(\w+)/);
   return match?.[1];
 }
@@ -77,14 +91,17 @@ function extractLanguage(props: Record<string, unknown>): string | undefined {
 function extractText(children: React.ReactNode): string {
   return React.Children.toArray(children)
     .map((c) => {
-      if (typeof c === 'string') return c;
-      if (typeof c === 'number') return String(c);
-      if (React.isValidElement(c) && (c.props as { children?: React.ReactNode }).children) {
+      if (typeof c === "string") return c;
+      if (typeof c === "number") return String(c);
+      if (
+        React.isValidElement(c) &&
+        (c.props as { children?: React.ReactNode }).children
+      ) {
         return extractText((c.props as { children: React.ReactNode }).children);
       }
-      return '';
+      return "";
     })
-    .join('');
+    .join("");
 }
 
 /** 去除代码块尾部空行，返回处理后的 children */
@@ -92,17 +109,17 @@ function trimCodeTrailingLines(children: React.ReactNode): React.ReactNode {
   return React.Children.map(children, (child) => {
     if (!React.isValidElement(child)) return child;
     const el = child as React.ReactElement<{ children?: React.ReactNode }>;
-    if (typeof el.type === 'string' && el.type === 'code') {
+    if (typeof el.type === "string" && el.type === "code") {
       const arr = React.Children.toArray(el.props.children);
       while (arr.length > 0) {
         const last = arr[arr.length - 1];
-        if (typeof last === 'string' && last.trim() === '') arr.pop();
+        if (typeof last === "string" && last.trim() === "") arr.pop();
         else break;
       }
       if (arr.length > 0) {
         const last = arr[arr.length - 1];
-        if (typeof last === 'string' && /\n+$/.test(last)) {
-          arr[arr.length - 1] = last.replace(/\n+$/, '');
+        if (typeof last === "string" && /\n+$/.test(last)) {
+          arr[arr.length - 1] = last.replace(/\n+$/, "");
         }
       }
       return React.cloneElement(el, undefined, ...arr);
@@ -119,7 +136,7 @@ function trimCodeTrailingLines(children: React.ReactNode): React.ReactNode {
  * 其余 URL 沿用默认安全校验（javascript: 等仍被拦截）。
  */
 const urlTransform = (url: string, key: string): string => {
-  if (key === 'src' && url.startsWith('data:')) return url;
+  if (key === "src" && url.startsWith("data:")) return url;
   return defaultUrlTransform(url);
 };
 
@@ -133,14 +150,28 @@ function CodeCopyButton({ text }: { text: string }) {
     });
   };
   return (
-    <button className={`code-copy-btn${copied ? ' copied' : ''}`} onClick={handleCopy} title="复制">
+    <button
+      className={`code-copy-btn${copied ? " copied" : ""}`}
+      onClick={handleCopy}
+      title="复制"
+    >
       <span className="copy-icon">
-        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeLinecap="round">
+        <svg
+          viewBox="0 0 20 20"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+        >
           <path d="M6.2513 6.24935V2.91602H17.0846V13.7493H13.7513M13.7513 6.24935V17.0827H2.91797V6.24935H13.7513Z" />
         </svg>
       </span>
       <span className="copy-check">
-        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeLinecap="square">
+        <svg
+          viewBox="0 0 20 20"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="square"
+        >
           <path d="M5 11.9657L8.37838 14.7529L15 5.83398" />
         </svg>
       </span>
@@ -161,9 +192,13 @@ const IMAGE_URL_RE = /\.(png|jpe?g|gif|webp|bmp|svg|avif|ico)(\?.*)?(#.*)?$/i;
  * - code：行内代码内容为纯 URL 时渲染为可点击链接（对齐 opencode markCodeLinks）
  */
 const mdComponents = {
-  pre: ({ children, ...rest }: React.ComponentPropsWithoutRef<'pre'>) => {
-    const codeChild = children as React.ReactElement<{ className?: string; children?: React.ReactNode }> | undefined;
-    const lang = extractLanguage((codeChild?.props as Record<string, unknown>) || {}) || 'text';
+  pre: ({ children, ...rest }: React.ComponentPropsWithoutRef<"pre">) => {
+    const codeChild = children as
+      | React.ReactElement<{ className?: string; children?: React.ReactNode }>
+      | undefined;
+    const lang =
+      extractLanguage((codeChild?.props as Record<string, unknown>) || {}) ||
+      "text";
     const rawText = extractText(codeChild?.props?.children ?? children);
     return (
       <div className="code-block-wrap">
@@ -175,18 +210,30 @@ const mdComponents = {
       </div>
     );
   },
-  img: ({ src, alt, ...rest }: React.ComponentPropsWithoutRef<'img'>) => {
+  img: ({ src, alt, ...rest }: React.ComponentPropsWithoutRef<"img">) => {
     // 加载失败（如无效 src）时显示美化占位，保留用户对损坏图片的感知
     const [failed, setFailed] = useState(false);
     if (failed) {
       return (
-        <span className="inline-flex items-center gap-1.5 text-xs text-content-disabled bg-surface-card-alt border border-dashed border-border-medium rounded-md px-2 py-1 my-1 select-none" title={src}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <span
+          className="inline-flex items-center gap-1.5 text-xs text-content-disabled bg-surface-card-alt border border-dashed border-border-medium rounded-md px-2 py-1 my-1 select-none"
+          title={src}
+        >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
             <rect x="3" y="3" width="18" height="18" rx="2" />
             <circle cx="8.5" cy="8.5" r="1.5" />
             <path d="M21 15l-5-5L5 21" />
           </svg>
-          {alt || '图片加载失败'}
+          {alt || "图片加载失败"}
         </span>
       );
     }
@@ -202,13 +249,15 @@ const mdComponents = {
       />
     );
   },
-  a: ({ href, children, ...rest }: React.ComponentPropsWithoutRef<'a'>) => {
+  a: ({ href, children, ...rest }: React.ComponentPropsWithoutRef<"a">) => {
     const isExternal = !!href && /^https?:\/\//i.test(href);
     return (
       <a
         {...rest}
         href={href}
-        {...(isExternal ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+        {...(isExternal
+          ? { target: "_blank", rel: "noopener noreferrer" }
+          : {})}
         onClick={(e) => {
           // 图片链接在应用内预览（桌面端不会被外链拦截器重定向到系统浏览器）
           if (href && IMAGE_URL_RE.test(href)) {
@@ -221,15 +270,24 @@ const mdComponents = {
       </a>
     );
   },
-  code: ({ children, className, ...rest }: React.ComponentPropsWithoutRef<'code'>) => {
+  code: ({
+    children,
+    className,
+    ...rest
+  }: React.ComponentPropsWithoutRef<"code">) => {
     // 块级代码（rehype-highlight 注入 language-xxx）不处理；
     // 行内代码内容为纯 URL 时渲染为可点击链接
-    const isBlock = !!className?.includes('language-');
+    const isBlock = !!className?.includes("language-");
     if (!isBlock) {
       const url = codeUrl(extractText(children));
       if (url) {
         return (
-          <a href={url} target="_blank" rel="noopener noreferrer" className="break-all">
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="break-all"
+          >
             {children}
           </a>
         );
@@ -281,7 +339,21 @@ interface MessageBubbleProps {
  * @param props.onRewind - 撤销回调（可选，user 消息显示）
  * @param props.onRegenerate - 重新生成回调（可选，assistant 消息显示）
  */
-const MessageActions = memo(function MessageActions({ text, lang, onRewind, onRegenerate, onFork, disabled }: { text: string; lang: UiLanguage; onRewind?: () => void; onRegenerate?: () => void; onFork?: () => void; disabled?: boolean }) {
+const MessageActions = memo(function MessageActions({
+  text,
+  lang,
+  onRewind,
+  onRegenerate,
+  onFork,
+  disabled,
+}: {
+  text: string;
+  lang: UiLanguage;
+  onRewind?: () => void;
+  onRegenerate?: () => void;
+  onFork?: () => void;
+  disabled?: boolean;
+}) {
   const [copied, setCopied] = useState(false);
   const handleCopy = () => {
     navigator.clipboard.writeText(text).then(() => {
@@ -289,14 +361,14 @@ const MessageActions = memo(function MessageActions({ text, lang, onRewind, onRe
       setTimeout(() => setCopied(false), 2000);
     });
   };
-  const dis = disabled ? 'opacity-30 pointer-events-none' : 'cursor-pointer';
+  const dis = disabled ? "opacity-30 pointer-events-none" : "cursor-pointer";
   return (
     <div className="flex items-center gap-0.5 mt-1 mr-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
       <button
         onClick={handleCopy}
         onMouseDown={(e) => e.preventDefault()}
         className="w-6 h-6 flex items-center justify-center rounded text-content-disabled hover:text-content-primary hover:bg-black/5 transition-colors cursor-pointer"
-        title={copied ? t(lang, 'copied') : t(lang, 'copy')}
+        title={copied ? t(lang, "copied") : t(lang, "copy")}
       >
         {copied ? (
           <CheckIcon className="w-[13px] h-[13px]" />
@@ -309,7 +381,7 @@ const MessageActions = memo(function MessageActions({ text, lang, onRewind, onRe
           onClick={onRewind}
           onMouseDown={(e) => e.preventDefault()}
           className={`w-6 h-6 flex items-center justify-center rounded text-content-disabled hover:text-content-primary hover:bg-black/5 transition-colors ${dis}`}
-          title={t(lang, 'rewind')}
+          title={t(lang, "rewind")}
         >
           <RewindIcon className="w-[13px] h-[13px]" />
         </button>
@@ -319,7 +391,7 @@ const MessageActions = memo(function MessageActions({ text, lang, onRewind, onRe
           onClick={onFork}
           onMouseDown={(e) => e.preventDefault()}
           className={`w-6 h-6 flex items-center justify-center rounded text-content-disabled hover:text-content-primary hover:bg-black/5 transition-colors ${dis}`}
-          title={t(lang, 'fork_session')}
+          title={t(lang, "fork_session")}
         >
           <GitForkIcon className="w-[13px] h-[13px]" />
         </button>
@@ -329,7 +401,7 @@ const MessageActions = memo(function MessageActions({ text, lang, onRewind, onRe
           onClick={onRegenerate}
           onMouseDown={(e) => e.preventDefault()}
           className={`w-6 h-6 flex items-center justify-center rounded text-content-disabled hover:text-content-primary hover:bg-black/5 transition-colors ${dis}`}
-          title={t(lang, 'regenerate')}
+          title={t(lang, "regenerate")}
         >
           <RegenerateIcon className="w-[13px] h-[13px]" />
         </button>
@@ -349,8 +421,19 @@ const MessageActions = memo(function MessageActions({ text, lang, onRewind, onRe
  * @param props - 组件属性
  * @returns 返回消息气泡的 JSX 元素
  */
-function MessageBubble({ item, toolInputMap, lang = 'zh-CN', onRewind, onRegenerate, onFork, hideReasoning, showActions = true, actionsDisabled, footer }: MessageBubbleProps) {
-  if (item.role === 'user') {
+function MessageBubble({
+  item,
+  toolInputMap,
+  lang = "zh-CN",
+  onRewind,
+  onRegenerate,
+  onFork,
+  hideReasoning,
+  showActions = true,
+  actionsDisabled,
+  footer,
+}: MessageBubbleProps) {
+  if (item.role === "user") {
     return (
       <div className="flex justify-end py-1.5 group">
         <div className="flex flex-col items-end max-w-[min(82%,64ch)]">
@@ -361,39 +444,72 @@ function MessageBubble({ item, toolInputMap, lang = 'zh-CN', onRewind, onRegener
           <div className="bg-surface-card-alt border border-border-light rounded-lg px-3 py-2 text-sm text-content-primary whitespace-pre-wrap [overflow-wrap:anywhere] select-text">
             {highlightMentions(item.text)}
           </div>
-          {showActions && <MessageActions text={item.text} lang={lang} onRewind={onRewind} disabled={actionsDisabled} />}
+          {showActions && (
+            <MessageActions
+              text={item.text}
+              lang={lang}
+              onRewind={onRewind}
+              disabled={actionsDisabled}
+            />
+          )}
         </div>
       </div>
     );
   }
 
-  if (item.role === 'assistant') {
-    const reasoning = !hideReasoning && item.reasoning ? <ThinkingBlock text={item.reasoning} lang={lang} /> : null;
+  if (item.role === "assistant") {
+    const reasoning =
+      !hideReasoning && item.reasoning ? (
+        <ThinkingBlock text={item.reasoning} lang={lang} />
+      ) : null;
     return (
       <div className="py-1.5 group">
         {reasoning}
         <div className="text-content-primary text-sm prose max-w-full select-text">
-          <ReactMarkdown remarkPlugins={[remarkGfm, remarkSuperscript]} rehypePlugins={rehypePlugins} urlTransform={urlTransform} components={mdComponents}>
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm, remarkSuperscript]}
+            rehypePlugins={rehypePlugins}
+            urlTransform={urlTransform}
+            components={mdComponents}
+          >
             {item.text}
           </ReactMarkdown>
         </div>
         {footer}
-        {showActions && <MessageActions text={item.text} lang={lang} onRegenerate={onRegenerate} onFork={onFork} disabled={actionsDisabled} />}
+        {showActions && (
+          <MessageActions
+            text={item.text}
+            lang={lang}
+            onRegenerate={onRegenerate}
+            onFork={onFork}
+            disabled={actionsDisabled}
+          />
+        )}
       </div>
     );
   }
 
-  if (item.role === 'tool_result') {
-    const toolInput = (item.tool_use_id && toolInputMap?.get(item.tool_use_id)) || item.tool_input;
-    return <ToolResultBubble name={item.tool_name || 'tool'} text={item.text} isError={item.is_error} toolInput={toolInput} structuredOutput={item.structured_output} />;
+  if (item.role === "tool_result") {
+    const toolInput =
+      (item.tool_use_id && toolInputMap?.get(item.tool_use_id)) ||
+      item.tool_input;
+    return (
+      <ToolResultBubble
+        name={item.tool_name || "tool"}
+        text={item.text}
+        isError={item.is_error}
+        toolInput={toolInput}
+        structuredOutput={item.structured_output}
+      />
+    );
   }
 
-  if (item.role === 'tool') {
+  if (item.role === "tool") {
     return null;
   }
 
   // plan 角色由 ModalCard 专门展示，不在对话流中重复显示
-  if (item.role === 'plan') {
+  if (item.role === "plan") {
     return null;
   }
 
@@ -423,8 +539,8 @@ function isUnifiedDiffText(text: string): boolean {
   for (const line of lines) {
     const trimmed = line.trimStart();
     if (/^@@\s+-\d+/.test(trimmed)) return true;
-    if (trimmed.startsWith('--- ')) hasFrom = true;
-    else if (trimmed.startsWith('+++ ')) hasTo = true;
+    if (trimmed.startsWith("--- ")) hasFrom = true;
+    else if (trimmed.startsWith("+++ ")) hasTo = true;
     if (hasFrom && hasTo) return true;
   }
   return false;
@@ -446,17 +562,20 @@ function DiffLines({ text }: { text: string }) {
         // unified diff 的格式标记是行首第一个字符：+ 新增 / - 删除 / 空格 上下文。
         // 不能 trimStart 后再判断，否则上下文行内容本身以 - / + 开头时
         // （如无序列表 "- item"）会被误染成红/绿色
-        let color = '';
-        if (line.startsWith('+') && !line.startsWith('+++')) {
-          color = 'text-diff-add';
-        } else if (line.startsWith('-') && !line.startsWith('---')) {
-          color = 'text-diff-del';
-        } else if (line.startsWith('@@')) {
-          color = 'text-diff-hunk';
+        let color = "";
+        if (line.startsWith("+") && !line.startsWith("+++")) {
+          color = "text-diff-add";
+        } else if (line.startsWith("-") && !line.startsWith("---")) {
+          color = "text-diff-del";
+        } else if (line.startsWith("@@")) {
+          color = "text-diff-hunk";
         }
         return (
-          <div key={i} className={`whitespace-pre-wrap [overflow-wrap:anywhere] ${color}`}>
-            {line || '\u00A0'}
+          <div
+            key={i}
+            className={`whitespace-pre-wrap [overflow-wrap:anywhere] ${color}`}
+          >
+            {line || "\u00A0"}
           </div>
         );
       })}
@@ -484,54 +603,96 @@ function DiffLines({ text }: { text: string }) {
  * @param props.isError - 是否为错误结果
  * @param props.toolInput - 工具输入参数
  */
-const ToolResultBubble = memo(function ToolResultBubble({ name, text, isError, toolInput, structuredOutput }: { name: string; text: string; isError?: boolean; toolInput?: Record<string, unknown>; structuredOutput?: Record<string, unknown> }) {
+const ToolResultBubble = memo(function ToolResultBubble({
+  name,
+  text,
+  isError,
+  toolInput,
+  structuredOutput,
+}: {
+  name: string;
+  text: string;
+  isError?: boolean;
+  toolInput?: Record<string, unknown>;
+  structuredOutput?: Record<string, unknown>;
+}) {
   const [open, setOpen] = useState(false);
   // summarizeInput 用原名做大小写不敏感匹配，显示名用映射后的友好名
   const summary = summarizeInput(name, toolInput, name);
   // agent 工具根据 subagent_type 动态显示类型名，其他工具使用映射表
-  const displayName = name === 'agent' && toolInput ? getAgentDisplayName(toolInput) : toolDisplayName(name);
+  const displayName =
+    name === "agent" && toolInput
+      ? getAgentDisplayName(toolInput)
+      : toolDisplayName(name);
   // 任务完成后直接用最终结果替换：流式阶段已累积展示思考过程，
   // 完成后仅以最终结果（text）作为正文，不再保留/判断思考过程
   const hasContent = !!text;
   // 统一 diff 且无 ANSI 转义码时按行着色渲染；错误结果与 terminal 一致整行走错误色，
   // 不启用 diff 着色（text 可能为空，需先守卫避免崩溃）
-  const isDiff = !!text && !isError && !text.includes('\x1b[') && isUnifiedDiffText(text);
+  const isDiff =
+    !!text && !isError && !text.includes("\x1b[") && isUnifiedDiffText(text);
   // 变更工具（edit_file/write_file）的增删行数：优先 structured_output
   // （直播，工具 metadata 精确值），回退结果文本解析（恢复路径），
   // 两条路径口径与单轮变更条一致
-  const diffStat = !isError && (name === 'edit_file' || name === 'write_file')
-    ? parseToolResultStat(text ?? '', structuredOutput)
-    : null;
+  const diffStat =
+    !isError && (name === "edit_file" || name === "write_file")
+      ? parseToolResultStat(text ?? "", structuredOutput)
+      : null;
 
   return (
     <div data-tool-row className="py-1.5">
       <button
         onClick={() => hasContent && setOpen(!open)}
-        className={`flex items-start text-base transition-colors cursor-pointer text-left ${hasContent ? 'text-content-secondary hover:text-content-primary' : ''}`}
+        className={`flex items-start text-base transition-colors cursor-pointer text-left ${hasContent ? "text-content-secondary hover:text-content-primary" : ""}`}
       >
         {/* 圆点右移 3px 使其对称轴（7px）与大脑图标重合；文本缩进不变
             （3px + 8px + 9px = 14px + 6px = 20px）；mt-2 垂直居中 */}
-        <span className={`inline-block w-2 h-2 rounded-full shrink-0 mt-2 ml-[3px] mr-[9px] ${isError ? 'bg-danger' : 'bg-primary'}`} />
+        <span
+          className={`inline-block w-2 h-2 rounded-full shrink-0 mt-2 ml-[3px] mr-[9px] ${isError ? "bg-danger" : "bg-primary"}`}
+        />
         <span className="flex-1 min-w-0 break-all">
-          <span className={isError ? 'text-danger' : 'text-content-primary'}>{displayName}</span>
+          <span className={isError ? "text-danger" : "text-content-primary"}>
+            {displayName}
+          </span>
           {/* 预览行在展开/折叠时均保留，展开后与结果正文并存；字号介于工具名与正文之间 */}
-          {summary && <span className={`text-sm ${isError ? 'text-danger' : 'text-content-disabled'}`}>（{summary}）</span>}
-          {isError && <span className="text-xs text-danger font-medium"> ERROR</span>}
+          {summary && (
+            <span
+              className={`text-sm ${isError ? "text-danger" : "text-content-disabled"}`}
+            >
+              （{summary}）
+            </span>
+          )}
+          {isError && (
+            <span className="text-xs text-danger font-medium"> ERROR</span>
+          )}
           {/* 该次编辑的增删行数（着色加粗数字，无分隔符；无法统计时不显示） */}
           {diffStat && (diffStat.insertions > 0 || diffStat.deletions > 0) && (
             <span className="ml-1.5 font-mono text-xs font-bold whitespace-nowrap">
-              {diffStat.insertions > 0 && <span className="text-diff-add">+{diffStat.insertions}</span>}
-              {diffStat.insertions > 0 && diffStat.deletions > 0 && <span> </span>}
-              {diffStat.deletions > 0 && <span className="text-diff-del">-{diffStat.deletions}</span>}
+              {diffStat.insertions > 0 && (
+                <span className="text-diff-add">+{diffStat.insertions}</span>
+              )}
+              {diffStat.insertions > 0 && diffStat.deletions > 0 && (
+                <span> </span>
+              )}
+              {diffStat.deletions > 0 && (
+                <span className="text-diff-del">-{diffStat.deletions}</span>
+              )}
             </span>
           )}
         </span>
       </button>
       {open && hasContent && (
-        <div className={`mt-1 ml-3.5 p-2.5 font-mono text-xs leading-relaxed max-h-96 overflow-y-auto scrollbar-hidden rounded-lg select-text ${isError ? 'text-danger bg-danger/5 border border-danger/20' : 'text-content-primary bg-surface-card-alt border border-border-light'}`}>
-          {text && (
-            isDiff ? <DiffLines text={text} /> : <div className="whitespace-pre-wrap [overflow-wrap:anywhere]">{renderAnsi(text)}</div>
-          )}
+        <div
+          className={`mt-1 ml-3.5 p-2.5 font-mono text-xs leading-relaxed max-h-96 overflow-y-auto scrollbar-hidden rounded-lg select-text ${isError ? "text-danger bg-danger/5 border border-danger/20" : "text-content-primary bg-surface-card-alt border border-border-light"}`}
+        >
+          {text &&
+            (isDiff ? (
+              <DiffLines text={text} />
+            ) : (
+              <div className="whitespace-pre-wrap [overflow-wrap:anywhere]">
+                {renderAnsi(text)}
+              </div>
+            ))}
         </div>
       )}
     </div>
@@ -544,22 +705,26 @@ const ToolResultBubble = memo(function ToolResultBubble({ name, text, isError, t
  * thinking/text 为增量流式片段（token 级累积），
  * tool/status 为完整消息，加 ▸ 前缀。
  */
-function ProgressMessages({ messages }: { messages: Array<{message: string; type?: string}> }) {
+function ProgressMessages({
+  messages,
+}: {
+  messages: Array<{ message: string; type?: string }>;
+}) {
   return (
     <>
       {messages.map((msg, i) => (
         <div key={i} className="py-px">
-          {msg.message.split('\n').map((line, li) => (
+          {msg.message.split("\n").map((line, li) => (
             <div key={li}>
-              {li === 0 && msg.type !== 'thinking' && msg.type !== 'text' && (
+              {li === 0 && msg.type !== "thinking" && msg.type !== "text" && (
                 <span className="text-primary/70 mr-1">▸</span>
               )}
-              {line || '\u00A0'}
+              {line || "\u00A0"}
             </div>
           ))}
         </div>
       ))}
-    </>    
+    </>
   );
 }
 
@@ -569,11 +734,14 @@ function ProgressMessages({ messages }: { messages: Array<{message: string; type
  * @param onCollapse - 折叠回调
  * @param skipSelector - 额外跳过的选择器（命中则交给内层处理，不折叠）
  */
-export function useContentCollapse(onCollapse: () => void, skipSelector?: string) {
+export function useContentCollapse(
+  onCollapse: () => void,
+  skipSelector?: string,
+) {
   const handleContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
     // 交互元素保留原生右键菜单：复制链接地址、代码块复制按钮等
-    if (target.closest('a, button, input, textarea')) return;
+    if (target.closest("a, button, input, textarea")) return;
     // 内层独立折叠区（思考过程块、工具行）交给各自处理
     if (skipSelector && target.closest(skipSelector)) return;
     // 正在选中文本（复制场景）：保留原生右键菜单的"复制"项，不折叠
@@ -603,7 +771,7 @@ export function useContentCollapse(onCollapse: () => void, skipSelector?: string
  * @param props.lang - UI 语言
  * @param props.defaultOpen - 初始展开状态（默认折叠）
  * @param props.autoCollapsed - 自动折叠信号：true 折叠、false 展开，仅对用户未手动操作过的块生效
- * @param props.streaming - 是否正在流式输出（大脑图标切换为与工具行圆点一致的脉冲动画，展开内容底部显示流式光标）
+ * @param props.streaming - 是否正在流式输出（大脑图标切换为与工具行圆点一致的脉冲动画）
  */
 export const ThinkingBlock = memo(function ThinkingBlock({
   text,
@@ -639,10 +807,12 @@ export const ThinkingBlock = memo(function ThinkingBlock({
   };
 
   // 右键内容区域快速折叠
-  const { handleContextMenu: handleContentContextMenu } = useContentCollapse(() => {
-    interactedRef.current = true;
-    setOpen(false);
-  });
+  const { handleContextMenu: handleContentContextMenu } = useContentCollapse(
+    () => {
+      interactedRef.current = true;
+      setOpen(false);
+    },
+  );
 
   return (
     <div data-thinking-block className="mb-1.5">
@@ -651,14 +821,22 @@ export const ThinkingBlock = memo(function ThinkingBlock({
         className="flex items-center gap-1.5 text-base text-content-primary leading-[1.8] transition-colors py-1.5 cursor-pointer"
       >
         {/* 大脑图标：思考过程标识（行高与中间 text 的 prose 1.8 对齐；流式时与工具行圆点一致的脉冲动画） */}
-        <svg className={`w-3.5 h-3.5 shrink-0 text-primary ${streaming ? 'animate-pulse-scale' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg
+          className={`w-3.5 h-3.5 shrink-0 text-primary ${streaming ? "animate-pulse-scale" : ""}`}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
           <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" />
           <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" />
           <path d="M9 8h.01M15 8h.01M9 12h.01M15 12h.01" />
         </svg>
-        <span>{t(lang, 'thinking_process')}</span>
+        <span>{t(lang, "thinking_process")}</span>
         <svg
-          className={`w-3 h-3 transition-transform duration-150 ${open ? 'rotate-90' : ''}`}
+          className={`w-3 h-3 transition-transform duration-150 ${open ? "rotate-90" : ""}`}
           viewBox="0 0 12 12"
           fill="none"
           stroke="currentColor"
@@ -675,8 +853,13 @@ export const ThinkingBlock = memo(function ThinkingBlock({
           <div onContextMenu={handleContentContextMenu} className="relative">
             <div className="text-sm text-content-secondary leading-relaxed select-text mt-1.5 opacity-80 py-1">
               <div className="prose prose-sm max-w-full [overflow-wrap:anywhere]">
-                <ReactMarkdown remarkPlugins={[remarkGfm, remarkSuperscript]} rehypePlugins={rehypePlugins} urlTransform={urlTransform} components={mdComponents}>
-                  {text}
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm, remarkSuperscript]}
+                  rehypePlugins={rehypePlugins}
+                  urlTransform={urlTransform}
+                  components={mdComponents}
+                >
+                  {streaming ? stabilizeStreamingMarkdown(text) : text}
                 </ReactMarkdown>
               </div>
             </div>
@@ -702,17 +885,24 @@ export const ThinkingBlock = memo(function ThinkingBlock({
  * @param props - 组件属性
  * @param props.call - 待处理的工具调用信息
  */
-export const PendingToolBubble = memo(function PendingToolBubble({ call }: { call: PendingToolCall }) {
+export const PendingToolBubble = memo(function PendingToolBubble({
+  call,
+}: {
+  call: PendingToolCall;
+}) {
   // 工具执行中默认展开（可实时查看执行过程；仅 agent 工具会上报进度消息，
   // 普通工具无进度时展开态只显示标题行）；完成后由 ToolResultBubble 折叠展示
   const [open, setOpen] = useState(true);
   // 与 terminal 端 BlinkingToolIndicator 对齐：tool_input 未到达时 summary 为空，
   // 只显示工具名；到达后始终在同一行显示命令摘要，不随进度区折叠而隐藏
-  const summary = call.tool_input ? summarizeInput(call.tool_name, call.tool_input) : '';
+  const summary = call.tool_input
+    ? summarizeInput(call.tool_name, call.tool_input)
+    : "";
   // agent 工具根据 subagent_type 动态显示类型名，其他工具使用映射表
-  const displayName = call.tool_name === 'agent' && call.tool_input
-    ? getAgentDisplayName(call.tool_input as Record<string, unknown>)
-    : toolDisplayName(call.tool_name);
+  const displayName =
+    call.tool_name === "agent" && call.tool_input
+      ? getAgentDisplayName(call.tool_input as Record<string, unknown>)
+      : toolDisplayName(call.tool_name);
   const progressMessages = call.progressMessages ?? [];
   // 内容累积时的自动跟随：用户未上滑过内部容器时无条件跟随（大段进度增量
   // 也能跟上）；上滑过则仅滚回底部附近时恢复。程序滚动（auto-scroll 赋值）
@@ -746,13 +936,15 @@ export const PendingToolBubble = memo(function PendingToolBubble({ call }: { cal
     <div data-tool-row className="py-1.5">
       <button
         onClick={() => progressMessages.length > 0 && setOpen(!open)}
-        className={`flex items-start text-base transition-colors cursor-pointer text-left ${progressMessages.length > 0 ? 'text-content-secondary hover:text-content-primary' : ''}`}
+        className={`flex items-start text-base transition-colors cursor-pointer text-left ${progressMessages.length > 0 ? "text-content-secondary hover:text-content-primary" : ""}`}
       >
         {/* 圆点右移 3px 使其对称轴（7px）与大脑图标重合；文本缩进不变；mt-2 垂直居中 */}
         <span className="inline-block w-2 h-2 rounded-full bg-primary animate-pulse-scale shrink-0 mt-2 ml-[3px] mr-[9px]" />
         <span className="flex-1 min-w-0">
           <span className="text-content-primary">{displayName}</span>
-          {summary && <span className="text-sm text-content-disabled">（{summary}）</span>}
+          {summary && (
+            <span className="text-sm text-content-disabled">（{summary}）</span>
+          )}
         </span>
       </button>
       {open && progressMessages.length > 0 && (
@@ -775,64 +967,77 @@ export const PendingToolBubble = memo(function PendingToolBubble({ call }: { cal
  * input 完全未到达时返回 "Agent"，到达后无 subagent_type 返回 "GeneralPurpose"
  */
 function getAgentDisplayName(toolInput?: Record<string, unknown>): string {
-	// input 完全未到达时显示 "Agent"；到达后无 subagent_type 则默认 "GeneralPurpose"
-	if (!toolInput || Object.keys(toolInput).length === 0) {
-		return 'Agent';
-	}
-	const agentType = toolInput.subagent_type ?? 'general-purpose';
-	// 转 PascalCase：general-purpose → GeneralPurpose, explore → Explore
-	return String(agentType)
-		.replace(/_/g, '-')
-		.split('-')
-		.map(w => w.charAt(0).toUpperCase() + w.slice(1))
-		.join('');
+  // input 完全未到达时显示 "Agent"；到达后无 subagent_type 则默认 "GeneralPurpose"
+  if (!toolInput || Object.keys(toolInput).length === 0) {
+    return "Agent";
+  }
+  const agentType = toolInput.subagent_type ?? "general-purpose";
+  // 转 PascalCase：general-purpose → GeneralPurpose, explore → Explore
+  return String(agentType)
+    .replace(/_/g, "-")
+    .split("-")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join("");
 }
-
-
 
 // ---- 摘要生成（与 terminal 端 summarizeInput 保持一致）----
 
 const MAX_COMMAND_LINES = 2;
 const MAX_COMMAND_CHARS = 160;
 
-function summarizeInput(toolName: string, toolInput?: Record<string, unknown>, fallback?: string): string {
-  if (!toolInput) return truncateCommand(fallback ?? '');
+function summarizeInput(
+  toolName: string,
+  toolInput?: Record<string, unknown>,
+  fallback?: string,
+): string {
+  if (!toolInput) return truncateCommand(fallback ?? "");
   const lower = toolName.toLowerCase();
 
-  if ((lower === 'bash' || lower === 'powershell') && toolInput.command) {
+  if ((lower === "bash" || lower === "powershell") && toolInput.command) {
     return truncateCommand(String(toolInput.command));
   }
-  if ((lower === 'read' || lower === 'fileread' || lower === 'read_file') && (toolInput.path || toolInput.file_path)) {
+  if (
+    (lower === "read" || lower === "fileread" || lower === "read_file") &&
+    (toolInput.path || toolInput.file_path)
+  ) {
     return String(toolInput.path ?? toolInput.file_path);
   }
-  if ((lower === 'write' || lower === 'filewrite' || lower === 'write_file') && (toolInput.path || toolInput.file_path)) {
+  if (
+    (lower === "write" || lower === "filewrite" || lower === "write_file") &&
+    (toolInput.path || toolInput.file_path)
+  ) {
     return String(toolInput.path ?? toolInput.file_path);
   }
-  if ((lower === 'edit' || lower === 'fileedit' || lower === 'edit_file') && (toolInput.path || toolInput.file_path)) {
+  if (
+    (lower === "edit" || lower === "fileedit" || lower === "edit_file") &&
+    (toolInput.path || toolInput.file_path)
+  ) {
     return String(toolInput.path ?? toolInput.file_path);
   }
-  if (lower === 'grep' && toolInput.pattern) {
+  if (lower === "grep" && toolInput.pattern) {
     return `/${String(toolInput.pattern)}/`;
   }
-  if (lower === 'glob' && toolInput.pattern) {
+  if (lower === "glob" && toolInput.pattern) {
     return String(toolInput.pattern);
   }
-  if (lower === 'agent' && toolInput.description) {
+  if (lower === "agent" && toolInput.description) {
     return truncateCommand(String(toolInput.description));
   }
-  if (lower === 'todowrite' || lower === 'todo_write') {
+  if (lower === "todowrite" || lower === "todo_write") {
     const todos = toolInput.todos;
     if (Array.isArray(todos)) {
       const total = todos.length;
-      const completed = todos.filter((t: { status: string }) => t.status === 'completed').length;
+      const completed = todos.filter(
+        (t: { status: string }) => t.status === "completed",
+      ).length;
       return `${completed}/${total} tasks`;
     }
   }
-  if (lower === 'ask_user_question') {
+  if (lower === "ask_user_question") {
     const questions = toolInput.questions;
     if (Array.isArray(questions) && questions.length > 0) {
       const q = questions[0] as Record<string, unknown>;
-      return truncateCommand(String(q.question ?? ''));
+      return truncateCommand(String(q.question ?? ""));
     }
   }
 
@@ -841,39 +1046,106 @@ function summarizeInput(toolName: string, toolInput?: Record<string, unknown>, f
     const first = entries[0];
     if (first) return truncateCommand(`${first[0]}=${String(first[1])}`);
   }
-  return truncateCommand(fallback ?? '');
+  return truncateCommand(fallback ?? "");
 }
 
 function truncateCommand(str: string): string {
-  const lines = str.split('\n');
-  const cleanedLines = lines.map(l => l.trim()).filter(l => l.length > 0);
-  const truncatedLines = cleanedLines.length > MAX_COMMAND_LINES
-    ? [...cleanedLines.slice(0, MAX_COMMAND_LINES)]
-    : cleanedLines;
-  let result = truncatedLines.join(' ');
-  const needsCharTruncation = result.length > MAX_COMMAND_CHARS || cleanedLines.length > MAX_COMMAND_LINES;
+  const lines = str.split("\n");
+  const cleanedLines = lines.map((l) => l.trim()).filter((l) => l.length > 0);
+  const truncatedLines =
+    cleanedLines.length > MAX_COMMAND_LINES
+      ? [...cleanedLines.slice(0, MAX_COMMAND_LINES)]
+      : cleanedLines;
+  let result = truncatedLines.join(" ");
+  const needsCharTruncation =
+    result.length > MAX_COMMAND_CHARS ||
+    cleanedLines.length > MAX_COMMAND_LINES;
   if (needsCharTruncation && result.length > MAX_COMMAND_CHARS) {
     result = result.slice(0, MAX_COMMAND_CHARS);
-    const lastSemicolon = result.lastIndexOf(';');
+    const lastSemicolon = result.lastIndexOf(";");
     if (lastSemicolon > MAX_COMMAND_CHARS * 0.3) {
       result = result.slice(0, lastSemicolon + 1);
     } else {
-      const lastSpace = result.lastIndexOf(' ');
+      const lastSpace = result.lastIndexOf(" ");
       if (lastSpace > MAX_COMMAND_CHARS * 0.5) {
         result = result.slice(0, lastSpace);
       }
     }
   }
   if (needsCharTruncation) {
-    result += '…';
+    result += "…";
   }
   return result;
+}
+
+/**
+ * 流式 Markdown 稳定化：未闭合的代码围栏在揭示中途会被 parser 吞进 code 块，
+ * 闭合瞬间又吐回普通段落，造成整页高度突变（视觉跳动）。
+ * 展示前若围栏计数为奇数，按开栏字符与长度补一个匹配的闭合栏（CommonMark 要求
+ * 闭合栏字符相同且长度 ≥ 开栏），使结构在揭示过程中保持稳定。
+ */
+function stabilizeStreamingMarkdown(md: string): string {
+  if (!md) return md;
+  let lastFence: { char: string; len: number } | null = null;
+  let fenceCount = 0;
+  for (const line of md.split("\n")) {
+    const m = /^(\s{0,3})(`{3,}|~{3,})/.exec(line);
+    if (!m) continue;
+    const run = m[2]!;
+    const char = run[0]!;
+    // 开栏/闭栏：同一字符 run 计一次；反引号栏内含 ` 则不是闭合，此处仅做奇偶稳定化
+    fenceCount += 1;
+    lastFence = { char, len: run.length };
+  }
+  if (fenceCount % 2 === 1 && lastFence) {
+    const closer = lastFence.char.repeat(lastFence.len);
+    return `${md}\n${closer}\n`;
+  }
+  return md;
+}
+
+/** 流式正文 Markdown：仅在已揭示前缀变化时重解析（text 完整值涨了但揭示未追上时不触发） */
+const StreamMarkdownBody = memo(function StreamMarkdownBody({
+  text,
+}: {
+  text: string;
+}) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkSuperscript]}
+      rehypePlugins={rehypePlugins}
+      urlTransform={urlTransform}
+      components={mdComponents}
+    >
+      {stabilizeStreamingMarkdown(text)}
+    </ReactMarkdown>
+  );
+});
+
+/** prefers-reduced-motion：关闭 rAF 逐帧揭示，直接展示全文（CSS 动画另有全局规则） */
+function usePrefersReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return false;
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  });
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const onChange = () => setReduced(mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  return reduced;
 }
 
 /**
  * 流式缓冲区组件
  *
  * 显示正在流式接收的助手回复，包括思考过程和正文。
+ *
+ * 渲染策略：正文/思考分别经 useSmoothReveal 按揭示节奏展示，
+ * 避免整段 Markdown 在分块到达时反复全量重排（对齐 dsh-smooth-stream
+ * 揭示引擎，且不引入半透明淡入 / 合成层 transform 以规避残影模糊）。
  *
  * 自动折叠模型（对齐 opencode 的 part 级独立折叠）：
  * - 思考过程流式时默认展开，用户可随时折叠/展开
@@ -885,15 +1157,31 @@ function truncateCommand(str: string): string {
  * @param props.reasoning - 思考过程文本（可选）
  * @param props.lang - UI 语言
  */
-export function StreamingBuffer({ text, reasoning, reasoningStreaming, lang }: { text: string; reasoning?: string; reasoningStreaming?: boolean; lang: UiLanguage }) {
-  const hasReasoning = !!reasoning && !!reasoning.trim();
-  const hasText = !!text && !!text.trim();
+export function StreamingBuffer({
+  text,
+  reasoning,
+  reasoningStreaming,
+  lang,
+}: {
+  text: string;
+  reasoning?: string;
+  reasoningStreaming?: boolean;
+  lang: UiLanguage;
+}) {
+  const reducedMotion = usePrefersReducedMotion();
+  // 分别平滑揭示：思考与正文各自有独立节奏，互不阻塞
+  const smoothText = useSmoothReveal(text, { enabled: !reducedMotion });
+  const smoothReasoning = useSmoothReveal(reasoning ?? "", {
+    enabled: !reducedMotion,
+  });
+  const hasReasoning = !!smoothReasoning && !!smoothReasoning.trim();
+  const hasText = !!smoothText && !!smoothText.trim();
 
   return (
     <div className="py-1.5">
       {hasReasoning && (
         <ThinkingBlock
-          text={reasoning}
+          text={smoothReasoning}
           lang={lang}
           streaming={reasoningStreaming ?? false}
           defaultOpen={!hasText}
@@ -902,9 +1190,7 @@ export function StreamingBuffer({ text, reasoning, reasoningStreaming, lang }: {
       )}
       {hasText && (
         <div className="text-content-primary text-sm prose max-w-full select-text [overflow-wrap:anywhere]">
-          <ReactMarkdown remarkPlugins={[remarkGfm, remarkSuperscript]} rehypePlugins={rehypePlugins} urlTransform={urlTransform} components={mdComponents}>
-            {text}
-          </ReactMarkdown>
+          <StreamMarkdownBody text={smoothText} />
         </div>
       )}
     </div>
