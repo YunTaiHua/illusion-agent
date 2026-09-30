@@ -1121,13 +1121,14 @@ class WebApiDispatcher:
         ))
 
     async def handle_web_read_file(self, request: FrontendRequest) -> None:
-        """读取工作区内文本文件内容并推送 web_file_content 事件（预览）。
+        """读取文本文件内容并推送 web_file_content 事件（预览）。
 
-        安全与限制：路径解析限定在工作区内（拒绝 ../ 穿越）；二进制
-        （前 8KB 含 NUL）不返回内容；超过 512KB / 4000 行截断并标记。
+        路径两种形态：工作区内相对路径（拒绝 ../ 穿越，限定在工作区内），
+        或任意绝对路径（可位于工作区之外，供预览列按路径打开外部文件）。
+        二进制（前 8KB 含 NUL）不返回内容；超过 512KB / 4000 行截断并标记。
 
         Args:
-            request: 前端请求（path 必填：工作区内相对路径）
+            request: 前端请求（path 必填：工作区内相对路径或绝对路径）
         """
         host = self._host
         if host._bundle is None:
@@ -1137,11 +1138,23 @@ class WebApiDispatcher:
         # path 须与发起时字符串一致，否则载荷被丢弃导致永久加载中
         requested = (request.path or "").strip()
         rel = requested.replace("\\", "/")
-        target = _resolve_within_root(bundle.cwd, rel)
-        if target is None or not target.is_file():
+        # 绝对路径不限定工作区（任意位置可读）；相对路径仍须落在工作区内。
+        # 错误下发结构化码（前端 i18n 本地化 + 删除态美化渲染）：
+        # file_not_found = 文件已被删除/不存在；path_invalid = 相对路径穿越/越界
+        if Path(rel).is_absolute():
+            target = Path(rel)
+        else:
+            target = _resolve_within_root(bundle.cwd, rel)
+        if target is None:
             await self._emit(BackendEvent(
                 type="web_file_content", cwd=bundle.cwd,
-                web_file_content={"path": requested, "error": "文件不存在或超出工作区范围"},
+                web_file_content={"path": requested, "error": "path_invalid"},
+            ))
+            return
+        if not target.is_file():
+            await self._emit(BackendEvent(
+                type="web_file_content", cwd=bundle.cwd,
+                web_file_content={"path": requested, "error": "file_not_found"},
             ))
             return
         payload = await asyncio.to_thread(_read_file_payload, target, rel)
@@ -1272,11 +1285,14 @@ class WebApiDispatcher:
                 web_file_content={"path": request.path or "", "error": "session_not_found"}))
             return
         tracked = {
-            f["path"]
+            f["path"].replace("\\", "/")
             for f in await asyncio.to_thread(
                 _collect_session_files, session.engine.messages, session.bundle.cwd)
         }
-        raw = (request.path or "").strip()
+        # 分隔符归一化（\ → /）：前端预览 tab 统一下发 / 分隔路径，
+        # 与 _collect_session_files 在 Windows 上的原生 \ 分隔绝对路径按
+        # 同一语义精确匹配（仅分隔符差异，不放宽其他字符）
+        raw = (request.path or "").strip().replace("\\", "/")
         if not raw or raw not in tracked:
             # 错误码交由前端 i18n 本地化展示
             await self._emit(BackendEvent(

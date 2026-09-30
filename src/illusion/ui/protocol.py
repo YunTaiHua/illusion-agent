@@ -66,7 +66,8 @@ class FrontendRequest(BaseModel):
             web_request_resources/web_request_file_tree/web_request_git_status/
             web_read_file 指定目标工作区）
         path: 目录路径（web_add_workspace/web_remove_workspace 用；
-            web_request_file_tree/web_read_file 为工作区内的相对路径）
+            web_request_file_tree 为工作区内的相对路径；
+            web_read_file 为工作区内相对路径或任意绝对路径）
     """
 
     type: Literal[

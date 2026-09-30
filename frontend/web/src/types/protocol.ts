@@ -392,7 +392,7 @@ export interface GitStatusSnapshot {
  * web_file_content 推送的内容快照（error 非空表示读取失败）。
  */
 export interface FileContentPayload {
-  /** 工作区内相对路径 */
+  /** 工作区内相对路径，或任意绝对路径（预览列按路径打开外部文件） */
   path: string;
   /** 视图类型：'content' 文件当前内容（默认）| 'diff' 相对 HEAD 的变更 */
   kind?: 'content' | 'diff';
@@ -406,6 +406,28 @@ export interface FileContentPayload {
   truncated?: boolean;
   /** 读取失败信息 */
   error?: string;
+}
+
+/**
+ * 预览标签页接口
+ *
+ * 预览列顶部的多文件标签页：每个 tab 绑定
+ * 「视图类型 + 路径」，缓存自己的载荷；同一时刻只显示激活 tab 的内容。
+ * tab 随会话隔离（切换会话/目录时全部关闭）。
+ */
+export interface PreviewTab {
+  /** 唯一键：`${kind}|${path}`（与请求/响应关联键一致） */
+  key: string;
+  /** 文件路径（工作区内相对路径或绝对路径，请求原串） */
+  path: string;
+  /** 视图类型：'content' 内容 | 'diff' 相对 HEAD 的变更 */
+  kind: 'content' | 'diff';
+  /** 预览载荷（读取完成前为 null） */
+  payload: FileContentPayload | null;
+  /** 读取中（首个载荷到达前为 true） */
+  loading: boolean;
+  /** 合成 tab（智能体摘要等直接注入文本、无后端文件读取） */
+  synthetic?: boolean;
 }
 
 // ---- 前端请求 ----
