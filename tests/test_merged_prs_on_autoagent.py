@@ -17,10 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-API_KEY = os.environ.get(
-    "ANTHROPIC_API_KEY",
-    "sk-Ue1kdhq9prvNwuwySlzRtWVD7ek0iJJaHyPdKDa3ecKLwYuG",
-)
+API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 ANTHROPIC_BASE = "https://api.moonshot.cn/anthropic"
 OPENAI_BASE = "https://api.moonshot.cn/v1"
 MODEL = "kimi-k2.5"

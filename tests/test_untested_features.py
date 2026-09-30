@@ -3,8 +3,8 @@
 Run with: python -m pytest tests/test_untested_features.py -v --tb=short -x
 Or standalone: python tests/test_untested_features.py
 
-Uses real Kimi K2.5 API for agent loop tests. Requires ANTHROPIC_API_KEY env
-or the hardcoded key below.
+Uses real Kimi K2.5 API for agent loop tests. Requires the ANTHROPIC_API_KEY
+environment variable; tests are skipped when it is unset.
 """
 
 from __future__ import annotations
@@ -23,10 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from illusion.config.settings import Settings
 
-API_KEY = os.environ.get(
-    "ANTHROPIC_API_KEY",
-    "sk-Ue1kdhq9prvNwuwySlzRtWVD7ek0iJJaHyPdKDa3ecKLwYuG",
-)
+API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.moonshot.cn/anthropic")
 MODEL = os.environ.get("ANTHROPIC_MODEL", "kimi-k2.5")
 WORKSPACE = Path("/home/tangjiabin/AutoAgent")
