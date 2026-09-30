@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useRef } from 'react';
 import { t, type UiLanguage } from '../i18n';
+import AutoScrollText from './AutoScrollText';
 import { CollapsibleSection } from './RightPanel';
 import { ListChecksIcon, ModifiedFileIcon } from './icons';
 import type { SessionFileItem } from '../types/protocol';
@@ -89,15 +90,16 @@ function SessionFileRow({ file, onOpenFile }: { file: SessionFileItem; onOpenFil
   return (
     <button
       onClick={handleClick}
-      className="w-[calc(100%_+_2.5rem)] flex items-center gap-1.5 -mx-5 pl-7 pr-5 py-1 rounded-md text-xs transition-colors glass-option-hover cursor-pointer"
+      className="as-host w-[calc(100%_+_1rem)] flex items-center gap-1.5 -mx-2 pl-4 pr-2 py-1 rounded-lg text-xs transition-colors glass-option-hover cursor-pointer"
       title={file.display}
     >
       {/* 编辑/修改文件图标（icons.tsx 统一管理）：精简编辑铅笔造型 + 主色，与目录树的普通文件图标明显区分 */}
       <ModifiedFileIcon className="w-3.5 h-3.5 shrink-0 text-primary" />
-      <span className="flex-1 min-w-0 truncate text-left">
+      {/* 截断时静态渐隐、悬浮单向滚动展示完整路径 */}
+      <AutoScrollText trigger="parent" className="flex-1 min-w-0 text-left">
         {dir && <span className="text-content-disabled">{dir}</span>}
         <span className="text-content-primary">{name}</span>
-      </span>
+      </AutoScrollText>
       {/* 修改工具徽标：write_file → write、edit_file → edit；固定最小宽度保证
           各行徽标宽度一致、缩进对齐（text-center 水平居中） */}
       <span className="shrink-0 min-w-[38px] text-center text-[10px] text-primary/80 bg-[var(--badge-bg-subtle)] px-1.5 py-0.5 rounded-full font-medium">

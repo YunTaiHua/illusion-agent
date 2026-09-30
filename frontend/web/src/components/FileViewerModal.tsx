@@ -12,9 +12,10 @@
  * @module FileViewerModal
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import hljs from 'highlight.js/lib/common';
 import { t, type UiLanguage } from '../i18n';
+import { FileIcon as FileGlyphIcon } from './icons';
 import type { FileContentPayload } from '../types/protocol';
 
 /** 本地化会话文件预览错误码：后端下发错误码（如 session_not_found），
@@ -56,7 +57,7 @@ export function splitFilePath(path: string): [string, string] {
  * @param props - 组件属性
  * @returns 返回预览弹窗的 JSX 元素（payload 为 null 时返回 null）
  */
-export default function FileViewerModal({ lang, payload, loading, onClose }: {
+export default function FileViewerModal({ lang, payload, loading, onClose, rootDirLabel }: {
   /** 当前 UI 语言 */
   lang: UiLanguage;
   /** 预览载荷（null = 关闭） */
@@ -65,6 +66,8 @@ export default function FileViewerModal({ lang, payload, loading, onClose }: {
   loading: boolean;
   /** 关闭预览 */
   onClose: () => void;
+  /** 工作区根目录标识：路径无目录前缀（根目录文件）时头部补全路径展示 */
+  rootDirLabel?: string | null;
 }) {
   // Esc 关闭
   useEffect(() => {
@@ -91,14 +94,14 @@ export default function FileViewerModal({ lang, payload, loading, onClose }: {
         onClick={(e) => e.stopPropagation()}
         className="relative bg-surface-card border border-border-light rounded-2xl shadow-card w-full max-w-5xl h-[82vh] flex flex-col overflow-hidden modal-origin-center animate-scale-in"
       >
-        {/* 头部：文件名 + 元信息 + 关闭 */}
+        {/* 头部：路径 + 关闭 */}
         <div className="px-5 py-3 border-b border-border-light flex items-center gap-3 shrink-0">
           <div className="flex-1 min-w-0">
             <div className="text-sm font-semibold text-content-primary truncate">
-              {dir && <span className="text-content-disabled font-normal">{dir}</span>}
+              {(dir || rootDirLabel) && <span className="text-content-disabled font-normal">{dir || rootDirLabel}</span>}
               {filename}
             </div>
-            <PreviewMetaLine lang={lang} payload={payload} loading={loading} />
+            <PreviewMetaLine lang={lang} payload={payload} />
           </div>
           <CopyButton lang={lang} payload={payload} />
           <button
@@ -144,6 +147,17 @@ export function FilePreviewBody({ lang, payload, loading }: {
     return <div className="h-full flex items-center justify-center text-sm text-content-secondary">{t(lang, 'loading')}</div>;
   }
   if (payload.error) {
+    // 文件已删除/不存在：美化空态（图标 + 标题 + 路径 + 提示），替代裸错误文案；
+    // file_not_found（按路径打开但路径无对应文件）标题区分于"已被删除"
+    if (payload.error === 'file_deleted' || payload.error === 'file_not_found') {
+      return (
+        <DeletedFileView
+          path={payload.path}
+          lang={lang}
+          title={t(lang, payload.error === 'file_deleted' ? 'file_deleted_title' : 'session_file_file_not_found')}
+        />
+      );
+    }
     return <div className="h-full flex items-center justify-center text-sm text-danger px-6 text-center">{locPreviewError(lang, payload.error)}</div>;
   }
   if (payload.binary) {
@@ -158,6 +172,75 @@ export function FilePreviewBody({ lang, payload, loading }: {
 }
 
 /**
+ * 文件已删除/不存在的预览空态
+ *
+ * 居中卡片式布局：文件剪影图标 + 标题 + 完整路径（目录弱化）+ 提示文案，
+ * 替代裸错误文本。
+ */
+function DeletedFileView({ path, lang, title }: {
+  path: string;
+  lang: UiLanguage;
+  title: string;
+}) {
+  const [dir, name] = splitFilePath(path);
+  return (
+    <div className="h-full flex flex-col items-center justify-center gap-1.5 text-center px-8 select-none">
+      <FileGlyphIcon className="w-9 h-9 text-content-disabled mb-1" />
+      <div className="text-sm font-semibold text-content-primary">{title}</div>
+      <div className="text-xs text-content-secondary max-w-md truncate" title={path}>
+        {dir && <span className="text-content-disabled">{dir}</span>}
+        {name}
+      </div>
+      <div className="text-xs text-content-disabled mt-1">{t(lang, 'file_deleted_hint')}</div>
+    </div>
+  );
+}
+
+/**
+ * 纵向滚动条存在性检测（代码/diff 内容区共用）
+ *
+ * 溢出裁剪发生在 padding box，scrollbar-gutter 拦不住横向溢出的内容——
+ * 无纵向滚动条时文字会一直画进预留槽。渐隐层必须知道自己该让位
+ * （有滚动条：right 8px）还是贴边（无滚动条：right 0 盖住预留槽）。
+ */
+function useHasVScrollbar(ref: React.RefObject<HTMLDivElement | null>): boolean {
+  const [has, setHas] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => setHas(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    // 内容增减（首帧高亮/字体加载/截断标记）同样改变 scrollHeight
+    if (el.firstElementChild) ro.observe(el.firstElementChild);
+    return () => ro.disconnect();
+  }, [ref]);
+  return has;
+}
+
+/**
+ * 右缘渐隐层（代码/diff 内容区共用）
+ *
+ * 绝对定位的渐变层盖在内容右缘，提示"横向还有更多内容"；常驻渲染——
+ * 内容不超宽时该区域只有代码列的右内边距空白，渐变不可见。
+ * right 由调用方按纵向滚动条存在性传入：有滚动条让位 8px（滚动条宽度，
+ * .preview-scroll ::-webkit-scrollbar width）；无滚动条贴 0，把预留槽
+ * 一起盖进渐变，避免"渐隐结束后文字又在槽里回显"。
+ * bottom 10px = 横向滚动条高度（横向溢出必然伴随横向滚动条，渐隐可见时
+ * 该值恒正确）。
+ */
+function RightFadeOverlay({ right }: { right: number }) {
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute top-0 bottom-[10px] w-7"
+      style={{ right, background: 'linear-gradient(to right, transparent, var(--bg-card))' }}
+    />
+  );
+}
+
+/**
  * 代码视图：单一滚动容器（行号列 sticky left + 代码），
  * 纵向滚动行号同步翻动，横向滚动行号固定可见。
  * 字号/行高与全局 pre code.hljs 规则（13px / 1.7）严格一致，保证逐行对齐。
@@ -169,6 +252,8 @@ function CodeView({ content, path, truncated, truncatedLabel }: {
   truncatedLabel: string;
 }) {
   const lines = useMemo(() => (content ? content.split('\n') : []), [content]);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const hasVScrollbar = useHasVScrollbar(scrollerRef);
 
   const highlightedHtml = useMemo(() => {
     if (!content) return null;
@@ -188,28 +273,43 @@ function CodeView({ content, path, truncated, truncatedLabel }: {
     return <div className="h-full" />;
   }
 
+  // 行号槽宽度按最大行号位数自适应（千行文件 4 位、万行 5 位……）：
+  // 全列统一同一宽度（恒定不突变），数字右缘留 12px 呼吸
+  const gutterW = 24 + String(lines.length).length * 9;
+
   return (
-    <div className="h-full preview-scroll overflow-auto">
-      <div className="flex min-w-max min-h-full">
-        {/* 行号列：sticky 固定左侧；左缘与卡片边缘对齐 */}
-        <div
-          className="sticky left-0 z-10 shrink-0 select-none text-right py-3 pl-3 pr-3 text-content-disabled bg-surface-card border-r border-border-light font-mono text-[13px] leading-[1.7]"
-          aria-hidden="true"
-        >
-          {lines.map((_, i) => (
-            <div key={i} className="tabular-nums">{i + 1}</div>
-          ))}
-        </div>
-        {/* 代码区：右缘留白避免内容贴住纵向滚动条 */}
-        <div className="py-3 pl-4 pr-8 font-mono text-[13px] leading-[1.7]">
-          <pre className="whitespace-pre text-content-primary">
-            <code className="hljs" dangerouslySetInnerHTML={{ __html: highlightedHtml ?? escapeHtml(content) }} />
-          </pre>
-          {truncated && (
-            <div className="text-xs text-content-disabled mt-2 font-sans">{truncatedLabel}</div>
-          )}
+    <div className="relative h-full">
+      <div
+        ref={scrollerRef}
+        className="h-full preview-scroll overflow-auto"
+        /* 恒定预留纵向滚动条位置：内容不满一屏时右侧同样留白，
+            打开不同文件时内容右缘不左右跳动 */
+        style={{ scrollbarGutter: 'stable' }}
+      >
+        <div className="flex min-w-max min-h-full">
+          {/* 行号列：sticky 固定左侧；中性色阶（内容文字色 7% 混入卡片底，不偏绿）；
+              宽度按最大行号位数自适应且全列统一，数字右缘留 12px 呼吸 */}
+          <div
+            className="sticky left-0 z-10 shrink-0 select-none text-right py-3 pr-3 text-content-disabled font-mono text-[13px] leading-[1.7]"
+            style={{ backgroundColor: 'color-mix(in srgb, var(--text-primary) 7%, var(--bg-card))', width: gutterW }}
+            aria-hidden="true"
+          >
+            {lines.map((_, i) => (
+              <div key={i} className="tabular-nums">{i + 1}</div>
+            ))}
+          </div>
+          {/* 代码区：左缘与行号列底色对齐（pl 改 3，与 diff 内容格一致） */}
+          <div className="py-3 pl-3 pr-8 font-mono text-[13px] leading-[1.7]">
+            <pre className="whitespace-pre text-content-primary">
+              <code className="hljs" dangerouslySetInnerHTML={{ __html: highlightedHtml ?? escapeHtml(content) }} />
+            </pre>
+            {truncated && (
+              <div className="text-xs text-content-disabled mt-2 font-sans">{truncatedLabel}</div>
+            )}
+          </div>
         </div>
       </div>
+      <RightFadeOverlay right={hasVScrollbar ? 8 : 0} />
     </div>
   );
 }
@@ -280,6 +380,49 @@ function parseUnifiedDiff(diff: string): DiffHunk[] {
  * 组内删除行显示旧文件行号、新增/上下文行显示新文件行号，行首 +/- 与
  * 底色区分增删。
  */
+/** diff 行类型 → 渲染样式。
+ *  分割线用色阶区分：行号槽底色加深一档（18% 且混入不透明卡片底色），
+ *  内容区 14% 透明底——两档色差自然勾出行号槽右缘，无需边框线。
+ *  行号槽为 sticky 悬浮层，底色必须不透明（与 --bg-card 混合而非
+ *  transparent），否则横向滚动时内容会从行号格下穿透。 */
+function diffLineStyles(type: DiffLine['type']): {
+  rowStyle?: React.CSSProperties;
+  gutterStyle?: React.CSSProperties;
+  gutterTextCls: string;
+  textCls: string;
+} {
+  if (type === 'add') {
+    return {
+      gutterStyle: {
+        backgroundColor: 'color-mix(in srgb, var(--success) 38%, var(--bg-card))',
+        boxShadow: 'inset 3px 0 0 var(--success)',
+        color: 'var(--success)',
+      },
+      gutterTextCls: '',
+      rowStyle: { backgroundColor: 'color-mix(in srgb, var(--success) 14%, transparent)' },
+      textCls: 'text-diff-add',
+    };
+  }
+  if (type === 'del') {
+    return {
+      gutterStyle: {
+        backgroundColor: 'color-mix(in srgb, var(--error) 38%, var(--bg-card))',
+        boxShadow: 'inset 3px 0 0 var(--error)',
+        color: 'var(--error)',
+      },
+      gutterTextCls: '',
+      rowStyle: { backgroundColor: 'color-mix(in srgb, var(--error) 14%, transparent)' },
+      textCls: 'text-diff-del',
+    };
+  }
+  return {
+    // diff 上下文行：中性色阶（内容文字色 7% 混入卡片底，不偏绿），不透明防滚动穿透
+    gutterStyle: { backgroundColor: 'color-mix(in srgb, var(--text-primary) 7%, var(--bg-card))' },
+    gutterTextCls: 'text-content-disabled',
+    textCls: 'text-content-primary',
+  };
+}
+
 function DiffView({ content, emptyHint, truncated, truncatedLabel }: {
   content: string;
   emptyHint: string;
@@ -287,77 +430,66 @@ function DiffView({ content, emptyHint, truncated, truncatedLabel }: {
   truncatedLabel: string;
 }) {
   const hunks = useMemo(() => parseUnifiedDiff(content), [content]);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const hasVScrollbar = useHasVScrollbar(scrollerRef);
+  // 行号格宽度按 hunk 内最大行号位数自适应（新旧行号取大），全 diff 统一
+  const maxLineNo = hunks.reduce((m, h) => Math.max(
+    m, ...h.lines.map((r) => Math.max(r.oldNo ?? 0, r.newNo)),
+  ), 0);
+  const gutterW = 24 + String(maxLineNo).length * 9;
   if (hunks.length === 0) {
     return <div className="h-full flex items-center justify-center text-sm text-content-secondary">{emptyHint}</div>;
   }
   return (
-    <div className="h-full preview-scroll overflow-auto">
-      {hunks.map((h, hi) => (
-        <div key={hi} className={`min-w-max ${hi > 0 ? 'mt-3' : ''}`}>
-          {/* hunk 不带左边框，保证行号列左缘与卡片边缘对齐 */}
-          <div className="border-y border-r border-border-light">
-            <div className="flex font-mono text-[13px] leading-[1.7]">
-              {/* 行号列：sticky 固定；左缘与卡片边缘对齐 */}
-              <div className="sticky left-0 z-10 shrink-0 select-none text-right bg-surface-card border-r border-border-light" aria-hidden="true">
-                {h.lines.map((r, i) => (
-                  <div key={i} className="pl-3 pr-3 tabular-nums text-content-disabled">
-                    {r.type === 'del' ? r.oldNo : r.newNo}
-                  </div>
-                ))}
-              </div>
-              {/* 内容列：变更行整行着色（+/- 标记 + 底色） */}
-              <div className="pr-8">
-                {h.lines.map((r, i) => (
-                  <div key={i} className={`flex whitespace-pre ${r.type === 'add' ? 'bg-success/10' : r.type === 'del' ? 'bg-danger/10' : ''}`}>
-                    <span className={`w-4 shrink-0 select-none text-center ${r.type === 'add' ? 'text-success' : r.type === 'del' ? 'text-danger' : 'text-transparent'}`}>
-                      {r.type === 'add' ? '+' : r.type === 'del' ? '-' : ' '}
+    <div className="relative h-full">
+      <div
+        ref={scrollerRef}
+        className="h-full preview-scroll overflow-auto"
+        style={{ scrollbarGutter: 'stable' }}
+      >
+        {/* 逐行 row 结构（每行横跨全部内容宽度并自带底色，行号格为行内
+            sticky 单元）：底色长度天然等于最宽行，全局一致不长短不齐 */}
+        <div className="w-max min-w-full min-h-full font-mono text-[13px] leading-[1.7]">
+          {hunks.map((h, hi) => (
+            <div key={hi} className={`border-y border-r border-border-light ${hi > 0 ? 'mt-3' : ''}`}>
+              {h.lines.map((r, i) => {
+                const s = diffLineStyles(r.type);
+                return (
+                  <div key={i} className={`flex w-full whitespace-pre ${s.textCls}`} style={s.rowStyle}>
+                    {/* 行号格：宽度按最大行号位数自适应且全 diff 统一（位数增长不突变）；
+                        sticky 固定在行内；底色比内容区深一档形成分割线；
+                        唯一的增减指示位（状态条 + 行号着色） */}
+                    <span
+                      aria-hidden="true"
+                      className={`sticky left-0 z-10 shrink-0 select-none text-right tabular-nums pr-3 ${s.gutterTextCls}`}
+                      style={{ ...s.gutterStyle, width: gutterW }}
+                    >
+                      {r.type === 'del' ? r.oldNo : r.newNo}
                     </span>
-                    <span className={`pr-4 ${r.type === 'add' ? 'text-diff-add' : r.type === 'del' ? 'text-diff-del' : 'text-content-primary'}`}>
-                      {r.text || ' '}
-                    </span>
+                    {/* 内容格：flex-1 撑满行宽，底色由 row 统一提供；不渲染 +/- 协议符号 */}
+                    <span className="block flex-1 pl-3 pr-8">{r.text || ' '}</span>
                   </div>
-                ))}
-              </div>
+                );
+              })}
             </div>
-          </div>
+          ))}
+          {truncated && (
+            <div className="text-xs text-content-disabled mt-2 font-sans pl-3">{truncatedLabel}</div>
+          )}
         </div>
-      ))}
-      {truncated && (
-        <div className="text-xs text-content-disabled mt-2 font-sans">{truncatedLabel}</div>
-      )}
+      </div>
+      <RightFadeOverlay right={hasVScrollbar ? 8 : 0} />
     </div>
   );
 }
 
-/** 元信息行：内容视图（大小 · 行数 · 截断）/ diff 视图（相对 HEAD）等 */
-export function PreviewMetaLine({ lang, payload, loading }: {
+/** 元信息行：仅展示本地化的读取错误（大小/行数等元信息按需求不再展示） */
+export function PreviewMetaLine({ lang, payload }: {
   lang: UiLanguage;
   payload: FileContentPayload;
-  loading: boolean;
 }) {
-  const content = payload.content ?? '';
-  if (payload.binary && payload.kind !== 'diff') return <div className="text-xs text-content-secondary mt-0.5">{t(lang, 'binary_file')}</div>;
   if (payload.error) return <div className="text-xs text-danger mt-0.5 truncate">{locPreviewError(lang, payload.error)}</div>;
-  if (payload.kind === 'diff') {
-    const lines = content ? content.split('\n').length : 0;
-    return (
-      <div className="text-xs text-content-secondary tabular-nums mt-0.5">
-        {content ? `${t(lang, 'diff_vs_head')} · ${lines} ${t(lang, 'lines_label')}` : t(lang, 'loading')}
-      </div>
-    );
-  }
-  const lines = content ? content.split('\n').length : 0;
-  return (
-    <div className="text-xs text-content-secondary tabular-nums mt-0.5">
-      {loading && !content
-        ? t(lang, 'loading')
-        : [
-            formatSize(payload.size ?? 0),
-            lines > 0 ? `${lines} ${t(lang, 'lines_label')}` : '',
-            payload.truncated ? t(lang, 'truncated_label') : '',
-          ].filter(Boolean).join(' · ')}
-    </div>
-  );
+  return null;
 }
 
 /** 复制全文按钮（内容为空/出错时隐藏） */
@@ -395,11 +527,4 @@ function escapeHtml(text: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
-}
-
-/** 字节数人性化格式 */
-function formatSize(n: number): string {
-  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-  if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${n} B`;
 }

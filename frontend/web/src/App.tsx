@@ -74,6 +74,8 @@ const GOAL_INSTANT_SUBCOMMANDS = new Set(['clear', 'pause', 'edit']);
 const MIN_RIGHT_PANEL = 260;
 /** 文件预览列最小宽度 */
 const MIN_PREVIEW_PANEL = 280;
+/** 右栏整体（区块栏 + 预览列）宽度上限占屏宽比例（50%） */
+const MAX_RIGHT_STACK_RATIO = 0.5;
 
 /**
  * 应用主组件
@@ -194,16 +196,16 @@ export default function App() {
   const sidebarWidth = 280;
   const [rightPanelWidth, setRightPanelWidth] = useState(260);
   // 文件预览停靠列宽与弹窗形态：默认停靠右栏右侧，可"弹窗查看"放大。
-  // 初始宽度受右栏整体 ≤ 2/5 屏上限约束（窄窗口下收敛，避免拖拽级联在
+  // 初始宽度受右栏整体 ≤ 1/2 屏上限约束（窄窗口下收敛，避免拖拽级联在
   // 触底边界处产生跳变）
   const [previewPanelWidth, setPreviewPanelWidth] = useState(() =>
-    Math.max(280, Math.min(420, Math.floor(window.innerWidth * 0.4) - 261)),
+    Math.max(280, Math.min(420, Math.floor(window.innerWidth * MAX_RIGHT_STACK_RATIO) - 261)),
   );
   const [previewPopOut, setPreviewPopOut] = useState(false);
   const dragRef = useRef<{ side: 'right' | 'preview'; startX: number; startW: number } | null>(null);
-  // 预览自动扩宽的防重入标记：记录已处理过的预览键（kind|path），
-  // 同一预览对象反复刷新（加载中→内容）时只扩宽一次
-  const autoWidenKeyRef = useRef<string | null>(null);
+  // 预览自动扩宽的防重入标记：记录已处理过的 tab 键（kind|path），
+  // 打开新 tab（新键首次出现）时调整一次，载荷刷新（加载中→内容）不重复调整
+  const autoWidenKeysRef = useRef<Set<string>>(new Set());
   // 用户是否已手动调整过右栏：点开/折叠区块栏、拖动各栏宽度时置位。
   // 置位后文件预览不再自动折叠区块栏或调整预览列宽度，尊重用户的自定义设置
   const userAdjustedPanelsRef = useRef(false);
@@ -334,7 +336,7 @@ export default function App() {
    * 右栏两条分隔条共用"触底级联"语义（任一侧触达最小宽度后不再卡住，
    * 继续同向拖动 → 整个右栏整体联动缩放，聊天区同步让位/收窄）：
    * - right：聊天区|右栏（向右拖右栏区块变窄）；上限约束的是右栏整体
-   *   （右栏 + 预览列）宽度 ≤ 2/5 屏；区块触底后继续右拖 → 预览列同步
+   *   （右栏 + 预览列）宽度 ≤ 1/2 屏；区块触底后继续右拖 → 预览列同步
    *   收缩、整个右栏缩小
    * - preview：右栏|预览列（等总量再分配——向右拖右栏变宽、预览列等量
    *   变窄）；预览列触底后继续右拖 → 整个右栏缩小（区块收缩、聊天区变宽）；
@@ -354,9 +356,9 @@ export default function App() {
     // 区块/预览列最小宽度保护
     const MIN_RIGHT = MIN_RIGHT_PANEL;
     const MIN_PREVIEW = MIN_PREVIEW_PANEL;
-    // 右栏整体（右栏 + 可见预览列）宽度上限：2/5 屏
-    const maxTotal = Math.floor(window.innerWidth * 0.4);
-    const previewVisibleWidth = session.filePreview && !previewPopOut ? previewPanelWidth : 0;
+    // 右栏整体（右栏 + 可见预览列）宽度上限：1/2 屏
+    const maxTotal = Math.floor(window.innerWidth * MAX_RIGHT_STACK_RATIO);
+    const previewVisibleWidth = session.previewTabs.length > 0 && !previewPopOut ? previewPanelWidth : 0;
     const maxRightPanel = Math.max(MIN_RIGHT, maxTotal - previewVisibleWidth);
     dragRef.current = { side, startX: e.clientX, startW };
     const onMove = (ev: MouseEvent) => {
@@ -387,7 +389,7 @@ export default function App() {
           setRightPanelWidth(Math.max(MIN_RIGHT, maxRight - (raw - maxRight)));
           setPreviewPanelWidth(MIN_PREVIEW);
         } else if (raw < MIN_RIGHT) {
-          // 区块触底：整体右栏增大（区块保持最小、预览继续变宽；受 3/5 屏上限
+          // 区块触底：整体右栏增大（区块保持最小、预览继续变宽；受 1/2 屏上限
           // 与预览列最小宽度双重约束，保证触底边界处宽度连续）
           setRightPanelWidth(MIN_RIGHT);
           setPreviewPanelWidth(Math.max(MIN_PREVIEW, Math.min(total - raw, maxTotal - MIN_RIGHT)));
@@ -400,7 +402,7 @@ export default function App() {
     const onUp = () => { dragRef.current = null; document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
-  }, [rightPanelWidth, previewPanelWidth, rightPanelCollapsed, session.filePreview, previewPopOut]);
+  }, [rightPanelWidth, previewPanelWidth, rightPanelCollapsed, session.previewTabs, previewPopOut]);
 
   /**
    * 处理用户提交的命令（三通道有序判定）
@@ -681,33 +683,33 @@ export default function App() {
    *  仅当切换时已有文件预览（用户正在覆盖自动布局）才标记为已自定义，后续文件预览不再
    *  自动重置该栏与预览列宽度；仅点开区块栏浏览文件（尚无预览）不标记，保证首次点选
    *  文件后仍自动折叠区块栏并让预览列占满最大宽度。
-   *  展开时若已有文件预览，收紧预览列宽度，使「区块栏 + 预览列」总量不超出 2/5 屏上限
+   *  展开时若已有文件预览，收紧预览列宽度，使「区块栏 + 预览列」总量不超出 1/2 屏上限
    *  （避免在已有最大宽度预览列上继续叠加导致超限）。
    *  收起（隐藏）区块栏时，若两栏之和已到达最大宽度，则预览列自动占满最大宽度（按需接管
    *  释放的空间）；反之保持原预览宽度。关闭文件预览不受影响，保持正常逻辑。 */
   const toggleRightPanel = useCallback(() => {
     const willExpand = rightPanelCollapsed;
-    const previewActive = !!session.filePreview && !previewPopOut;
+    const previewActive = session.previewTabs.length > 0 && !previewPopOut;
     // 仅当切换时已有文件预览（用户在覆盖自动布局）才标记为已自定义，避免首次点选文件前的
     // 普通展开被误判为用户自定义设置、从而跳过首次预览的自动折叠与满宽
     if (previewActive) userAdjustedPanelsRef.current = true;
     if (willExpand) {
       session.requestResources();
-      // 展开区块栏时若已有文件预览，收紧预览列以便容纳区块栏，总量不超 2/5 屏上限
+      // 展开区块栏时若已有文件预览，收紧预览列以便容纳区块栏，总量不超 1/2 屏上限
       if (previewActive) {
-        const maxTotal = Math.floor(window.innerWidth * 0.4);
+        const maxTotal = Math.floor(window.innerWidth * MAX_RIGHT_STACK_RATIO);
         setPreviewPanelWidth(Math.max(MIN_PREVIEW_PANEL, Math.min(previewPanelWidth, maxTotal - MIN_RIGHT_PANEL)));
       }
     } else if (previewActive) {
       // 收起（隐藏）区块栏时：若两栏之和已达到最大宽度，预览列自动占满最大宽度；
       // 反之（未达最大宽度）保持原预览宽度
-      const maxTotal = Math.floor(window.innerWidth * 0.4);
+      const maxTotal = Math.floor(window.innerWidth * MAX_RIGHT_STACK_RATIO);
       if (rightPanelWidth + previewPanelWidth >= maxTotal) {
         setPreviewPanelWidth(maxTotal);
       }
     }
     setRightPanelCollapsed(willExpand ? false : true);
-  }, [rightPanelCollapsed, session.requestResources, session.filePreview, previewPopOut, previewPanelWidth, rightPanelWidth]);
+  }, [rightPanelCollapsed, session.requestResources, session.previewTabs, previewPopOut, previewPanelWidth, rightPanelWidth]);
 
   // 右栏数据源回调：useCallback 稳定引用，避免内联箭头导致
   // FileTreeSection / GitSection 的自动拉取 effect 每帧重跑（无效抖动）
@@ -736,43 +738,46 @@ export default function App() {
     session.forkSession(turnsToKeep);
   }, [session.forkSession]);
 
-  // 文件/diff 预览出现时自动调整布局：折叠区块栏，让文件预览栏占满最大宽度（2/5 屏）。
-  // 仅处理同一预览键（kind|path）的首次出现，预览载荷反复刷新（加载中→内容）不重复调整；
-  // 打开新文件/切视图时再次调整。若用户已手动点开区块栏或调整过各栏宽度（userAdjustedPanelsRef），
-  // 不再自动折叠区块栏或调整预览列宽度，尊重用户自定义设置
+  // 文件/diff 预览出现时自动调整布局：折叠区块栏，让文件预览栏占满最大宽度（1/2 屏）。
+  // 以 tab 键（kind|path）首次出现为触发（打开新文件/切视图再次调整），载荷刷新
+  // （加载中→内容）不重复调整。若用户已手动点开区块栏或调整过各栏宽度
+  // （userAdjustedPanelsRef），不再自动折叠区块栏或调整预览列宽度，尊重用户自定义设置
   useEffect(() => {
-    if (!session.filePreview || previewPopOut) return;
+    if (previewPopOut) return;
     // 用户已手动调整过右栏：不重置其折叠状态与预览列宽度
     if (userAdjustedPanelsRef.current) return;
-    const key = `${session.filePreview.kind ?? 'content'}|${session.filePreview.path}`;
-    if (autoWidenKeyRef.current === key) return;
-    autoWidenKeyRef.current = key;
-    // 首次打开该文件预览：折叠区块栏，让预览列占满最大宽度（2/5 屏）
+    const tabs = session.previewTabs;
+    if (tabs.length === 0) return;
+    const seen = autoWidenKeysRef.current;
+    const newKey = tabs.map((tb) => tb.key).find((k) => !seen.has(k));
+    if (!newKey) return;
+    seen.add(newKey);
+    // 首次打开该文件预览：折叠区块栏，让预览列占满最大宽度（1/2 屏）
     setRightPanelCollapsed(true);
-    const maxTotal = Math.floor(window.innerWidth * 0.4);
+    const maxTotal = Math.floor(window.innerWidth * MAX_RIGHT_STACK_RATIO);
     setPreviewPanelWidth(maxTotal);
-  }, [session.filePreview, previewPopOut]);
+  }, [session.previewTabs, previewPopOut]);
 
-  // 硬约束：区块栏与预览列同时可见时，两者总量不超 2/5 屏上限。
+  // 硬约束：区块栏与预览列同时可见时，两者总量不超 1/2 屏上限。
   // 用户拖宽区块栏或调整宽度后触发，仅收紧预览列以保证不越界，不改其余用户设置
   useEffect(() => {
-    if (!session.filePreview || previewPopOut || rightPanelCollapsed) return;
-    const maxTotal = Math.floor(window.innerWidth * 0.4);
+    if (session.previewTabs.length === 0 || previewPopOut || rightPanelCollapsed) return;
+    const maxTotal = Math.floor(window.innerWidth * MAX_RIGHT_STACK_RATIO);
     if (rightPanelWidth + previewPanelWidth > maxTotal) {
       setPreviewPanelWidth(Math.max(MIN_PREVIEW_PANEL, maxTotal - rightPanelWidth));
     }
-  }, [session.filePreview, previewPopOut, rightPanelCollapsed, rightPanelWidth, previewPanelWidth]);
+  }, [session.previewTabs, previewPopOut, rightPanelCollapsed, rightPanelWidth, previewPanelWidth]);
 
-  // 切换会话 / 切换目录时重置右栏 UI：折叠右栏、关闭文件预览，避免右栏残留
-  // 上一轮会话/目录的文件预览；清空预览扩宽的防重入标记并复位"用户手动调整"
-  // 标记（新工作区/新会话视为新上下文，恢复首次文件预览的自动折叠 + 满宽）。
+  // 切换会话 / 切换目录时重置右栏 UI：折叠右栏、关闭全部预览标签页（tab 随会话
+  // 隔离，避免残留上一会话/目录的文件预览）；清空预览扩宽的防重入标记并复位"用户手动调整"
+  // 标记（新工作区/新会话视为新上下文，恢复首次预览的自动折叠 + 满宽）。
   // 数据清理由 hook 内部的活跃会话切换 effect 承担（跨目录全量清空、同目录
   // 仅清会话隔离数据），并统一触发 refreshRightPanel 重拉。
   useEffect(() => {
     if (!session.activeSessionId) return; // 尚未建立会话时不处理
     setRightPanelCollapsed(true);
     setPreviewPopOut(false);
-    autoWidenKeyRef.current = null;
+    autoWidenKeysRef.current = new Set();
     userAdjustedPanelsRef.current = false;
     session.closeFilePreview();
   }, [session.activeSessionId, session.closeFilePreview]);
@@ -990,20 +995,21 @@ export default function App() {
   };
 
   /**
-   * 当前文件预览是否有 Git 变更（决定是否显示"Diff"切换按钮）
+   * 当前激活预览标签页是否有 Git 变更（决定是否显示"Diff"切换按钮）
    *
-   * - Git 快照未加载 / 文件未命名：返回 null（未知，默认显示以保留既有行为）
+   * - Git 快照未加载 / 无激活 tab：返回 null（未知，默认显示以保留既有行为）
    * - 非 Git 仓库：返回 false（无 diff 可看，隐藏 Diff 按钮）
    * - 文件出现在变更列表（含未跟踪）中：返回 true
    * - 其余（已跟踪但无变更）：返回 false，隐藏 Diff 按钮，避免展示空的 diff
    */
   const previewHasDiff = useMemo(() => {
     const git = session.gitStatus;
-    if (!git || !session.filePreview) return null;
+    const previewPath = session.activePreviewTab?.path;
+    if (!git || !previewPath) return null;
     if (!git.is_repo) return false;
     // 预览 path 可能为绝对路径原串（单轮变更条统一下发），gitStatus.files
     // 为工作区内 posix 相对路径：规范化分隔符并剥离工作区前缀后再比较
-    const p = (session.filePreview.path || '').replace(/\\/g, '/');
+    const p = previewPath.replace(/\\/g, '/');
     const cwd = (session.activeWorkspaceCwd || session.resourcesCwd || '')
       .replace(/\\/g, '/').replace(/\/+$/, '');
     const rel = cwd && p.toLowerCase().startsWith(`${cwd.toLowerCase()}/`)
@@ -1013,7 +1019,21 @@ export default function App() {
     // 路径（仓库根相对）多一层前缀仍不匹配 → 仅丢失 Diff 入口（降级内容
     // 视图可接受），不影响数据正确性
     return (git.files ?? []).some((f) => f.path === rel);
-  }, [session.gitStatus, session.filePreview, session.activeWorkspaceCwd, session.resourcesCwd]);
+  }, [session.gitStatus, session.activePreviewTab, session.activeWorkspaceCwd, session.resourcesCwd]);
+
+  /**
+   * 预览头部根目录标识（如 "illusion-agent/"）
+   *
+   * 根目录文件（相对路径无目录前缀）的头部只显示文件名，与带目录的
+   * 文件风格不统一；用工作区目录名补全路径展示。合成 tab（智能体摘要）
+   * 不补。取活跃会话工作区目录的末段目录名。
+   */
+  const previewRootLabel = useMemo(() => {
+    const cwd = session.activeWorkspaceCwd || session.resourcesCwd;
+    if (!cwd) return null;
+    const name = cwd.replace(/\\/g, '/').split('/').filter(Boolean).pop();
+    return name ? `${name}/` : null;
+  }, [session.activeWorkspaceCwd, session.resourcesCwd]);
 
   /** 输入框 + 工具栏合并为单卡片（欢迎态注入标题下方，非欢迎态置于底部） */
   const composer = (
@@ -1150,23 +1170,29 @@ export default function App() {
       </div>
       )}
 
-      {/* 文件预览停靠列：右栏右侧独立显示（右栏折叠时仍在）；
+      {/* 文件预览停靠列（多标签页）：右栏右侧独立显示（右栏折叠时仍在）；
           与右栏逻辑一致——欢迎界面时隐藏，回到会话视图自动恢复 */}
-      {session.filePreview && !previewPopOut && !welcomeVisible && (
+      {session.previewTabs.length > 0 && session.activePreviewTab && !previewPopOut && !welcomeVisible && (
         <div className="relative shrink-0">
           {/* 预览列拉伸热区：透明、不占布局、无视觉条 */}
           <div className="absolute inset-y-0 -left-2 w-4 cursor-col-resize z-10"
             onMouseDown={(e) => handleResizeStart('preview', e)} />
           <FilePreviewPanel
             lang={lang}
-            payload={session.filePreview}
-            loading={session.filePreviewLoading}
+            tabs={session.previewTabs}
+            activeTab={session.activePreviewTab}
             width={previewPanelWidth}
             hasDiff={previewHasDiff}
-            onOpenContent={(path) => session.openFilePreview(path)}
-            onOpenDiff={(path) => session.openFileDiff(path)}
+            rootDirLabel={session.activePreviewTab?.synthetic ? null : previewRootLabel}
+            onActivateTab={session.activatePreviewTab}
+            onCloseTab={session.closePreviewTab}
+            onCloseOtherTabs={session.closeOtherPreviewTabs}
+            onCloseAllTabs={session.closeFilePreview}
+            onOpenPath={(path) => session.openFilePreview(path)}
+            onOpenContent={(key) => session.switchPreviewTabKind(key, 'content')}
+            onOpenDiff={(key) => session.switchPreviewTabKind(key, 'diff')}
             onPopOut={() => setPreviewPopOut(true)}
-            onClose={() => { session.closeFilePreview(); setPreviewPopOut(false); }} />
+            onClose={() => session.closePreviewTab(session.activePreviewTab!.key)} />
         </div>
       )}
       </div>
@@ -1387,8 +1413,9 @@ export default function App() {
       {/* 文件预览弹窗：停靠列"弹窗查看"按钮触发放大形态；关闭返回停靠列 */}
       <FileViewerModal
         lang={lang}
-        payload={previewPopOut ? session.filePreview : null}
-        loading={session.filePreviewLoading}
+        payload={previewPopOut ? session.activePreviewTab?.payload ?? null : null}
+        loading={!!session.activePreviewTab?.loading}
+        rootDirLabel={session.activePreviewTab?.synthetic ? null : previewRootLabel}
         onClose={() => setPreviewPopOut(false)} />
     </div>
   );

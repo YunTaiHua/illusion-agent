@@ -18,12 +18,13 @@
 import { useState } from 'react';
 import { t, type UiLanguage } from '../i18n';
 import { useTheme, type Theme } from '../hooks/useTheme';
+import AutoScrollText from './AutoScrollText';
 import TodoPanel from './TodoPanel';
 import FileTreeSection from './FileTreeSection';
 import GitSection from './GitSection';
 import SessionFilesSection from './SessionFilesSection';
 import {
-  ChartBarIcon, ChevronRightIcon, CpuIcon, LayersIcon, McpIcon, MonitorIcon,
+  AgentTypeIcon, ChartBarIcon, ChevronRightIcon, CpuIcon, LayersIcon, McpIcon, MonitorIcon,
   MoonIcon, PanelRightIcon, PluginsIcon, RefreshIcon, RulesIcon, SparkleIcon, SunIcon,
 } from './icons';
 import type {
@@ -198,7 +199,7 @@ export default function RightPanel({
           <div className="px-2 py-1 text-xs text-content-disabled">{t(lang, 'no_agent_tasks')}</div>
         ) : (
           agentTasks.map((task) => (
-            <AgentTaskRow key={`${task.type}-${task.id}`} task={task} lang={lang} onView={onViewAgentTask} />
+            <AgentTaskRow key={`${task.type}-${task.id}`} task={task} onView={onViewAgentTask} />
           ))
         )}
       </CollapsibleSection>
@@ -449,13 +450,15 @@ export function CollapsibleSection({
   return (
     <div className={topBorder ? 'border-t border-border-light' : undefined}>
       {/* 整个头部行（含右侧计数槽位）均可点击折叠/展开——悬浮高亮区=点击热区，
-          避免悬浮区域远大于可点文字造成误导；键盘 Enter/Space 同样触发 */}
+          避免悬浮区域远大于可点文字造成误导；键盘 Enter/Space 同样触发。
+          高亮左右内收 12px（mx-3），与子行（-mx-2）的间隙一致；
+          px-2 保持标题/徽标与原位置对齐 */}
       <div
         role="button"
         tabIndex={0}
         onClick={handleToggle}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleToggle(); } }}
-        className="group/head w-full px-5 py-2 flex items-center gap-2 glass-option-hover transition-colors rounded-md cursor-pointer select-none"
+        className="group/head mx-3 px-2 py-2 flex items-center gap-2 glass-option-hover transition-colors rounded-lg cursor-pointer select-none"
       >
         <div className="flex-1 min-w-0 flex items-center gap-2 py-0.5">
           {/* 16px 图标槽位：常显类型图标；hover 时图标淡出、三角指示器淡入 */}
@@ -492,10 +495,11 @@ export function CollapsibleSection({
           )}
         </span>
       </div>
-      {/* 展开/折叠微动画（简洁 fade：纯透明度 150ms） */}
+      {/* 展开/折叠微动画（简洁 fade：纯透明度 150ms）。容器顶部留 2px 间隙：
+          首行悬浮高亮的圆角贴住滚动容器顶边时会被视觉截断 */}
       {!collapsed && (
         <div className="animate-fade">
-          <div className="px-5 pb-2.5 flex flex-col gap-0.5 max-h-[50vh] overflow-y-auto scrollbar-hidden">
+          <div className="px-5 pt-0.5 pb-2.5 flex flex-col gap-0.5 max-h-[50vh] overflow-y-auto scrollbar-hidden">
             {children}
           </div>
         </div>
@@ -514,10 +518,14 @@ function ItemRow({ name, description, tag }: { name: string; description: string
     <div>
       <button
         onClick={() => hasDesc && setExpanded((e) => !e)}
-        className={`w-[calc(100%_+_2.5rem)] flex items-center gap-2 -mx-5 pl-7 pr-5 py-1 rounded-md text-xs transition-colors ${hasDesc ? 'glass-option-hover cursor-pointer' : 'cursor-default'}`}
+        /* 行高亮左右内收 12px（-mx-2 而非 -mx-5 全出血）：滚动容器会在内容盒
+           边界裁剪溢出，全出血行的悬浮底色左右两端被切平；文字缩进不变 */
+        className={`as-host w-[calc(100%_+_1rem)] flex items-center gap-2 -mx-2 pl-4 pr-2 py-1 rounded-lg text-xs transition-colors ${hasDesc ? 'glass-option-hover cursor-pointer' : 'cursor-default'}`}
         title={hasDesc ? description : name}
       >
-        <span className="text-content-primary font-medium truncate flex-1 text-left">{name}</span>
+        <AutoScrollText trigger="parent" className="text-content-primary font-medium flex-1 min-w-0 text-left">
+          {name}
+        </AutoScrollText>
         {tag && (
           <span className="text-[10px] text-primary/80 bg-[var(--badge-bg-subtle)] px-1.5 py-0.5 rounded-full font-medium shrink-0">{tag}</span>
         )}
@@ -531,31 +539,37 @@ function ItemRow({ name, description, tag }: { name: string; description: string
 
 // ---- 智能体与任务行 ----
 
-/** 状态 → 展示文案与配色 */
-function taskStatusInfo(lang: UiLanguage, status: string): { label: string; cls: string } {
-  if (status === 'completed') return { label: t(lang, 'task_done'), cls: 'text-success' };
-  if (status === 'failed') return { label: t(lang, 'task_failed'), cls: 'text-danger' };
-  if (status === 'running') return { label: t(lang, 'task_running'), cls: 'text-warning' };
-  return { label: status, cls: 'text-content-disabled' };
+/** 状态 → 英文徽标文案与配色（与会话文件 write/edit 徽标同款语言） */
+function taskStatusInfo(status: string): { label: string; cls: string } {
+  if (status === 'completed') return { label: 'done', cls: 'text-success bg-success/10' };
+  if (status === 'failed') return { label: 'failed', cls: 'text-danger bg-danger/10' };
+  if (status === 'running') return { label: 'running', cls: 'text-warning bg-warning/10' };
+  return { label: status, cls: 'text-content-secondary bg-[var(--badge-bg-subtle)]' };
 }
 
-/** 智能体/任务行：类型徽标 + 标题 + 状态，点击查看摘要（复用 /agent） */
-function AgentTaskRow({ task, lang, onView }: { task: AgentTaskItem; lang: UiLanguage; onView: (id: string) => void }) {
-  const status = taskStatusInfo(lang, task.status);
+/**
+ * 智能体/任务行（与会话文件行同款风格）：类型图标（agent=CPU / task=清单，
+ * 主色）+ 标题 + 状态英文徽标（固定最小宽度保证各行对齐），点击查看摘要
+ */
+function AgentTaskRow({ task, onView }: { task: AgentTaskItem; onView: (id: string) => void }) {
+  const status = taskStatusInfo(task.status);
   const title = [task.id, task.title !== task.id ? task.title : '', `/${task.type}`].filter(Boolean).join(' · ');
 
   return (
     <button
       onClick={() => onView(task.id)}
-      className="w-[calc(100%_+_2.5rem)] flex items-center gap-2 -mx-5 pl-7 pr-5 py-1 rounded-md text-xs transition-colors glass-option-hover cursor-pointer"
+      className="as-host w-[calc(100%_+_1rem)] flex items-center gap-1.5 -mx-2 pl-4 pr-2 py-1 rounded-lg text-xs transition-colors glass-option-hover cursor-pointer"
       title={`${title}${task.summary ? `\n${task.summary}` : ''}`}
     >
-      {/* 类型徽标：智能体/任务统一主色背景块，固定宽度保证各行标题缩进一致 */}
-      <span className="w-10 text-center text-[10px] py-0.5 rounded-full font-medium shrink-0 text-primary bg-primary/10">
-        {task.type === 'agent' ? t(lang, 'agent_type_agent') : t(lang, 'agent_type_task')}
+      {/* 类型图标：智能体=CPU / 任务=清单（主色，与区块头图标同族） */}
+      <AgentTypeIcon type={task.type} className="w-3.5 h-3.5 shrink-0 text-primary" />
+      <AutoScrollText trigger="parent" className="text-content-primary font-medium flex-1 min-w-0 text-left">
+        {task.title}
+      </AutoScrollText>
+      {/* 状态徽标：done / failed / running（英文，着色药丸；固定最小宽度对齐） */}
+      <span className={`shrink-0 min-w-[38px] text-center text-[10px] px-1.5 py-0.5 rounded-full font-medium ${status.cls}`}>
+        {status.label}
       </span>
-      <span className="text-content-primary font-medium truncate flex-1 text-left">{task.title}</span>
-      <span className={`text-[10px] shrink-0 ${status.cls}`}>{status.label}</span>
     </button>
   );
 }

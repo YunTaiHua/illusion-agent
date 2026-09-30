@@ -9,8 +9,10 @@
 
 import { useCallback, useEffect, useRef } from 'react';
 import { t, type UiLanguage } from '../i18n';
+import { fileIconColor } from '../utils/fileIcon';
+import AutoScrollText from './AutoScrollText';
 import { CollapsibleSection } from './RightPanel';
-import { GitBranchIcon } from './icons';
+import { FileIcon, GitBranchIcon } from './icons';
 import type { GitFileStatus, GitStatusSnapshot } from '../types/protocol';
 
 /**
@@ -93,7 +95,7 @@ export default function GitSection({ lang, status, loading, onRefresh, onOpenDif
   );
 }
 
-/** 单个变更文件行：状态字母徽标 + 路径 + 行级增删 */
+/** 单个变更文件行：文件类型图标 + 路径 + 行级增删 + 状态字母徽标（右端） */
 function GitFileRow({ file, onOpenDiff }: { file: GitFileStatus; onOpenDiff: (path: string) => void }) {
   const handleClick = useCallback(() => {
     onOpenDiff(file.path);
@@ -114,16 +116,15 @@ function GitFileRow({ file, onOpenDiff }: { file: GitFileStatus; onOpenDiff: (pa
   return (
     <button
       onClick={handleClick}
-      className="w-[calc(100%_+_2.5rem)] flex items-center gap-1.5 -mx-5 pl-7 pr-5 py-1 rounded-md text-xs transition-colors glass-option-hover cursor-pointer"
+      className="as-host w-[calc(100%_+_1rem)] flex items-center gap-1.5 -mx-2 pl-4 pr-2 py-1 rounded-lg text-xs transition-colors glass-option-hover cursor-pointer"
       title={title}
     >
-      <span className={`shrink-0 w-4 h-4 flex items-center justify-center rounded text-[10px] font-bold font-mono ${meta.cls} ${file.staged ? '' : 'opacity-70'}`}>
-        {meta.letter}
-      </span>
-      <span className="flex-1 min-w-0 truncate text-left">
+      <FileIcon className="w-3.5 h-3.5 shrink-0" color={fileIconColor(file.path)} />
+      {/* 截断时静态渐隐、悬浮单向滚动展示完整路径 */}
+      <AutoScrollText trigger="parent" className="flex-1 min-w-0 text-left">
         {dir && <span className="text-content-disabled">{dir}</span>}
         <span className="text-content-primary">{name}</span>
-      </span>
+      </AutoScrollText>
       {(file.insertions != null || file.deletions != null) && (
         <span className="shrink-0 font-mono text-[10px] tabular-nums">
           {file.insertions != null && file.insertions > 0 && <span className="text-success">+{file.insertions}</span>}
@@ -132,6 +133,12 @@ function GitFileRow({ file, onOpenDiff }: { file: GitFileStatus; onOpenDiff: (pa
           )}
         </span>
       )}
+      <span
+        className={`shrink-0 w-4 h-4 flex items-center justify-center rounded text-[10px] font-bold font-mono ${meta.cls} ${file.staged ? '' : 'opacity-70'}`}
+        title={file.staged ? 'staged' : 'unstaged'}
+      >
+        {meta.letter}
+      </span>
     </button>
   );
 }

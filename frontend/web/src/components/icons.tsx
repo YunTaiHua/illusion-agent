@@ -116,6 +116,17 @@ export function CpuIcon({ className }: { className?: string }) {
 }
 
 /**
+ * 智能体/任务类型图标（智能体与任务行行首使用）。
+ *
+ * agent → CPU（与区块头图标同形）；task → 清单勾选。图标选择集中在
+ * 此处，行组件只按 type 取用，不内联三元挑选。
+ */
+export function AgentTypeIcon({ type, className }: { type: string; className?: string }) {
+  if (type === 'agent') return <CpuIcon className={className} />;
+  return <ListChecksIcon className={className} />;
+}
+
+/**
  * Git 分支图标（Phosphor git-branch 静态样式）。
  *
  * 主干与分支肘部连线 + 三个圆环；头部节点 = 外环 + 实心插塞，
@@ -403,6 +414,15 @@ export function PlusIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       <path d="M8 3v10M3 8h10" />
+    </svg>
+  );
+}
+
+/** 关闭（叉号：预览 tab 关闭按钮等） */
+export function CloseIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+      <path d="M4 4l8 8M12 4l-8 8" />
     </svg>
   );
 }

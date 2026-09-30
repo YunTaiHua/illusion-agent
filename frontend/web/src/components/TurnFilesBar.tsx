@@ -17,8 +17,10 @@
 
 import { memo, useCallback, useState } from 'react';
 import { t, type UiLanguage } from '../i18n';
+import { fileIconColor } from '../utils/fileIcon';
+import AutoScrollText from './AutoScrollText';
 import { normalizePathKey, type TurnFileStat } from '../utils/turnGrouping';
-import { ChevronRightIcon, ModifiedFileIcon } from './icons';
+import { ChevronRightIcon, FileIcon, ModifiedFileIcon } from './icons';
 
 /**
  * TurnFilesBar 组件属性接口
@@ -121,15 +123,16 @@ function TurnFileRow({ raw, stat, onOpenFile }: { raw: string; stat?: TurnFileSt
   return (
     <button
       onClick={handleClick}
-      className="w-full flex items-center gap-1.5 py-2.5 px-3 text-sm transition-colors glass-option-hover cursor-pointer"
+      className="as-host w-full flex items-center gap-1.5 py-2.5 px-3 text-sm transition-colors glass-option-hover cursor-pointer"
       title={display}
     >
-      {/* 空占位：与触发器图标槽位同宽，文件名缩进对齐触发器文本 */}
-      <span className="w-4 h-4 shrink-0" />
-      <span className="flex-1 min-w-0 truncate text-left">
+      {/* 文件类型图标：与触发器图标槽位同宽，文件名缩进对齐触发器文本 */}
+      <FileIcon className="w-4 h-4 shrink-0" color={fileIconColor(display)} />
+      {/* 截断时静态渐隐、悬浮单向滚动展示完整路径 */}
+      <AutoScrollText trigger="parent" className="flex-1 min-w-0 text-left">
         {dir && <span className="text-content-disabled">{dir}</span>}
         <span className="text-content-primary">{name}</span>
-      </span>
+      </AutoScrollText>
       {/* 增删行数着色加粗（本轮对话累计增量；无法统计时不显示数字） */}
       {typeof stat?.insertions === 'number' && stat.insertions > 0 && (
         <span className="shrink-0 font-mono text-xs font-bold text-diff-add">+{stat.insertions}</span>

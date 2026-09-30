@@ -393,6 +393,26 @@ pre code.hljs,
   margin-top: 132px;
 }
 
+/* 纵向/横向滚动条交叉角块：默认继承页面白底，窄容器下两根滚动条同时
+   出现时显示为突兀的白色矩形；置为透明与卡片背景融为一体 */
+.chat-scroll-cap::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ========== 悬浮单向循环滚动（AutoScrollText）==========
+   悬浮时内容持续向左移动，尾部走完后从起点重新进入（跑马灯式单向，
+   不回弹）；位移（--as-dist）与时长（--as-dur）由组件内联变量提供，
+   200ms 延时避免掠过触发，移出立即复位。
+   触发目标必须自带 as-host 类（行按钮/tab 自身），不做祖先级联——
+   否则聊天气泡等外层 group 悬浮会带动气泡内所有行同时滚动。 */
+@keyframes as-ticker {
+  from { transform: translateX(0); }
+  to { transform: translateX(var(--as-dist)); }
+}
+.as-host:hover .as-ticker-track {
+  animation: as-ticker var(--as-dur, 8s) linear 200ms infinite;
+}
+
 /* ========== 暗色模式代码高亮覆盖 ==========
    基础主题是 highlight.js 的 github.css（浅色配色，如 #0550ae 深蓝），
    在深色背景上对比度严重不足（注释/字符串/数字几乎融入背景）。

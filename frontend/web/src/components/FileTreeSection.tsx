@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { t, type UiLanguage } from '../i18n';
+import AutoScrollText from './AutoScrollText';
 import { CollapsibleSection } from './RightPanel';
 import type { FileTreeNode } from '../types/protocol';
 import { ChevronRightIcon, FileIcon as FileGlyphIcon, FolderClosedIcon, FolderOpenIcon, FolderOutlineIcon } from './icons';
@@ -137,8 +138,9 @@ function TreeRows({
   return (
     <>
       {entries.map((node) => {
-        // 整行悬浮出血（-mx-5）后左缩进补偿 20px，保持原视觉层级缩进
-        const pad = 28 + depth * 12;
+        // 行高亮左右内收 12px（-mx-2 而非 -mx-5 全出血），避免滚动容器在
+        // 内容盒边界把悬浮底色两端切平；缩进量补偿 12px 保持文字对齐不变
+        const pad = 16 + depth * 12;
         if (node.kind === 'dir') {
           const isOpen = expanded[node.path] === true;
           const dirLoading = loadingPaths.includes(node.path);
@@ -146,7 +148,7 @@ function TreeRows({
             <div key={node.path}>
               <button
                 onClick={() => onToggleDir(node.path)}
-                className="w-[calc(100%_+_2.5rem)] flex items-center gap-1.5 -mx-5 py-1 pr-5 rounded-md text-xs glass-option-hover transition-colors cursor-pointer"
+                className="as-host w-[calc(100%_+_1rem)] flex items-center gap-1.5 -mx-2 py-1 pr-2 rounded-lg text-xs glass-option-hover transition-colors cursor-pointer"
                 style={{ paddingLeft: pad }}
                 title={node.path}
               >
@@ -154,7 +156,10 @@ function TreeRows({
                   className={`w-3 h-3 shrink-0 text-content-disabled transition-transform duration-150 ${isOpen ? 'rotate-90' : ''}`}
                 />
                 <FolderIcon open={isOpen} />
-                <span className="text-content-primary font-medium truncate flex-1 text-left">{node.name}</span>
+                {/* 截断时静态渐隐、悬浮单向滚动展示完整名称 */}
+                <AutoScrollText trigger="parent" className="text-content-primary font-medium flex-1 min-w-0 text-left">
+                  {node.name}
+                </AutoScrollText>
                 {dirLoading && <span className="text-[10px] text-content-disabled shrink-0">…</span>}
               </button>
               {isOpen && (
@@ -177,14 +182,16 @@ function TreeRows({
           <button
             key={node.path}
             onClick={() => onOpenFile(node.path)}
-            className="w-[calc(100%_+_2.5rem)] flex items-center gap-1.5 -mx-5 py-1 pr-5 rounded-md text-xs glass-option-hover transition-colors cursor-pointer"
+            className="as-host w-[calc(100%_+_1rem)] flex items-center gap-1.5 -mx-2 py-1 pr-2 rounded-lg text-xs glass-option-hover transition-colors cursor-pointer"
             style={{ paddingLeft: pad }}
             title={node.path}
           >
             {/* 与目录行的三角指示器等宽占位，保持图标纵向对齐 */}
             <span className="w-3 shrink-0" />
             <FileIcon name={node.name} />
-            <span className="text-content-secondary truncate flex-1 text-left">{node.name}</span>
+            <AutoScrollText trigger="parent" className="text-content-secondary flex-1 min-w-0 text-left">
+              {node.name}
+            </AutoScrollText>
           </button>
         );
       })}

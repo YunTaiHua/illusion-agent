@@ -34,6 +34,7 @@ import type {
   McpServerSnapshot,
   PendingToolCall,
   PluginSnapshot,
+  PreviewTab,
   RuleSnapshot,
   SessionFileItem,
   SkillSnapshot,
@@ -343,10 +344,22 @@ export interface WebSocketSessionState {
   gitStatus: GitStatusSnapshot | null;
   /** Git 状态加载中 */
   gitLoading: boolean;
-  /** 文件预览载荷（null = 预览关闭；error 字段非空表示读取失败） */
-  filePreview: FileContentPayload | null;
-  /** 文件预览加载中 */
-  filePreviewLoading: boolean;
+  /** 预览标签页列表（多文件同时打开；随会话隔离，切换会话/目录时清空） */
+  previewTabs: PreviewTab[];
+  /** 当前激活标签页键（null = 无激活 tab） */
+  activePreviewKey: string | null;
+  /** 当前激活标签页（无 tab 时为 null） */
+  activePreviewTab: PreviewTab | null;
+  /** 激活指定标签页 */
+  activatePreviewTab: (key: string) => void;
+  /** 关闭指定标签页（关闭激活 tab 时自动激活相邻 tab） */
+  closePreviewTab: (key: string) => void;
+  /** 关闭除指定 tab 外的全部标签页 */
+  closeOtherPreviewTabs: (key: string) => void;
+  /** 原地切换指定 tab 的视图类型（content ↔ diff；目标视图 tab 已存在时直接激活它） */
+  switchPreviewTabKind: (key: string, kind: 'content' | 'diff') => void;
+  /** 关闭全部标签页 */
+  closeFilePreview: () => void;
   modelOptions: Option[];
   ready: boolean;
   /** 首帧引导中：ready 后首个会话内容（web_restore_completed）尚未呈现 */
@@ -394,12 +407,10 @@ export interface WebSocketSessionState {
   requestFileTree: (path?: string, force?: boolean) => void;
   /** 拉取 Git 状态快照（web_request_git_status） */
   requestGitStatus: () => void;
-  /** 打开文件预览（web_read_file，内容视图；同视图同路径读取中直接忽略连点） */
+  /** 打开文件预览（web_read_file，内容视图；已打开同键 tab 时仅激活不重读） */
   openFilePreview: (path: string) => void;
   /** 打开文件 diff 预览（web_file_diff，相对 HEAD 的变更视图） */
   openFileDiff: (path: string) => void;
-  /** 关闭文件预览 */
-  closeFilePreview: () => void;
   /** 拉取智能体与后台任务（web_request_agent_tasks，随活跃会话） */
   requestAgentTasks: () => void;
   /** 查看智能体/任务摘要（复用 /agent 指令，结果在预览面板展示） */
@@ -556,8 +567,9 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   }, []);
   const [gitStatus, setGitStatus] = useState<GitStatusSnapshot | null>(null);
   const [gitLoading, setGitLoading] = useState(false);
-  const [filePreview, setFilePreview] = useState<FileContentPayload | null>(null);
-  const [filePreviewLoading, setFilePreviewLoading] = useState(false);
+  // 预览标签页（多文件同时打开；随会话隔离，激活会话切换时统一清空）
+  const [previewTabs, setPreviewTabs] = useState<PreviewTab[]>([]);
+  const [activePreviewKey, setActivePreviewKey] = useState<string | null>(null);
   const [modelOptions, setModelOptions] = useState<Option[]>([]);
   const [ready, setReady] = useState(false);
   /** 首帧引导中：ready 后首个会话内容（web_restore_completed）尚未呈现。
@@ -601,8 +613,13 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   const resourcesCwdRef = useRef<string | null>(null);
   // 文件树正在加载的目录集合（ref 镜像，防同目录并发重复请求）
   const fileTreeLoadingRef = useRef<Set<string>>(new Set());
-  // 文件预览正在读取的键（`kind|path`，防同视图同路径连点重复请求）
-  const filePreviewKeyRef = useRef<string | null>(null);
+  // 预览标签页 ref 镜像：事件处理器（WS 闭包）与回调中同步读写，避免陈旧闭包
+  const previewTabsRef = useRef<PreviewTab[]>([]);
+  // 预览标签页状态统一应用入口：ref 镜像与 state 同步更新
+  const applyPreviewTabs = useCallback((next: PreviewTab[]): void => {
+    previewTabsRef.current = next;
+    setPreviewTabs(next);
+  }, []);
   // 待展示的智能体摘要请求（viewAgentSummary 发起的 web_query request_id → 条目 id）
   const agentViewRef = useRef<{ requestId: string; id: string } | null>(null);
   // 视图最新引用：事件处理器（WS 闭包）与回调中读取，避免陈旧闭包
@@ -1000,34 +1017,123 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     });
   }, [sendRaw]);
 
-  /** 打开文件预览（内容视图；同视图同路径读取中直接忽略连点；
-   *  显式绑定当前活跃会话，避免本地切会话后读到上一个会话目录的文件） */
+  /**
+   * 打开（或激活）一个预览标签页
+   *
+   * 同键（kind|path）tab 已存在时仅激活不重读；新 tab 追加到末尾并
+   * 发起读取。requests 统一绑定当前活跃会话，避免本地切会话后读到
+   * 上一个会话目录的文件。path 在此统一规整（\ → /），请求原串即
+   * tab 键与响应关联键。
+   *
+   * @param rawPath - 文件路径（工作区内相对路径或绝对路径）
+   * @param kind - 视图类型：'content' 内容 | 'diff' 变更
+   * @param messageType - 覆盖请求消息类型（默认按 kind 映射；会话文件走
+   *   web_read_session_file 以保留 file_deleted 等结构化错误码）
+   */
+  const openPreviewTab = useCallback((rawPath: string, kind: 'content' | 'diff', messageType?: 'web_read_file' | 'web_read_session_file'): void => {
+    const path = rawPath.replace(/\\/g, '/');
+    if (!path) return;
+    // diff 预检：工作区外的绝对路径取不到 git diff（后端拒绝），直接按内容
+    // 视图打开，避免 tab 里出现"路径无效或超出工作区范围"的错误
+    let effectiveKind = kind;
+    if (kind === 'diff' && (path.startsWith('/') || /^[a-z]:[/]/i.test(path))) {
+      const cwd = (activeSessionIdRef.current
+        ? viewsRef.current[activeSessionIdRef.current]?.cwd
+        : null)?.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+      if (!cwd || !path.toLowerCase().startsWith(`${cwd}/`)) {
+        effectiveKind = 'content';
+      }
+    }
+    const key = `${effectiveKind}|${path}`;
+    const tabs = previewTabsRef.current;
+    if (tabs.some((tb) => tb.key === key)) {
+      // 已打开：仅激活（内容保持首次读取的快照，不重复请求）
+      setActivePreviewKey(key);
+      return;
+    }
+    applyPreviewTabs([...tabs, { key, path, kind: effectiveKind, payload: null, loading: true }]);
+    setActivePreviewKey(key);
+    const type = messageType ?? (effectiveKind === 'diff' ? 'web_file_diff' : 'web_read_file');
+    sendRaw({ type, path, session_id: activeSessionIdRef.current ?? undefined });
+  }, [sendRaw, applyPreviewTabs]);
+
+  /** 打开文件预览（内容视图；工作区内相对路径或任意绝对路径均可） */
   const openFilePreview = useCallback((path: string): void => {
-    const key = `content|${path}`;
-    if (filePreviewKeyRef.current === key) return;
-    filePreviewKeyRef.current = key;
-    setFilePreviewLoading(true);
-    setFilePreview({ path });
-    sendRaw({ type: 'web_read_file', path, session_id: activeSessionIdRef.current ?? undefined });
-  }, [sendRaw]);
+    openPreviewTab(path, 'content');
+  }, [openPreviewTab]);
 
-  /** 打开文件 diff 预览（相对 HEAD 的变更视图；同样绑定当前活跃会话） */
+  /** 打开文件 diff 预览（相对 HEAD 的变更视图） */
   const openFileDiff = useCallback((path: string): void => {
-    const key = `diff|${path}`;
-    if (filePreviewKeyRef.current === key) return;
-    filePreviewKeyRef.current = key;
-    setFilePreviewLoading(true);
-    setFilePreview({ path, kind: 'diff' });
-    sendRaw({ type: 'web_file_diff', path, session_id: activeSessionIdRef.current ?? undefined });
-  }, [sendRaw]);
+    openPreviewTab(path, 'diff');
+  }, [openPreviewTab]);
 
-  /** 关闭文件预览 */
-  const closeFilePreview = useCallback((): void => {
-    filePreviewKeyRef.current = null;
-    agentViewRef.current = null;
-    setFilePreviewLoading(false);
-    setFilePreview(null);
+  /** 激活指定标签页 */
+  const activatePreviewTab = useCallback((key: string): void => {
+    setActivePreviewKey(key);
   }, []);
+
+  /** 关闭指定标签页（关闭激活 tab 时自动激活相邻 tab；agent 摘要在途请求一并作废） */
+  const closePreviewTab = useCallback((key: string): void => {
+    const tabs = previewTabsRef.current;
+    const idx = tabs.findIndex((tb) => tb.key === key);
+    if (idx < 0) return;
+    const next = tabs.filter((tb) => tb.key !== key);
+    applyPreviewTabs(next);
+    if (agentViewRef.current) {
+      const agentKey = `content|${agentViewRef.current.id} · 摘要`;
+      if (agentKey === key) agentViewRef.current = null;
+    }
+    // 关闭的是激活 tab：优先激活同位置的下一个，末尾则取前一个
+    setActivePreviewKey((cur) => {
+      if (cur !== key) return cur;
+      if (next.length === 0) return null;
+      return next[Math.min(idx, next.length - 1)]!.key;
+    });
+  }, [applyPreviewTabs]);
+
+  /** 关闭除指定 tab 外的全部标签页（保留智能体摘要合成 tab 时，在途请求结果仍需落地） */
+  const closeOtherPreviewTabs = useCallback((key: string): void => {
+    const kept = previewTabsRef.current.filter((tb) => tb.key === key);
+    applyPreviewTabs(kept);
+    if (!kept.some((tb) => tb.synthetic)) agentViewRef.current = null;
+    setActivePreviewKey(key);
+  }, [applyPreviewTabs]);
+
+  /**
+   * 原地切换指定 tab 的视图类型（内容 ↔ diff）
+   *
+   * 目标视图的 tab 已存在时直接激活它（两视图并存，各自保留）；否则
+   * 原地改写当前 tab 的键/视图并发起读取，避免"内容/Diff"切换产生
+   * 意料之外的第二条 tab。合成 tab（智能体摘要）不支持切换。
+   */
+  const switchPreviewTabKind = useCallback((key: string, kind: 'content' | 'diff'): void => {
+    const tabs = previewTabsRef.current;
+    const idx = tabs.findIndex((tb) => tb.key === key);
+    if (idx < 0) return;
+    const tab = tabs[idx]!;
+    if (tab.kind === kind || tab.synthetic) return;
+    const nextKey = `${kind}|${tab.path}`;
+    if (tabs.some((tb) => tb.key === nextKey)) {
+      setActivePreviewKey(nextKey);
+      return;
+    }
+    const next = [...tabs];
+    next[idx] = { key: nextKey, path: tab.path, kind, payload: null, loading: true };
+    applyPreviewTabs(next);
+    setActivePreviewKey(nextKey);
+    sendRaw({
+      type: kind === 'diff' ? 'web_file_diff' : 'web_read_file',
+      path: tab.path,
+      session_id: activeSessionIdRef.current ?? undefined,
+    });
+  }, [sendRaw, applyPreviewTabs]);
+
+  /** 关闭全部标签页（切换会话/目录时由 App 触发，实现 tab 随会话隔离） */
+  const closeFilePreview = useCallback((): void => {
+    applyPreviewTabs([]);
+    agentViewRef.current = null;
+    setActivePreviewKey(null);
+  }, [applyPreviewTabs]);
 
   /** 拉取智能体与后台任务（随活跃会话；切会话后由统一刷新触发重拉） */
   const requestAgentTasks = useCallback((): void => {
@@ -1094,15 +1200,10 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   }, [sendRaw]);
 
   /** 打开会话内修改文件预览（内容视图；支持工作区外/非 Git 追踪的文件；
-   *  同样绑定当前活跃会话，同视图同路径读取中忽略连点） */
+   *  web_read_session_file 保留 file_deleted 等结构化错误码供 i18n 展示） */
   const openSessionFile = useCallback((path: string): void => {
-    const key = `content|${path}`;
-    if (filePreviewKeyRef.current === key) return;
-    filePreviewKeyRef.current = key;
-    setFilePreviewLoading(true);
-    setFilePreview({ path });
-    sendRaw({ type: 'web_read_session_file', path, session_id: activeSessionIdRef.current ?? undefined });
-  }, [sendRaw]);
+    openPreviewTab(path, 'content', 'web_read_session_file');
+  }, [openPreviewTab]);
 
   /**
    * 统一刷新右栏数据（资源 + Git + 文件树根 + 智能体任务 + 会话文件）
@@ -1199,15 +1300,23 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     };
   }, []);
 
-  /** 查看智能体/任务摘要：复用 /agent 指令（web_query），结果路由到预览面板 */
+  /** 查看智能体/任务摘要：复用 /agent 指令（web_query），结果路由到预览面板
+   *  （合成 tab：路径仅作标题展示，响应到达后回填载荷） */
   const viewAgentSummary = useCallback((id: string): void => {
     const requestId = `agentview-${id}-${Date.now()}`;
+    const path = `${id} · 摘要`;
+    const key = `content|${path}`;
     agentViewRef.current = { requestId, id };
-    filePreviewKeyRef.current = null;
-    setFilePreviewLoading(true);
-    setFilePreview({ path: `${id} · 摘要` });
+    const tabs = previewTabsRef.current;
+    const existing = tabs.find((tb) => tb.key === key);
+    if (!existing) {
+      applyPreviewTabs([...tabs, { key, path, kind: 'content', payload: null, loading: true, synthetic: true }]);
+    } else {
+      applyPreviewTabs(tabs.map((tb) => (tb.key === key ? { ...tb, loading: true, payload: null } : tb)));
+    }
+    setActivePreviewKey(key);
     sendRequest({ type: 'web_query', command: 'agent', args: id, request_id: requestId });
-  }, [sendRequest]);
+  }, [sendRequest, applyPreviewTabs]);
 
   const setInlineOptions = useCallback((payload: SelectRequestPayload | null) => {
     const sid = activeSessionIdRef.current;
@@ -1942,13 +2051,33 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
         return;
       }
       if (evt.type === 'web_file_content') {
-        // 文件预览载荷（error 字段非空表示读取失败）；与发起请求的
-        // kind|path 一致才应用（内容/diff 两视图按键精确关联）
+        // 文件预览载荷（error 字段非空表示读取失败）；按键（kind|path）
+        // 精确关联到对应标签页（内容/diff 两视图各自独立成 tab）。
+        // diff 视图读取失败（路径无效/超出工作区/非 Git 仓库等）时原地
+        // 降级为内容视图重读一次：内容视图失败则照常显示错误，不再循环
         const payload = evt.web_file_content;
         const key = `${payload?.kind === 'diff' ? 'diff' : 'content'}|${payload?.path ?? ''}`;
-        if (payload && key === filePreviewKeyRef.current) {
-          setFilePreview(payload);
-          setFilePreviewLoading(false);
+        const tab = payload ? previewTabsRef.current.find((tb) => tb.key === key) : undefined;
+        if (payload && tab) {
+          if (tab.kind === 'diff' && payload.error) {
+            const contentKey = `content|${tab.path}`;
+            const tabs = previewTabsRef.current;
+            if (tabs.some((tb) => tb.key === contentKey)) {
+              // 内容 tab 已存在：丢弃 diff tab、直接激活已有内容 tab，避免重复
+              applyPreviewTabs(tabs.filter((tb) => tb.key !== key));
+              setActivePreviewKey((cur) => (cur === key ? contentKey : cur));
+            } else {
+              applyPreviewTabs(tabs.map((tb) => (
+                tb.key === key ? { ...tb, key: contentKey, kind: 'content', payload: null, loading: true } : tb
+              )));
+              setActivePreviewKey((cur) => (cur === key ? contentKey : cur));
+              sendRaw({ type: 'web_read_file', path: tab.path, session_id: activeSessionIdRef.current ?? undefined });
+            }
+          } else {
+            applyPreviewTabs(previewTabsRef.current.map((tb) => (
+              tb.key === key ? { ...tb, payload, loading: false } : tb
+            )));
+          }
         }
         return;
       }
@@ -1964,21 +2093,19 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       }
       if (evt.type === 'web_query_result') {
         const payload = evt.web_query_payload;
-        // 智能体摘要（viewAgentSummary 发起）：路由到预览面板展示全文
+        // 智能体摘要（viewAgentSummary 发起）：路由到预览面板合成 tab 展示全文
         if (evt.web_command === 'agent' && agentViewRef.current && evt.web_request_id === agentViewRef.current.requestId) {
           const id = agentViewRef.current.id;
+          const agentKey = `content|${id} · 摘要`;
           agentViewRef.current = null;
-          if (evt.web_query_kind === 'text' && typeof payload === 'string') {
-            setFilePreview({
-              path: `${id} · 摘要`,
-              content: payload,
-              size: payload.length,
-              truncated: false,
-            });
-          } else {
-            setFilePreview({ path: `${id} · 摘要`, error: '未找到该智能体或任务的摘要' });
+          const summaryPayload: FileContentPayload = evt.web_query_kind === 'text' && typeof payload === 'string'
+            ? { path: `${id} · 摘要`, content: payload, size: payload.length, truncated: false }
+            : { path: `${id} · 摘要`, error: '未找到该智能体或任务的摘要' };
+          if (previewTabsRef.current.some((tb) => tb.key === agentKey)) {
+            applyPreviewTabs(previewTabsRef.current.map((tb) => (
+              tb.key === agentKey ? { ...tb, payload: summaryPayload, loading: false } : tb
+            )));
           }
-          setFilePreviewLoading(false);
           if (sid) patchView(sid, { busy: false });
           return;
         }
@@ -2145,7 +2272,10 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       transcriptReplaceTick: view?.transcriptReplaceTick ?? 0,
       requestHistory, forkSession,
       subscribeFileMentions, requestFileMentions,
-      filePreview, filePreviewLoading,
+      previewTabs,
+      activePreviewKey,
+      activePreviewTab: previewTabs.find((tb) => tb.key === activePreviewKey) ?? null,
+      activatePreviewTab, closePreviewTab, closeOtherPreviewTabs, switchPreviewTabKind,
       requestFileTree, requestGitStatus, openFilePreview, openFileDiff, closeFilePreview,
       requestAgentTasks, viewAgentSummary, requestSessionFiles, openSessionFile,
       ready, firstLogin, showThinking,
@@ -2202,7 +2332,8 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     sessionFiles, sessionFilesLoading,
     requestHistory, forkSession,
     subscribeFileMentions, requestFileMentions,
-    filePreview, filePreviewLoading,
+    previewTabs, activePreviewKey,
+    activatePreviewTab, closePreviewTab, closeOtherPreviewTabs, switchPreviewTabKind,
     requestFileTree, requestGitStatus, openFilePreview, openFileDiff, closeFilePreview,
     requestAgentTasks, viewAgentSummary, requestSessionFiles, openSessionFile,
     ready, firstLogin, showThinking, swarmTeammates, swarmNotifications,

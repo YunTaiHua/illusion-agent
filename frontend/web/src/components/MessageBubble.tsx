@@ -192,6 +192,13 @@ const IMAGE_URL_RE = /\.(png|jpe?g|gif|webp|bmp|svg|avif|ico)(\?.*)?(#.*)?$/i;
  * - code：行内代码内容为纯 URL 时渲染为可点击链接（对齐 opencode markCodeLinks）
  */
 const mdComponents = {
+  // GFM 表格：固有最小宽度可能超过窄容器（文件预览挤占聊天区后），
+  // 包一层横向滚动容器让表格在自己内部滚动，不把聊天容器撑出横向滚动条
+  table: ({ children, ...rest }: React.ComponentPropsWithoutRef<"table">) => (
+    <div className="overflow-x-auto">
+      <table {...rest}>{children}</table>
+    </div>
+  ),
   pre: ({ children, ...rest }: React.ComponentPropsWithoutRef<"pre">) => {
     const codeChild = children as
       | React.ReactElement<{ className?: string; children?: React.ReactNode }>
@@ -465,7 +472,9 @@ function MessageBubble({
     return (
       <div className="py-1 group">
         {reasoning}
-        <div className="text-content-primary text-sm prose max-w-full select-text">
+        {/* overflow-wrap:anywhere：长路径/无空格长 token 在窄容器（文件预览挤占后）
+            强制折行，避免把聊天容器撑出横向滚动条（滚动条交叉处出现角块） */}
+        <div className="text-content-primary text-sm prose max-w-full select-text [overflow-wrap:anywhere]">
           <ReactMarkdown
             remarkPlugins={[remarkGfm, remarkSuperscript]}
             rehypePlugins={rehypePlugins}
