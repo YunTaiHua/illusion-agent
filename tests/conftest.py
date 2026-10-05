@@ -7,6 +7,11 @@ from pathlib import Path
 
 import pytest
 
+# 测试进程内禁用浏览器预热：预热会拉起 Playwright 驱动子进程，其 stdio
+# 挂在 pytest 捕获管道上，套件后段管道拆除时驱动 EPIPE 崩溃并波及测试进程。
+# 浏览器相关测试使用 mock 后端，不依赖预热。
+os.environ.setdefault("ILLUSION_BROWSER_PREWARM", "0")
+
 
 @pytest.fixture(autouse=True)
 def _isolate_data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

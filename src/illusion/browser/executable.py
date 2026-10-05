@@ -106,6 +106,34 @@ async def resolve_launch_kwargs(pw: Any, kernel: str = "auto") -> dict[str, Any]
     )
 
 
+def has_launch_candidate(kernel: str = "auto") -> bool:
+    """同步预检：当前内核配置下是否存在可启动的浏览器（不启动驱动进程）。
+
+    供预热决策使用——CI/裸环境没有 Playwright 浏览器也没有系统浏览器时，
+    跳过预热，避免无谓拉起 Playwright 驱动子进程（该进程会让测试环境的
+    事件循环无法退出）。首次实际使用时仍按原路径报出明确错误。
+    """
+    if find_system_browser() is not None:
+        return True
+    if kernel in ("auto", "chromium"):
+        # bundled Chromium 的安装缓存目录（与 playwright 的注册表布局一致）；
+        # 不启动驱动也能判定是否安装过
+        for env_key in ("PLAYWRIGHT_BROWSERS_PATH", ""):
+            base = os.environ.get(env_key) if env_key else None
+            roots = [Path(base)] if base else [
+                Path.home() / "AppData" / "Local" / "ms-playwright",
+                Path.home() / ".cache" / "ms-playwright",
+                Path.home() / "Library" / "Caches" / "ms-playwright",
+            ]
+            for root in roots:
+                try:
+                    if root.is_dir() and any(root.glob("chromium-*")):
+                        return True
+                except OSError:
+                    continue
+    return False
+
+
 def _bundled_chromium_path(pw: Any) -> Path | None:
     """返回 Playwright 自带 Chromium 的可执行路径（未安装时 None）。"""
     try:

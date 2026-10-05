@@ -45,6 +45,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -407,13 +408,25 @@ def _build_system_prompt_with_append(
 _PREWARM_TASKS: set[asyncio.Task[None]] = set()
 
 
-async def _prewarm_browser(manager: Any) -> None:
+async def _prewarm_browser(manager: Any, kernel: str = "auto") -> None:
     """后台预热浏览器后端（插件启用且 headless 时随 bundle 创建调用）。
 
     托管模式首启要拉起 Chromium（2-5s），等用户点开浏览器再启动会卡出
     明显空窗。预热只启动进程/上下文、不建 tab——面板仍为零 tab 空态，
     无 about:blank 闪现。失败静默（首次实际使用时按原路径重试并报错）。
+
+    CI/裸环境（无 Playwright 浏览器也无系统浏览器）直接跳过：此时启动
+    驱动进程只会悬挂并拖垮测试的事件循环（ILLUSION_BROWSER_PREWARM=0
+    可显式关闭）。注意预热不可限时取消——取消会让 Playwright 驱动子进程
+    崩溃（EPIPE）波及整个测试进程。
     """
+    from illusion.browser.executable import has_launch_candidate
+
+    if not has_launch_candidate(kernel):
+        logging.getLogger(__name__).debug(
+            "[browser] 预热跳过：未找到可用浏览器内核（首次使用时将按原路径报错）"
+        )
+        return
     try:
         await manager.ensure_started()
     except Exception:
@@ -668,8 +681,11 @@ async def build_runtime(
         # 预热只起进程不建 tab，无 about:blank 闪现，也不改变任何可见状态。
         # 有头模式（headless=False）不预热：预热会拉起可见窗口抢占前台。
         # 任务引用存入模块级集合防 GC（fire-and-forget 任务可能被回收）。
-        if settings.browser.headless:
-            task = asyncio.get_running_loop().create_task(_prewarm_browser(browser_manager))
+        # ILLUSION_BROWSER_PREWARM=0 显式关闭预热（CI 测试环境：无浏览器内核
+        # 时预热只会拉起驱动进程并悬挂，拖垮 WS 测试的 portal 线程）
+        prewarm_enabled = os.environ.get("ILLUSION_BROWSER_PREWARM", "1") not in ("0", "false")
+        if settings.browser.headless and prewarm_enabled:
+            task = asyncio.get_running_loop().create_task(_prewarm_browser(browser_manager, settings.browser.kernel))
             _PREWARM_TASKS.add(task)
             task.add_done_callback(_PREWARM_TASKS.discard)
     tool_registry = create_default_tool_registry(

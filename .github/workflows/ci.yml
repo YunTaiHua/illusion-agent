@@ -31,4 +31,6 @@ jobs:
 
       - name: Test
         timeout-minutes: 20
+        env:
+          ILLUSION_BROWSER_PREWARM: "0"
         run: pytest tests/ -q --timeout=30
