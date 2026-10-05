@@ -476,6 +476,11 @@ def register_env_routes(app: FastAPI, host_config: Any | None = None) -> None:
                 "enabled": settings.title.enabled,
                 "model": settings.title.model,
             },
+            "browser": {
+                "kernel": settings.browser.kernel,
+                "headless": settings.browser.headless,
+                "proxy": settings.browser.proxy,
+            },
             "sandbox": _sandbox_settings_payload(settings.sandbox),
             "permission": _permission_risk_payload(),
             "permission_review": {

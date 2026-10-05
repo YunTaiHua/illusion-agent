@@ -23,12 +23,14 @@ import TodoPanel from './TodoPanel';
 import FileTreeSection from './FileTreeSection';
 import GitSection from './GitSection';
 import SessionFilesSection from './SessionFilesSection';
+import BrowserSection from './BrowserSection';
+import ToggleSwitch from './ToggleSwitch';
 import {
   AgentTypeIcon, ChartBarIcon, ChevronRightIcon, CpuIcon, LayersIcon, McpIcon, MonitorIcon,
-  MoonIcon, PanelRightIcon, PluginsIcon, RefreshIcon, RulesIcon, SparkleIcon, SunIcon,
-} from './icons';
+  MoonIcon, PanelRightIcon, PluginsIcon, RefreshIcon, RulesIcon, SparkleIcon, SunIcon, MaximizeIcon } from './icons';
 import type {
   AgentTaskItem,
+  BrowserState,
   FileTreeNode,
   GitStatusSnapshot,
   McpServerSnapshot,
@@ -95,6 +97,19 @@ interface RightPanelProps {
   width?: number;
   /** 展开时刷新资源回调（区块展开或面板展开时触发） */
   onRefreshResources?: () => void;
+  /** === 内置浏览器（启动器区块；本体在预览卡片的浏览器 Tab 中）=== */
+  /** 浏览器状态（browser_state） */
+  browserState?: BrowserState | null;
+  /** agent 操作中呼吸指示 */
+  browserOpActive?: boolean;
+  /** 在预览卡片中打开浏览器（未运行则启动） */
+  onOpenBrowserPreview?: (tabId?: string) => void;
+  /** 关闭浏览器（WS 请求发送器） */
+  onCloseBrowser?: () => void;
+  /** 打开浏览器并直达 URL（未运行则启动后导航） */
+  onOpenAndNavigate?: (url: string, newTab?: boolean) => void;
+  /** 插件启用/禁用开关回调 */
+  onPluginToggle?: (name: string, enabled: boolean) => void;
 }
 
 /**
@@ -112,6 +127,8 @@ export default function RightPanel({
   sessionFiles, sessionFilesLoading, onRequestSessionFiles, onOpenSessionFile,
   onRequestFileTree, onRequestGitStatus, onOpenFile, onOpenFileDiff,
   skills, plugins, rules, mcpServers, width = 260, onRefreshResources,
+  browserState, browserOpActive, onOpenBrowserPreview, onCloseBrowser,
+  onOpenAndNavigate, onPluginToggle,
 }: RightPanelProps) {
   // 主题（浅色/深色/跟随系统）— 移动到底部按钮，与左栏设置按钮风格一致
   const { theme, toggleTheme } = useTheme();
@@ -182,6 +199,16 @@ export default function RightPanel({
       </div>
       {tab === 'sections' ? (
       <>
+      {/* 内置浏览器启动器（点击在预览卡片中打开；本体为预览卡片浏览器 Tab） */}
+      <BrowserSection
+        lang={lang}
+        browserState={browserState ?? null}
+        browserOpActive={browserOpActive ?? false}
+        onOpenPreview={(tabId) => onOpenBrowserPreview?.(tabId)}
+        onCloseBrowser={() => onCloseBrowser?.()}
+        onOpenAndNavigate={(url) => onOpenAndNavigate?.(url)}
+      />
+
       {/* 智能体与任务（复用 /agent 双数据源：前台 agent + 后台任务通知；随会话切换） */}
       <CollapsibleSection
         title={t(lang, 'agents_title')}
@@ -288,7 +315,7 @@ export default function RightPanel({
         {plugins.length === 0 ? (
           <div className="px-2 py-1 text-xs text-content-disabled">{t(lang, 'no_plugins')}</div>
         ) : plugins.map((p) => (
-          <ItemRow key={p.name} name={p.name} description={p.description} tag={p.enabled ? undefined : t(lang, 'off_label')} />
+          <PluginRow key={p.name} plugin={p} lang={lang} onToggle={onPluginToggle} />
         ))}
       </CollapsibleSection>
 
@@ -537,6 +564,59 @@ function ItemRow({ name, description, tag }: { name: string; description: string
   );
 }
 
+/**
+ * 插件行（带启用/禁用 Switch）：
+ * 名称 + 状态徽标 + ToggleSwitch，点击名称展开描述
+ */
+function PluginRow({ plugin, lang, onToggle }: {
+  plugin: PluginSnapshot;
+  lang: UiLanguage;
+  onToggle?: (name: string, enabled: boolean) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [pending, setPending] = useState(false);
+  const hasDesc = !!plugin.description?.trim();
+
+  const handleToggle = (v: boolean) => {
+    if (!onToggle) return;
+    setPending(true);
+    onToggle(plugin.name, v);
+    // 乐观更新：资源快照回推后由父层刷新 enabled；此处仅短暂禁用防连点
+    setTimeout(() => setPending(false), 600);
+  };
+
+  return (
+    <div>
+      <div
+        className={`as-host w-[calc(100%_+_1rem)] flex items-center gap-2 -mx-2 pl-4 pr-2 py-1 rounded-lg text-xs transition-colors glass-option-hover`}
+        title={hasDesc ? plugin.description : plugin.name}
+      >
+        <button
+          onClick={() => hasDesc && setExpanded((e) => !e)}
+          className={`flex-1 min-w-0 text-left ${hasDesc ? 'cursor-pointer' : 'cursor-default'}`}
+        >
+          <AutoScrollText trigger="parent" className="text-content-primary font-medium">
+            {plugin.name}
+          </AutoScrollText>
+        </button>
+        {!plugin.enabled && (
+          <span className="text-[10px] text-content-secondary bg-[var(--badge-bg-subtle)] px-1.5 py-0.5 rounded-full font-medium shrink-0">{t(lang, 'off_label')}</span>
+        )}
+        <ToggleSwitch
+          checked={plugin.enabled}
+          onChange={handleToggle}
+          disabled={pending}
+          label={plugin.name}
+          title={`${plugin.name}: ${plugin.enabled ? t(lang, 'plugin_disable_hint') : t(lang, 'plugin_enable_hint')}`}
+        />
+      </div>
+      {expanded && hasDesc && (
+        <div className="px-7 pb-1.5 text-xs text-content-secondary leading-relaxed whitespace-pre-wrap">{plugin.description}</div>
+      )}
+    </div>
+  );
+}
+
 // ---- 智能体与任务行 ----
 
 /** 状态 → 英文徽标文案与配色（与会话文件 write/edit 徽标同款语言） */
@@ -596,11 +676,14 @@ function formatTokens(n: number): string {
  * @param props.onToggle - 折叠/展开切换回调
  */
 export function RightPanelControls({
-  lang, status, onToggle,
+  lang, status, onToggle, showPreviewRestore, onRestorePreview,
 }: {
   lang: UiLanguage;
   status: Record<string, unknown>;
   onToggle: () => void;
+  /** 预览列收起中：按钮组首位显示恢复入口 */
+  showPreviewRestore?: boolean;
+  onRestorePreview?: () => void;
 }) {
   const { theme, toggleTheme } = useTheme();
   const themeLabels: Record<Theme, string> = {
@@ -621,6 +704,17 @@ export function RightPanelControls({
 
   return (
     <div className="absolute top-3 right-[20px] z-20 flex flex-col items-center gap-2 select-none">
+      {/* 恢复预览列（收起中的 tab 与浏览器全部保活） */}
+      {showPreviewRestore && onRestorePreview && (
+        <button
+          onClick={onRestorePreview}
+          title={t(lang, 'preview_restore')}
+          aria-label={t(lang, 'preview_restore')}
+          className="w-8 h-8 flex items-center justify-center rounded-full glass-surface text-content-secondary glass-option-hover hover:text-primary transition-colors cursor-pointer"
+        >
+          <MaximizeIcon className="w-4 h-4" />
+        </button>
+      )}
       {/* 展开/收起右栏 */}
       <button
         onClick={onToggle}

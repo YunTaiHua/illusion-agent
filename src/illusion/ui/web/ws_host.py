@@ -74,6 +74,7 @@ from illusion.ui.protocol import (
     BackendEvent,
     FrontendRequest,
     TranscriptItem,
+    TranscriptMedia,
     format_permission_mode,
 )
 from illusion.ui.runtime import (
@@ -428,6 +429,10 @@ class WebBackendHost:
             return 1
         assert self._bundle is not None
         await start_runtime(self._bundle)
+        # 内置浏览器：接线右栏可视化事件（与 _get_or_build_bundle 的懒构建路径一致）
+        if getattr(self._bundle, "browser_manager", None) is not None:
+            self._bundle.browser_manager.on_state_change = self._emit_browser_state
+            self._bundle.browser_manager.on_frame = self._emit_browser_frame
         # 首次进入主动 sync，避免 context_window 为 0
         sync_app_state(self._bundle)
         # 初始化多工作区状态（默认工作区挂接已构建 bundle，其余懒构建）
@@ -517,6 +522,12 @@ class WebBackendHost:
         _ready_bundle = self._active_bundle() or self._bundle
         await self._web_api._push_resources(_ready_bundle)
         await self._web_api._push_models(_ready_bundle)
+        # Web 前端专属：ready 后推送浏览器初始状态。缺失时客户端在会话中途
+        # 重载后拿不到 open=true，桌面模式 BrowserHostLayer 不挂载 → agent
+        # 新建 tab 的 create 指令无人接（waitForAttach 超时阻塞分发循环）
+        _ready_manager = getattr(_ready_bundle, "browser_manager", None)
+        if _ready_manager is not None:
+            await self._web_api._push_browser_state(_ready_manager)
 
         # 版本更新检查：ready 后异步查询 PyPI（to_thread 不阻塞连接流程），
         # 有新版本则通过 update_available 事件推送
@@ -920,6 +931,27 @@ class WebBackendHost:
             # 工具执行完成
             if isinstance(event, ToolExecutionCompleted):
                 tool_use_id = getattr(event, "tool_use_id", "") or ""
+                # 浏览器工具截图：附到转录项（聊天卡片渲染）并推送右栏画面帧
+                # （浏览器回合结束展示事件）
+                media = None
+                meta = event.structured_output or {}
+                if event.tool_name.startswith("browser_") and meta.get("media_category") == "image":
+                    media = TranscriptMedia(
+                        mime=str(meta.get("media_type", "image/jpeg")),
+                        data=str(meta.get("media_data", "")),
+                    )
+                    if meta.get("media_data"):
+                        self._create_background_task(self._emit(BackendEvent(
+                            type="browser_frame",
+                            frame={
+                                "url": "",
+                                "jpeg_base64": meta.get("media_data", ""),
+                                "source": "tool",
+                                "tool_name": event.tool_name,
+                                # 截图来源 tab：多 tab 并存时前端按 tab 过滤，防串帧
+                                "tab_id": str(meta.get("tab_id") or ""),
+                            },
+                        )))
                 await self._emit(
                     BackendEvent(
                         type="tool_completed",
@@ -937,6 +969,7 @@ class WebBackendHost:
                             tool_name=event.tool_name,
                             is_error=event.is_error,
                             tool_use_id=tool_use_id or None,
+                            media=media,
                         ),
                     ),
                     session_id=session_id,
@@ -1967,6 +2000,10 @@ class WebBackendHost:
             )
             await start_runtime(bundle)
             sync_app_state(bundle)
+            # 内置浏览器：接线右栏可视化事件（browser_state / browser_frame）
+            if getattr(bundle, "browser_manager", None) is not None:
+                bundle.browser_manager.on_state_change = self._emit_browser_state
+                bundle.browser_manager.on_frame = self._emit_browser_frame
             # 同步 UI 语言：全局设置在所有 bundle 的 app_state 间保持一致
             if self._bundle is not None:
                 lang = self._bundle.app_state.get().ui_language
@@ -2046,6 +2083,16 @@ class WebBackendHost:
             state.bundle = None
         if bundles:
             await asyncio.gather(*(_close_bundle_quietly(b) for b in bundles))
+
+    # === 内置浏览器：右栏可视化事件（browser_state / browser_frame） ===
+
+    async def _emit_browser_state(self, payload: dict[str, Any]) -> None:
+        """BrowserManager 状态变化回调 → browser_state 事件（广播）。"""
+        await self._emit(BackendEvent(type="browser_state", browser=payload))
+
+    async def _emit_browser_frame(self, payload: dict[str, Any]) -> None:
+        """BrowserManager 截图回调 → browser_frame 事件（广播）。"""
+        await self._emit(BackendEvent(type="browser_frame", frame=payload))
 
     def _evict_idle_workspace_bundles(self) -> None:
         """关闭空闲工作区的 bundle（无物化会话且非活跃目录且过宽限期）。"""

@@ -12,6 +12,8 @@ eggs/
 .eggs/
 lib/
 lib64/
+# 前端源码目录与 venv 的 lib/ 惯例撞名，显式豁免
+!frontend/web/src/lib/
 parts/
 sdist/
 var/

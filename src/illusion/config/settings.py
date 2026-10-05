@@ -393,6 +393,29 @@ class NotificationSettings(BaseModel):
     sound: bool = True
 
 
+class BrowserSettings(BaseModel):
+    """内置浏览器设置（browser-use 插件）。
+
+    Attributes:
+        kernel: 托管内核选择（auto/chromium/chrome/msedge）；auto 按
+            "Playwright Chromium → 系统 Chrome → Edge" 链解析。
+            桌面模式（Electron <webview> 桥接）忽略此配置。
+        headless: 托管模式是否无头运行（桌面模式恒为可视 webview）
+        viewport_width / viewport_height: 默认视口尺寸
+        proxy: 托管模式代理。"auto"（默认）自动探测 Windows 系统代理
+            （注册表 ProxyEnable/ProxyServer）与 HTTP(S)_PROXY 环境变量；
+            显式值如 "http://127.0.0.1:7890" 直接使用；"off" 禁用。
+            注意 Playwright 无头 Chromium 不继承 Windows 系统代理，
+            需要代理访问外网时依赖此配置。桌面模式 webview 原生走系统代理。
+    """
+
+    kernel: str = "auto"
+    headless: bool = True
+    viewport_width: int = 1280
+    viewport_height: int = 720
+    proxy: str = "auto"
+
+
 class Settings(BaseModel):
     """IllusionAgent 主设置模型（env_N 分组格式）"""
 
@@ -414,6 +437,7 @@ class Settings(BaseModel):
     goal: GoalSettings = Field(default_factory=GoalSettings)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     notifications: NotificationSettings = Field(default_factory=NotificationSettings)
+    browser: BrowserSettings = Field(default_factory=BrowserSettings)
     agent_models: dict[str, str] = Field(default_factory=dict)  # 内置 agent 的默认模型固化（agent 名 → "inherit" | "env_N.model_M"）。
     enabled_plugins: dict[str, bool] = Field(default_factory=dict)
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)

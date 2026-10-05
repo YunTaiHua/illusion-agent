@@ -126,6 +126,8 @@ export function useTheme() {
     } catch {
       // localStorage 不可用时忽略
     }
+    // 桌面壳：nativeTheme 同步，内置浏览器 guest 的深浅随之切换
+    window.illusionDesktop?.setAppTheme?.(resolved)?.catch(() => undefined);
   }, [resolved]);
 
   // 监听系统主题变化：仅当 theme === 'system' 时跟随

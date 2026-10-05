@@ -285,6 +285,14 @@ def create_app(
         openapi_url=None,
     )
 
+    # 内置插件 seed 前置到服务启动（否则要等首个会话构建 runtime 才发生，
+    # 期间右栏插件列表/设置页看不到 browser-use）
+    try:
+        from illusion.browser.seeding import seed_builtin_browser_plugin
+        seed_builtin_browser_plugin()
+    except Exception:
+        log.exception("内置浏览器插件 seed 失败")
+
     # 认证层（可选，外层）→ 浏览器信任栅栏（内层）→ 应用。
     # Starlette 的 add_middleware 是 insert(0)：后添加的位于外层。
     # 认证缺失凭据返回 401；栅栏对非回环/跨站请求返回 403。

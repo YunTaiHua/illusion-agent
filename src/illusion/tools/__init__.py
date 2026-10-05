@@ -57,6 +57,7 @@ def create_default_tool_registry(
     mcp_manager: Any = None,
     channel_tools: list[BaseTool[Any]] | None = None,
     goal_enabled: bool = False,
+    browser_enabled: bool = False,
 ) -> ToolRegistry:
     """返回默认内置工具注册表
 
@@ -65,6 +66,8 @@ def create_default_tool_registry(
         channel_tools: 渠道内置工具列表（可选，渠道启用时由调用方传入）
         goal_enabled: 是否注册 goal 工具（settings.goal.enabled；goal 属根
             会话，工具经引擎的 tool_metadata 拿到 GoalManager）
+        browser_enabled: 是否注册内置浏览器工具（browser-use 插件启用时；
+            工具经引擎的 tool_metadata 拿到 BrowserManager）
 
     Returns:
         ToolRegistry: 工具注册表
@@ -103,6 +106,11 @@ def create_default_tool_registry(
     if goal_enabled:
         # goal 工具（get_goal/create_goal/update_goal）
         tools.extend([GetGoalTool(), CreateGoalTool(), UpdateGoalTool()])
+    if browser_enabled:
+        # 内置浏览器工具（browser-use 插件启用时；browser_* 前缀 12 个）
+        # 惰性导入：browser 子包引入 httpx 等依赖，避免未启用时增加启动开销
+        from illusion.tools.browser_tools import create_browser_tools
+        tools.extend(create_browser_tools())
     for tool in tools:
         registry.register(tool)
     if mcp_manager is not None:

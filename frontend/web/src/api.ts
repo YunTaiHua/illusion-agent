@@ -86,6 +86,15 @@ export interface SettingsResponse {
     /** 标题生成子代理模型（env_N.model_M），未设置时为 null（继承当前） */
     model: string | null;
   };
+  /** 内置浏览器配置（browser-use 插件） */
+  browser: {
+    /** 托管内核：auto / chromium / chrome / msedge */
+    kernel: string;
+    /** 托管模式是否无头运行 */
+    headless: boolean;
+    /** 代理：auto（系统代理/env 自动探测）/ off / 显式代理 URL */
+    proxy: string;
+  };
   /** 沙箱配置（可删改） */
   sandbox: SandboxSettings;
   /** 权限模式（default / plan / full_auto / yolo） */

@@ -39,6 +39,22 @@ from illusion.permissions.risk import RiskLevel, classify_command_risk, classify
 
 log = logging.getLogger(__name__)
 
+# 计划模式下阻止的浏览器交互类工具：这些工具在 normal 模式下标记为只读
+# （免审批体验），但会改变真实页面状态（导航/点击/输入/执行任意
+# JS/关闭 tab/改视口）——plan 模式的只读研究语义下必须先于 read-only 放行被拦。
+# 观察类工具（browser_snapshot/browser_screenshot/browser_wait）不受影响。
+PLAN_BLOCKED_BROWSER_TOOLS = frozenset({
+    "browser_navigate",
+    "browser_click",
+    "browser_type",
+    "browser_press_key",
+    "browser_scroll",
+    "browser_tabs",
+    "browser_close",
+    "browser_resize",
+    "browser_evaluate",
+})
+
 
 @dataclass(frozen=True)
 class PermissionDecision:
@@ -482,6 +498,18 @@ class PermissionChecker:
                     risk=risk,
                 )
             return PermissionDecision(allowed=True, reason="Auto mode allows all tools")
+
+        # 计划模式：浏览器交互类工具改变真实页面状态，不得凭 is_read_only
+        # 放行（见 PLAN_BLOCKED_BROWSER_TOOLS 注释）
+        if (
+            self._settings.mode == PermissionMode.PLAN
+            and tool_name in PLAN_BLOCKED_BROWSER_TOOLS
+        ):
+            return PermissionDecision(
+                allowed=False,
+                reason=f"{tool_name} changes browser page state and is blocked in plan mode",
+                auto_blocked=True,
+            )
 
         # 只读工具始终允许
         if is_read_only:

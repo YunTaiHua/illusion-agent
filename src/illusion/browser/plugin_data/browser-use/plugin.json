@@ -1,0 +1,6 @@
+{
+  "name": "browser-use",
+  "version": "0.5.2",
+  "description": "Built-in browser automation: open, navigate, inspect, click, type into, screenshot and verify web pages and local HTTP targets, with a live right-panel browser view. Frontend page picker inserts element refs into the chat input.",
+  "enabled_by_default": true
+}

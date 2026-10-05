@@ -29,7 +29,8 @@ import { GlassDropdown, type DropdownOption } from './GlassDropdown';
 import ToggleSwitch from './ToggleSwitch';
 import { CronTab } from './CronTab';
 import { AgentsTab, type AgentsSessionApi } from './AgentsTab';
-import type { AgentModelOption, WebWorkspaceItem } from '../types/protocol';
+import { BrowserTab } from './BrowserTab';
+import type { AgentModelOption, PluginSnapshot, WebWorkspaceItem } from '../types/protocol';
 import {
   envApi, oauthApi, settingsApi, channelsApi,
   type EnvInfo, type ModelConfig, type SettingsResponse, type CreateEnvPayload,
@@ -151,7 +152,7 @@ interface SetupFormProps {
   /** 是否首次登录模式（true 时 env 必填，标题为初始配置） */
   firstLogin: boolean;
   /** 初始打开的 Tab（目录按钮"管理目录…"直达目录空间页） */
-  initialTab?: 'settings' | 'agents' | 'workspaces' | 'channels' | 'cron' | 'sandbox';
+  initialTab?: 'settings' | 'agents' | 'workspaces' | 'channels' | 'cron' | 'sandbox' | 'extensions';
   /** 注册的工作区列表（web_workspaces 驱动） */
   workspaces: WebWorkspaceItem[];
   /** 注册新目录空间（WS web_add_workspace，后端校验） */
@@ -172,6 +173,13 @@ interface SetupFormProps {
   onSaved: () => void;
   /** 关闭表单回调 */
   onClose: () => void;
+  /** === 插件 Tab（App 透传会话数据）=== */
+  /** 插件快照（web_resources） */
+  plugins?: PluginSnapshot[];
+  /** 切换插件启用状态（WS web_plugin_toggle） */
+  onPluginToggle?: (name: string, enabled: boolean) => void;
+  /** 全局设置写入（WS web_set_setting；浏览器配置等） */
+  sendSetting?: (key: string, value: string | number | boolean) => void;
 }
 
 /** 输入框通用样式（聚焦散光） */
@@ -185,9 +193,9 @@ const labelClass = 'text-xs font-medium text-content-secondary mb-1.5';
  * @param props - 组件属性
  * @returns 表单 JSX
  */
-export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorkspace, onRemoveWorkspace, onRequestWorkspaces, onSetDefaultWorkspace, onSetUiLanguage, agentsApi, defaultWorkspace, onSaved, onClose }: SetupFormProps) {
+export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorkspace, onRemoveWorkspace, onRequestWorkspaces, onSetDefaultWorkspace, onSetUiLanguage, agentsApi, defaultWorkspace, onSaved, onClose, plugins, onPluginToggle, sendSetting }: SetupFormProps) {
   /** 当前 Tab */
-  const [tab, setTab] = useState<'settings' | 'agents' | 'workspaces' | 'channels' | 'cron' | 'sandbox'>(initialTab ?? 'settings');
+  const [tab, setTab] = useState<'settings' | 'agents' | 'workspaces' | 'channels' | 'cron' | 'sandbox' | 'extensions'>(initialTab ?? 'settings');
   /** 加载状态 */
   const [loading, setLoading] = useState(true);
   /** 加载错误 */
@@ -669,13 +677,14 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
         <div className="flex flex-1 min-h-0">
           {/* 左侧 Tab 导航栏（垂直） */}
           <div className="w-fit shrink-0 border-r border-border-light px-3 py-3 flex flex-col gap-1 overflow-y-auto">
-            {(['settings', 'agents', 'workspaces', 'channels', 'cron', 'sandbox'] as const).map((tabKey) => {
+            {(['settings', 'agents', 'workspaces', 'channels', 'cron', 'sandbox', 'extensions'] as const).map((tabKey) => {
               const isActive = tab === tabKey;
               const labelKey = tabKey === 'settings' ? 'setupFormSettingsTitle'
                 : tabKey === 'agents' ? 'setupFormAgentsTitle'
                 : tabKey === 'workspaces' ? 'setupFormWorkspacesTitle'
                 : tabKey === 'channels' ? 'setupFormChannelsTitle'
                 : tabKey === 'cron' ? 'setupFormCronTitle'
+                : tabKey === 'extensions' ? 'extensions_tab_title'
                 : 'setupFormSandboxTitle';
               return (
                 <button
@@ -713,6 +722,14 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
               onRemove={onRemoveWorkspace}
               onRefresh={onRequestWorkspaces}
               onSetDefault={onSetDefaultWorkspace}
+            />
+          ) : tab === 'extensions' ? (
+            <BrowserTab
+              lang={lang}
+              browserUse={(plugins ?? []).find((p) => p.name === 'browser-use')}
+              onToggle={(enabled) => onPluginToggle?.('browser-use', enabled)}
+              sendSetting={(key, value) => sendSetting?.(key, value)}
+              isDesktop={Boolean(window.illusionDesktop)}
             />
           ) : loading ? (
             <div className="flex items-center justify-center py-12 text-sm text-content-disabled">

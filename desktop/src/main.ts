@@ -12,7 +12,7 @@
  *
  * 生命周期对应 docs/zh-CN/desktop.md "托盘行为" 与 "守护进程生命周期"。
  */
-import { app, BrowserWindow, shell, dialog, Menu, ipcMain, Notification, session } from 'electron';
+import {BrowserWindow, Menu, Notification, app, dialog, ipcMain, nativeTheme, session, shell} from 'electron';
 import { spawn } from 'node:child_process';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
@@ -20,6 +20,7 @@ import { getUiLanguage } from './settings';
 import type { UiLanguage } from './settings';
 import { resolveRuntime } from './runtime';
 import { Backend } from './backend';
+import { startBrowserHost } from './browserHost';
 import { createTray } from './tray';
 import { t } from './i18n';
 import {
@@ -33,6 +34,8 @@ import {
 let mainWindow: BrowserWindow | null = null;
 let tray: ReturnType<typeof createTray> | null = null;
 let backend: Backend | null = null;
+// 内置浏览器控制服务器（browser-use；退出时关闭）
+let browserHost: ReturnType<typeof startBrowserHost> | null = null;
 // 当前应用后端 URL（用于区分内部导航与外链跳转）
 let appUrl = '';
 // 是否处于"真正退出"流程（区分关闭到托盘与退出）
@@ -69,6 +72,9 @@ function createWindow(): BrowserWindow {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      // 内置浏览器（browser-use）：右栏可视化由渲染进程 <webview> guest 承载，
+      // 命令经主进程控制服务器（browserHost.ts）下发到 guest webContents
+      webviewTag: true,
       spellcheck: false,
     },
   });
@@ -108,6 +114,10 @@ function quitApp(): void {
     backend.kill();
     backend = null;
   }
+  if (browserHost) {
+    browserHost.close();
+    browserHost = null;
+  }
   app.quit();
 }
 
@@ -126,6 +136,40 @@ function openTerminal(): void {
     spawn('x-terminal-emulator', [], { detached: true });
   }
 }
+
+// DevTools 窗口（含 <webview> guest 的）默认使用 Electron 内置图标——
+// 与主窗口/通知的图标不一致。新建窗口时统一换成应用图标（标题延迟一拍
+// 再判一次，DevTools 窗口创建时标题可能尚未定型）。
+const applyAppIconToDevTools = (): void => {
+  const icon = resolveWindowIcon();
+  if (!icon) return;
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue;
+    if (/devtools/i.test(win.getTitle())) {
+      try {
+        win.setIcon(icon);
+      } catch {
+        // 个别平台/窗口类型不支持 setIcon：忽略
+      }
+    }
+  }
+};
+app.on('browser-window-created', (_event, win) => {
+  if (/devtools/i.test(win.getTitle())) applyAppIconToDevTools();
+  const retry = setTimeout(applyAppIconToDevTools, 300);
+  win.once('closed', () => clearTimeout(retry));
+});
+
+// 内置浏览器 guest（webview）内的 window.open / target=_blank：绝不弹出
+// OS 窗口（webview 的 allowpopups 属性开启后 Electron 默认会另开
+// BrowserWindow），转为内置浏览器新 tab——与顶栏「+」同一条多开链路。
+app.on('web-contents-created', (_event, wc) => {
+  if (wc.getType() !== 'webview') return;
+  wc.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) browserHost?.openTabFromGuest(url);
+    return { action: 'deny' };
+  });
+});
 
 app.whenReady().then(async () => {
   // 移除默认应用菜单（File/Edit/View/Window）。
@@ -260,6 +304,13 @@ app.whenReady().then(async () => {
     }
     env.PATH = extraPaths.join(path.delimiter) + path.delimiter + origPath;
   }
+  // --- 内置浏览器桥接（browser-use）：启动本地控制服务器并把地址/token
+  // 注入后端 env，Python 侧 desktop_bridge 据此驱动渲染进程的 <webview> guest。
+  // 必须在 Backend.start 之前完成（后端启动时读取 env 决定后端模式）。
+  browserHost = startBrowserHost({ getWindow: () => mainWindow });
+  await browserHost.ready;
+  env.ILLUSION_DESKTOP_BROWSER_URL = browserHost.getUrl();
+  env.ILLUSION_DESKTOP_BROWSER_TOKEN = browserHost.getToken();
   backend = new Backend({ pythonPath: runtime.python, env });
   let url: string;
   try {
@@ -339,12 +390,49 @@ ipcMain.on('window-toggle-maximize', () => {
   else mainWindow.maximize();
 });
 ipcMain.on('window-close', () => mainWindow?.close());
+// 应用主题 → nativeTheme（Electron 传播到全部 webContents，内置浏览器
+// guest 的 prefers-color-scheme 随之切换）
+ipcMain.handle('app-set-theme', (_event, theme: unknown) => {
+  if (theme === 'light' || theme === 'dark' || theme === 'system') {
+    nativeTheme.themeSource = theme;
+  }
+});
+// 清除内置浏览器分区数据（persist:illusion-browser）；clearStorageData
+// 不含磁盘缓存，需一并 clearCache/clearCodeCaches
+ipcMain.handle('browser-clear-data', async () => {
+  const ses = session.fromPartition('persist:illusion-browser');
+  await ses.clearStorageData();
+  await ses.clearCache();
+  await ses.clearCodeCaches({});
+});
+// 仅清除缓存文件（保留 Cookie 与站点数据）
+ipcMain.handle('browser-clear-cache', async () => {
+  const ses = session.fromPartition('persist:illusion-browser');
+  await ses.clearCache();
+  await ses.clearCodeCaches({});
+});
 
 // ========== 外链拦截 IPC（preload 渲染进程点击拦截） ==========
 ipcMain.on('open-external', (_event, url: string) => {
   if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
     shell.openExternal(url).catch(() => {});
   }
+});
+
+// ========== 内置浏览器 IPC（browserHost：现存 tab 列表） ==========
+// 渲染进程 BrowserHostLayer 晚于 create 指令挂载时，同步补齐 webview 列表
+ipcMain.handle('browser-get-tabs', () => browserHost?.getTabs() ?? []);
+
+// ========== 内置浏览器 IPC（browserHost：tab guest 注册） ==========
+// 渲染进程 webview did-attach 后回报 webContentsId，主进程建立 tabId →
+// webContents 映射（Python 桥接命令的执行入口）
+ipcMain.on('browser-guest-attached', (_event, tabId: unknown, webContentsId: unknown) => {
+  if (typeof tabId === 'string' && typeof webContentsId === 'number') {
+    browserHost?.registerGuest(tabId, webContentsId);
+  }
+});
+ipcMain.on('browser-guest-closed', (_event, tabId: unknown) => {
+  if (typeof tabId === 'string') browserHost?.removeGuest(tabId);
 });
 
 // ========== 自动更新 IPC（preload 暴露 updater 桥，渲染进程顶栏图标调用） ==========

@@ -55,6 +55,30 @@ interface IllusionDesktopBridge {
     install: () => void;
     onEvent: (cb: (state: DesktopUpdaterState) => void) => () => void;
   };
+  /**
+   * 内置浏览器（桌面模式）：主进程驱动的 tab 生命周期桥。
+   * 仅桌面壳提供；主进程经 IPC 推送 tab 指令，渲染进程创建 <webview>
+   * 后回报 webContentsId（did-attach），主进程据此执行 Python 桥接命令。
+   */
+  browser?: {
+    /** webview guest preload 脚本路径（sandbox 下无 __dirname，经主进程下发） */
+    getWebviewPreload?: () => Promise<string>;
+    /** 同步现存受控 tab（晚挂载补齐 webview） */
+    getTabs?: () => Promise<Array<{ id: string; url: string }>>;
+    /** 订阅截图前信号（webview 移回视口保证 capturePage） */
+    /** 订阅主进程 tab 指令（create/close/select），返回取消订阅函数 */
+    onTabCommand: (cb: (cmd: { kind: 'create' | 'close' | 'select'; tabId: string; url?: string }) => void) => () => void;
+    /** webview did-attach 后回报 webContentsId（主进程建立命令执行映射） */
+    guestAttached: (tabId: string, webContentsId: number) => void;
+    /** webview 卸载时回报（主进程清理映射；主进程发起的 close 无需回报） */
+    guestClosed?: (tabId: string) => void;
+  };
+  /** 应用主题（light/dark/system）；经 nativeTheme 传播到内置浏览器 guest */
+  setAppTheme?: (theme: 'light' | 'dark' | 'system') => Promise<void>;
+  /** 清除内置浏览器分区全部数据（Cookie/缓存/站点数据） */
+  clearBrowserData?: () => Promise<void>;
+  /** 仅清除内置浏览器缓存（保留 Cookie 与站点数据） */
+  clearBrowserCache?: () => Promise<void>;
 }
 
 interface Window {

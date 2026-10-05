@@ -716,3 +716,118 @@ class TestWebQuery:
         result_evts = [c.args[0] for c in calls if c.args[0].type == "web_query_result"]
         assert len(result_evts) == 1
         assert result_evts[0].web_query_payload == "结果文本"
+
+
+from illusion.browser.base import TabInfo
+from illusion.ui.protocol import FrontendRequest
+
+
+class TestBrowserPickAndTabsHandlers:
+    """浏览器拾取/tab 处理器：自开兜底、payload 透传、错误不炸分发循环。"""
+
+    def _make_dispatcher(self, tmp_path, manager):
+        host = MagicMock()
+        host._emit = AsyncMock()
+        host._bundle = MagicMock()
+        host._bundle.cwd = str(tmp_path)
+        host._bundle.app_state.get.return_value = MagicMock(ui_language="zh-CN")
+        host._create_background_task = MagicMock(side_effect=lambda coro: coro.close())
+        host._sessions = {}
+        # 无活跃 bundle：_resolve_resource_bundle 回落 host._bundle（被测 manager）
+        host._active_bundle = MagicMock(return_value=None)
+        dispatcher = WebApiDispatcher(host)
+        host._bundle.browser_manager = manager
+        return dispatcher
+
+    @pytest.mark.asyncio
+    async def test_pick_start_missing_script_emits_error(self, tmp_path):
+        """无脚本（前端漏传 value）：回 error 事件，不挂起也不抛。"""
+        manager = MagicMock()
+        manager.is_open = True
+        manager.ensure_started = AsyncMock()
+        backend = MagicMock()
+        backend.get_active_tab = AsyncMock(return_value=TabInfo(id="t1", url="https://x", active=True))
+        manager.ensure_started.return_value = backend
+        dispatcher = self._make_dispatcher(tmp_path, manager)
+        req = FrontendRequest(type="web_browser_pick_start")
+        await dispatcher.handle(req)
+        evts = [c.args[0] for c in dispatcher._host._emit.call_args_list]
+        picks = [e for e in evts if e.type == "browser_pick_result"]
+        assert len(picks) == 1 and "error" in picks[0].pick
+
+    @pytest.mark.asyncio
+    async def test_pick_start_spawns_background_wait(self, tmp_path):
+        """有脚本：get_active_tab + 后台长任务等待（不阻塞分发循环）。"""
+        manager = MagicMock()
+        manager.is_open = True
+        backend = MagicMock()
+        backend.get_active_tab = AsyncMock(return_value=TabInfo(id="t1", url="https://x", active=True))
+        manager.ensure_started = AsyncMock(return_value=backend)
+        dispatcher = self._make_dispatcher(tmp_path, manager)
+        req = FrontendRequest(type="web_browser_pick_start", value="(() => Promise.resolve({status:'cancelled'}))()")
+        await dispatcher.handle(req)
+        backend.get_active_tab.assert_awaited_once()
+        dispatcher._host._create_background_task.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_pick_cancel_swallows_no_tab_error(self, tmp_path):
+        """取消时无可用 tab：静默（BrowserCommandError 不冒泡）。"""
+        from illusion.browser.base import BrowserCommandError
+        manager = MagicMock()
+        manager.is_open = True
+        backend = MagicMock()
+        backend.get_active_tab = AsyncMock(side_effect=BrowserCommandError("No open tabs."))
+        manager.ensure_started = AsyncMock(return_value=backend)
+        dispatcher = self._make_dispatcher(tmp_path, manager)
+        await dispatcher.handle(FrontendRequest(type="web_browser_pick_cancel"))
+        evts = [c.args[0] for c in dispatcher._host._emit.call_args_list]
+        assert not [e for e in evts if e.type == "error"]
+
+    @pytest.mark.asyncio
+    async def test_tabs_new_self_opens_browser(self, tmp_path):
+        """+ 新建 tab：自开兜底 + 建页瞬时 + 导航后台（不阻塞串行分发循环）。"""
+        manager = MagicMock()
+        manager.is_open = False
+        manager.panel_open = AsyncMock()
+        backend = MagicMock()
+        backend.new_tab = AsyncMock(return_value=TabInfo(id="t2", url="about:blank", active=True))
+        backend.navigate = AsyncMock(return_value=TabInfo(id="t2", url="https://new.example", active=True))
+        manager.ensure_started = AsyncMock(return_value=backend)
+        manager.panel_capture = AsyncMock()
+        dispatcher = self._make_dispatcher(tmp_path, manager)
+        req = FrontendRequest(type="web_browser_tabs", browser_action="new", url="https://new.example")
+        await dispatcher.handle(req)
+        manager.panel_open.assert_awaited_once()
+        # 建页瞬时完成（不带 URL），导航经后台任务执行
+        backend.new_tab.assert_awaited_once_with(None)
+        dispatcher._host._create_background_task.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_navigate_runs_in_background(self, tmp_path):
+        """面板导航后台执行：分循环不被页面加载阻塞（60s 冻结根因回归）。"""
+        manager = MagicMock()
+        manager.is_open = True
+        backend = MagicMock()
+        backend.list_tabs = AsyncMock(return_value=[TabInfo(id="t1", url="about:blank", active=True)])
+        backend.get_state = AsyncMock()
+        backend.get_state.return_value.tabs = [TabInfo(id="t1", url="about:blank", active=True)]
+        backend.get_state.return_value.viewport_width = 1280
+        backend.get_state.return_value.viewport_height = 720
+        backend.navigate = AsyncMock(return_value=TabInfo(id="t1", url="https://x", active=True))
+        manager.ensure_started = AsyncMock(return_value=backend)
+        manager.panel_capture = AsyncMock()
+        dispatcher = self._make_dispatcher(tmp_path, manager)
+        await dispatcher.handle(FrontendRequest(type="web_browser_navigate", url="https://x.example"))
+        # 处理器立即返回：navigate 在后台任务里
+        backend.navigate.assert_not_awaited()
+        dispatcher._host._create_background_task.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_tabs_close_when_closed_is_noop(self, tmp_path):
+        """关闭态下的 close/select：不开浏览器、不建 tab（保持既有语义）。"""
+        manager = MagicMock()
+        manager.is_open = False
+        manager.panel_open = AsyncMock()
+        dispatcher = self._make_dispatcher(tmp_path, manager)
+        await dispatcher.handle(FrontendRequest(type="web_browser_tabs", browser_action="close", tab_id="t1"))
+        manager.panel_open.assert_not_awaited()

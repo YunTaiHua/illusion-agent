@@ -122,7 +122,12 @@ class TestCookieUnit:
     def test_tampered_cookie_rejected(self, tmp_path) -> None:
         auth = create_web_auth(tmp_path / "s.json")
         name, value, _ = auth.mint_cookie("127.0.0.1")
-        bad = value[:-1] + ("A" if value[-1] != "A" else "B")
+        # 篡改签名字符串的首字符：base64 末位字符含非规范填充位，改末位可能
+        # 解码出同一签名字节串（约 1/64 概率），用例会随机假失败；首位必然
+        # 改变签名字节，篡改语义确定
+        head, body, signature = value.split(".")
+        tampered = "A" if signature[0] != "A" else "B"
+        bad = f"{head}.{body}.{tampered}{signature[1:]}"
         assert not auth.cookie_valid("127.0.0.1", f"{name}={bad}")
 
     def test_authority_bound_cookie(self, tmp_path) -> None:

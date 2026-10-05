@@ -27,6 +27,8 @@ import {
 import { t, type UiLanguage } from "../i18n";
 import type { FileMentionCandidate, WebWorkspaceItem } from "../types/protocol";
 import { highlightMentions } from "../utils/mention";
+import type { WebElementContextComposerAttachment } from "../lib/webElementContext";
+import WebElementContextAttachmentChip from "./WebElementContextAttachmentChip";
 import {
   CheckIcon,
   FolderClosedIcon,
@@ -227,6 +229,12 @@ interface PromptInputProps {
   activeMenu: string | null;
   /** 菜单展开/收起回调（打开时传 key，收起时传 null），用于和 Toolbar 下拉互斥收起 */
   onMenuOpen: (key: string | null) => void;
+  /** 网页元素拾取附件（pill 行数据源：浏览器元素选择结果） */
+  webElementContexts?: readonly WebElementContextComposerAttachment[];
+  /** 移除单条拾取附件 */
+  onRemoveWebElementContext?: (id: string) => void;
+  /** 整组移除拾取附件 */
+  onClearWebElementContexts?: () => void;
 }
 
 /**
@@ -240,6 +248,8 @@ interface PromptInputProps {
 export interface PromptInputHandle {
   /** 设置输入框内容（用于 rewind 回填被回退的 user 消息） */
   setDraft: (text: string) => void;
+  /** 在当前草稿末尾追加文本（空格分隔；元素拾取/提及类插入用） */
+  appendText: (text: string) => void;
 }
 
 const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
@@ -269,6 +279,9 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
       onRequestFileMentions,
       activeMenu,
       onMenuOpen,
+      webElementContexts,
+      onRemoveWebElementContext,
+      onClearWebElementContexts,
     },
     ref,
   ) {
@@ -294,6 +307,20 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
     useImperativeHandle(
       ref,
       () => ({
+        appendText: (text: string) => {
+          setValue((prev) => {
+            const needsSpace = prev.length > 0 && !/\s$/.test(prev);
+            return prev + (needsSpace ? ' ' : '') + text;
+          });
+          requestAnimationFrame(() => {
+            const ta = textareaRef.current;
+            if (ta) {
+              ta.focus();
+              const end = ta.value.length;
+              ta.setSelectionRange(end, end);
+            }
+          });
+        },
         setDraft: (text: string) => {
           setValue(text);
           setCaret(text.length);
@@ -1042,6 +1069,19 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
                 </span>
               </button>
             ))}
+          </div>
+        )}
+
+        {/* 网页元素拾取附件 pill 行（浏览器元素选择结果；悬停展开详情，
+            上下文附件行） */}
+        {webElementContexts && webElementContexts.length > 0 && (
+          <div className="flex max-w-full flex-wrap items-center gap-2 pb-2">
+            <WebElementContextAttachmentChip
+              contexts={webElementContexts}
+              onRemove={onRemoveWebElementContext}
+              onRemoveAll={onClearWebElementContexts}
+              lang={lang}
+            />
           </div>
         )}
 

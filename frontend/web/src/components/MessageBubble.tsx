@@ -13,6 +13,11 @@
 
 import React, { memo, useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+import {
+  parsePromptWebElementContexts,
+  type WebElementContextComposerAttachment,
+} from "../lib/webElementContext";
+import { GlobeIcon } from "./icons";
 import remarkGfm from "remark-gfm";
 import remarkSuperscript from "../remarkSuperscript";
 import { highlightMentions } from "../utils/mention";
@@ -428,6 +433,44 @@ const MessageActions = memo(function MessageActions({
  * @param props - 组件属性
  * @returns 返回消息气泡的 JSX 元素
  */
+/**
+ * 拾取元素上下文卡片（对话中美化渲染，替代裸字段文本）
+ *
+ * 每个拾取元素一张卡：Globe 图标 + 可访问名/文本标题 + tag·role 元信息 +
+ * 页面标题/URL；与 composer pill 的详情行同源字段。
+ */
+function WebElementContextCards({
+  contexts,
+}: {
+  contexts: readonly WebElementContextComposerAttachment[];
+}) {
+  return (
+    <div className="mt-1.5 flex w-full flex-col gap-1.5">
+      {contexts.map((ctx, index) => (
+        <div
+          key={ctx.id || index}
+          className="flex w-full items-start gap-2 rounded-lg border border-border-light bg-surface-card-alt px-2.5 py-2 text-left"
+        >
+          <GlobeIcon className="mt-0.5 w-4 h-4 shrink-0 text-content-disabled" />
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-xs font-medium text-content-primary">
+              {ctx.accessibleName || ctx.text || ctx.selector || ctx.tagName.toLowerCase()}
+            </div>
+            <div className="truncate font-mono text-[11px] text-content-disabled">
+              {[ctx.tagName.toLowerCase(), ctx.role ? `role=${ctx.role}` : null]
+                .filter(Boolean)
+                .join(" · ")}
+            </div>
+            <div className="truncate text-[11px] text-content-disabled">
+              {ctx.pageTitle || ctx.pageUrl}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function MessageBubble({
   item,
   toolInputMap,
@@ -441,6 +484,10 @@ function MessageBubble({
   footer,
 }: MessageBubbleProps) {
   if (item.role === "user") {
+    // 拾取元素块（# Web page elements:）单独美化渲染，正文走原纯文本路径
+    const { visibleContent, webElementContexts } = parsePromptWebElementContexts(item.text, {
+      workspacePath: "__chat__",
+    });
     return (
       <div className="flex justify-end py-1 group">
         <div className="flex flex-col items-end max-w-[min(82%,64ch)]">
@@ -448,9 +495,14 @@ function MessageBubble({
               长文件名等无空格长串在容器边界强制折行、不撑破最大宽度；
               break-word 的断点不参与 min-content 计算，flex 下容器会被
               最长串撑到超宽后才换行 */}
-          <div className="bg-surface-card-alt border border-border-light rounded-lg px-3 py-2 text-sm text-content-primary whitespace-pre-wrap [overflow-wrap:anywhere] select-text">
-            {highlightMentions(item.text)}
-          </div>
+          {visibleContent && (
+            <div className="bg-surface-card-alt border border-border-light rounded-lg px-3 py-2 text-sm text-content-primary whitespace-pre-wrap [overflow-wrap:anywhere] select-text">
+              {highlightMentions(visibleContent)}
+            </div>
+          )}
+          {webElementContexts.length > 0 && (
+            <WebElementContextCards contexts={webElementContexts} />
+          )}
           {showActions && (
             <MessageActions
               text={item.text}
@@ -509,6 +561,7 @@ function MessageBubble({
         isError={item.is_error}
         toolInput={toolInput}
         structuredOutput={item.structured_output}
+        media={item.media}
       />
     );
   }
@@ -618,12 +671,15 @@ const ToolResultBubble = memo(function ToolResultBubble({
   isError,
   toolInput,
   structuredOutput,
+  media,
 }: {
   name: string;
   text: string;
   isError?: boolean;
   toolInput?: Record<string, unknown>;
   structuredOutput?: Record<string, unknown>;
+  /** 附带媒体（browser_screenshot 等工具的截图；图片网格展示） */
+  media?: { mime: string; data: string };
 }) {
   const [open, setOpen] = useState(false);
   // summarizeInput 用原名做大小写不敏感匹配，显示名用映射后的友好名
@@ -690,6 +746,18 @@ const ToolResultBubble = memo(function ToolResultBubble({
           )}
         </span>
       </button>
+      {/* 浏览器截图：标题行下方直接展示（默认可见，点击放大预览） */}
+      {media?.data && (
+        <div className="mt-1 ml-3.5">
+          <img
+            src={`data:${media.mime || 'image/jpeg'};base64,${media.data}`}
+            alt={text || name}
+            onClick={() => openImagePreview(`data:${media.mime || 'image/jpeg'};base64,${media.data}`)}
+            className="max-w-sm w-full rounded-lg border border-border-light cursor-zoom-in select-none"
+            draggable={false}
+          />
+        </div>
+      )}
       {open && hasContent && (
         <div
           className={`mt-1 ml-3.5 p-2.5 font-mono text-xs leading-relaxed max-h-96 overflow-y-auto scrollbar-hidden rounded-lg select-text ${isError ? "text-danger bg-danger/5 border border-danger/20" : "text-content-primary bg-surface-card-alt border border-border-light"}`}

@@ -28,6 +28,13 @@ contextBridge.exposeInMainWorld('illusionDesktop', {
   maximize: () => ipcRenderer.send('window-maximize'),
   /** 关闭窗口（主进程 close 事件 → 最小化到托盘） */
   close: () => ipcRenderer.send('window-close'),
+  /** 应用主题（light/dark/system）：经 nativeTheme 传播到内置浏览器 guest */
+  setAppTheme: (theme: 'light' | 'dark' | 'system') =>
+    ipcRenderer.invoke('app-set-theme', theme),
+  /** 清除内置浏览器分区全部数据（Cookie/缓存/站点数据） */
+  clearBrowserData: () => ipcRenderer.invoke('browser-clear-data'),
+  /** 仅清除内置浏览器缓存（保留 Cookie 与站点数据） */
+  clearBrowserCache: () => ipcRenderer.invoke('browser-clear-cache'),
   /** 系统级通知（toast 透传）：主进程创建 Notification，点击聚焦应用窗口 */
   showNotification: (title: string, body: string) =>
     ipcRenderer.send('show-notification', {
@@ -49,6 +56,35 @@ contextBridge.exposeInMainWorld('illusionDesktop', {
       const handler = (_event: unknown, state: unknown) => cb(state);
       ipcRenderer.on('updater:event', handler);
       return () => ipcRenderer.removeListener('updater:event', handler);
+    },
+  },
+  /**
+   * 内置浏览器（browser-use）：主进程驱动的 tab 生命周期桥。
+   * 主进程经 'browser-tab-command' 推送 create/close/select 指令，渲染进程
+   * （App 级 BrowserHostLayer）据此创建/销毁 <webview>；webview did-attach
+   * 后经 guestAttached 回报 webContentsId，主进程建立命令执行映射。
+   */
+  browser: {
+    /** 订阅截图前信号（渲染进程临时把 webview 移回视口保证 capturePage） */
+    onPreCapture: (cb: () => void) => {
+      const handler = () => cb();
+      ipcRenderer.on('browser-pre-capture', handler);
+      return () => ipcRenderer.removeListener('browser-pre-capture', handler);
+    },
+    onTabCommand: (
+      cb: (cmd: { kind: 'create' | 'close' | 'select'; tabId: string; url?: string }) => void,
+    ) => {
+      const handler = (_event: unknown, cmd: { kind: 'create' | 'close' | 'select'; tabId: string; url?: string }) => cb(cmd);
+      ipcRenderer.on('browser-tab-command', handler);
+      return () => ipcRenderer.removeListener('browser-tab-command', handler);
+    },
+    guestAttached: (tabId: string, webContentsId: number) => {
+      ipcRenderer.send('browser-guest-attached', tabId, webContentsId);
+    },
+    /** 同步现存 tab（渲染进程 BrowserHostLayer 晚挂载时补齐 webview） */
+    getTabs: () => ipcRenderer.invoke('browser-get-tabs'),
+    guestClosed: (tabId: string) => {
+      ipcRenderer.send('browser-guest-closed', tabId);
     },
   },
 });

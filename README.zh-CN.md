@@ -4,7 +4,7 @@
 
 [![PyPI](https://img.shields.io/badge/pypi-illusion--agent-blue)](https://pypi.org/project/illusion-agent/) ![Python](https://img.shields.io/badge/python-%3E%3D3.10-green) ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey) [![GitHub](https://img.shields.io/badge/github-YunTaiHua%2Fillusion--agent-black)](https://github.com/YunTaiHua/illusion-agent)
 
-*幻想与实用，于此交融。融合多个开源项目精华，构建统一智能代理。*
+_幻想与实用，于此交融。融合多个开源项目精华，构建统一智能代理。_
 
 中文 | [English](README.md)
 
@@ -35,6 +35,7 @@ IllusionAgent 是一款开源的 AI 智能体平台。它将多模型语言模�
 - 🌍 **中英双语支持** - 所有 CLI 输出根据 `ui_language` 设置自动切换中英文
 - 📝 **全面 Markdown 渲染** - 直角边框表格、圆角卡片代码块、多色富文本
 - 🔌 **灵活扩展系统** - 插件、钩子、技能、MCP 服务器
+- 🌐 **内置浏览器** - agent 可驱动的浏览器：桌面版实时画面 / Web 版截图流，ARIA 快照、ref 交互、自由尺寸视口、元素拾取
 - 🔐 **完善权限控制** - 三种模式 + 细粒度规则 + Always Allow 一键放行
 - 🎯 **推理强度控制** - 支持 low/medium/high/xhigh/max 五种推理强度级别
 - 🪟 **Windows 系统深度优化** - 自动查找 Git、PowerShell 支持
@@ -159,6 +160,7 @@ illusion -m env_1.model_2 -e high -p "重构此模块"
 | 消息渠道 | [docs/en/channels.md](docs/en/channels.md) | [docs/zh-CN/channels.md](docs/zh-CN/channels.md) |
 | @ 提及（技能 / 会话 / 文件） | [docs/en/mentions.md](docs/en/mentions.md) | [docs/zh-CN/mentions.md](docs/zh-CN/mentions.md) |
 | 桌面版 | [docs/en/desktop.md](docs/en/desktop.md) | [docs/zh-CN/desktop.md](docs/zh-CN/desktop.md) |
+| 内置浏览器（browser-use） | [docs/en/browser.md](docs/en/browser.md) | [docs/zh-CN/browser.md](docs/zh-CN/browser.md) |
 
 ---
 

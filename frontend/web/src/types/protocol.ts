@@ -46,6 +46,8 @@ export interface TranscriptItem {
   is_command?: boolean;
   /** 工具结构化输出（tool_completed 携带；变更工具含增减行数等统计） */
   structured_output?: Record<string, unknown>;
+  /** 附带媒体（可选；browser_screenshot 等工具的截图，聊天工具卡片渲染） */
+  media?: { mime: string; data: string };
 }
 
 // ---- 任务快照 ----
@@ -416,18 +418,21 @@ export interface FileContentPayload {
  * tab 随会话隔离（切换会话/目录时全部关闭）。
  */
 export interface PreviewTab {
-  /** 唯一键：`${kind}|${path}`（与请求/响应关联键一致） */
+  /** 唯一键：`${kind}|${path}`（与请求/响应关联键一致；浏览器 tab 为 `browser|<后端 tab id>`） */
   key: string;
-  /** 文件路径（工作区内相对路径或绝对路径，请求原串） */
+  /** 文件路径（工作区内相对路径或绝对路径，请求原串；浏览器 tab 为页面标题或 URL） */
   path: string;
-  /** 视图类型：'content' 内容 | 'diff' 相对 HEAD 的变更 */
-  kind: 'content' | 'diff';
+  /** 视图类型：'content' 内容 | 'diff' 相对 HEAD 的变更 | 'browser' 内置浏览器 */
+  kind: 'content' | 'diff' | 'browser';
   /** 预览载荷（读取完成前为 null） */
   payload: FileContentPayload | null;
   /** 读取中（首个载荷到达前为 true） */
   loading: boolean;
   /** 合成 tab（智能体摘要等直接注入文本、无后端文件读取） */
   synthetic?: boolean;
+  /** 浏览器 tab 的后端 tab id（kind==='browser'；每个浏览器
+   *  tab 一个顶栏标签页、各自挂载 guest 的模型） */
+  browserTabId?: string;
 }
 
 // ---- 前端请求 ----
@@ -481,7 +486,77 @@ export type FrontendRequest =
   | { type: 'agent_generate_cancel'; request_id: string }
   | { type: 'agent_wizard_submit'; fields: Record<string, unknown>; scope: 'user' | 'project'; cwd?: string }
   // === Goal 状态栏操作（GoalBar 的 pause/resume/edit/clear）===
-  | { type: 'goal_action'; goal_action: 'pause' | 'resume' | 'edit' | 'clear'; goal_id?: string; revision?: number; objective?: string; session_id?: string };
+  | { type: 'goal_action'; goal_action: 'pause' | 'resume' | 'edit' | 'clear'; goal_id?: string; revision?: number; objective?: string; session_id?: string }
+  // === 内置浏览器（右栏可视化面板；browser-use 插件）===
+  | { type: 'web_browser_open' }
+  | { type: 'web_browser_close' }
+  | { type: 'web_browser_navigate'; url: string; tab_id?: string }
+  | { type: 'web_browser_back'; tab_id?: string }
+  | { type: 'web_browser_forward'; tab_id?: string }
+  | { type: 'web_browser_reload'; tab_id?: string }
+  | { type: 'web_browser_pick_start'; /** 拾取脚本（前端下发的 Promise 式选择器，注入激活 tab） */ value?: string }
+  | { type: 'web_browser_pick_cancel' }
+  | { type: 'web_browser_capture'; tab_id?: string }
+  | { type: 'web_browser_devtools'; tab_id?: string }
+  | { type: 'web_browser_tabs'; browser_action: 'list' | 'new' | 'close' | 'select'; tab_id?: string; url?: string }
+  | { type: 'web_browser_resize'; width: number; height: number }
+  | { type: 'web_browser_interact'; browser_action: 'move' | 'click' | 'dblclick' | 'scroll' | 'key' | 'input'; x?: number; y?: number; dx?: number; dy?: number; /** key 交互的键名（Playwright 语法，复用 value 字段） */ value?: string; /** input 交互的追加文本（复用 query 字段） */ query?: string }
+  // === 插件启用/禁用开关（右栏插件列表 + 设置页插件 Tab）===
+  | { type: 'web_plugin_toggle'; setting_key: string; setting_value: boolean };
+
+// ---- 内置浏览器载荷 ----
+
+/** 浏览器状态（browser_state 事件携带） */
+export interface BrowserState {
+  /** 面板/浏览器是否打开 */
+  open: boolean;
+  /** 后端模式：desktop（Electron webview）/ managed（Playwright 托管） */
+  mode: 'desktop' | 'managed' | string;
+  /** 受控标签页列表 */
+  tabs: BrowserTabInfo[];
+  /** 当前视口宽度 */
+  viewport_width?: number;
+  /** 当前视口高度 */
+  viewport_height?: number;
+  /** 最近一次导航失败信息（成功导航后的推送不携带，前端据此清除错误条） */
+  error?: string;
+}
+
+/** 受控标签页元数据 */
+export interface BrowserTabInfo {
+  id: string;
+  url: string;
+  title: string;
+  active: boolean;
+  /** 导航边界（工具栏回退/前进按钮置灰依据） */
+  can_go_back?: boolean;
+  can_go_forward?: boolean;
+}
+
+/** 拾取的页面元素信息（browser_pick_result 事件携带） */
+export interface BrowserPickResult {
+  tag: string;
+  role?: string;
+  name?: string;
+  /** 已写入页面 data-illusion-ref 的引用，agent 可直接 browser_click/browser_type */
+  ref: string;
+  selector: string;
+  editable: boolean;
+  url?: string;
+  title?: string;
+}
+
+/** 浏览器画面帧（browser_frame 事件携带） */
+export interface BrowserFrame {
+  tab_id?: string;
+  url?: string;
+  title?: string;
+  /** JPEG base64 编码 */
+  jpeg_base64: string;
+  /** 帧来源：tool（工具截图）= agent 操作产生；panel（面板主动捕获） */
+  source?: 'tool' | 'panel' | string;
+  tool_name?: string;
+}
 
 // ---- 后端事件 ----
 
@@ -568,6 +643,13 @@ export interface BackendEvent {
   // === rewind / 会话回退事件字段 ===
   /** session_rewind 携带的被回退 user 消息（回填输入框用） */
   restored_text?: string;
+  // === 内置浏览器（右栏可视化面板）===
+  /** browser_state 载荷（open/mode/tabs/viewport） */
+  browser?: BrowserState;
+  /** browser_frame 载荷（tab_id/url/jpeg_base64） */
+  frame?: BrowserFrame;
+  /** browser_pick_result 载荷（拾取的元素信息 + ref；error 表示拾取失败） */
+  pick?: BrowserPickResult | { error: string };
 
   // === web_* 推送事件字段 ===
   /** web_restore_started/completed 等会话级事件的归属会话 ID（可选，前端按此路由到会话视图） */

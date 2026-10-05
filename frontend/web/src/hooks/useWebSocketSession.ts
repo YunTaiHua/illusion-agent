@@ -32,6 +32,9 @@ import type {
   GitStatusSnapshot,
   GoalStatus,
   McpServerSnapshot,
+  BrowserState,
+  BrowserFrame,
+  BrowserPickResult,
   PendingToolCall,
   PluginSnapshot,
   PreviewTab,
@@ -47,6 +50,11 @@ import type {
   TurnOutlineEntry,
   WebWorkspaceItem,
 } from '../types/protocol';
+
+import {
+  BROWSER_PLACEHOLDER_KEY as browserPreviewPlaceholderKey,
+  reconcileBrowserPreviewTabs,
+} from '../lib/browserPreviewTabs';
 
 /**
  * 助手流式回复刷新间隔（毫秒）
@@ -323,6 +331,16 @@ export interface WebSocketSessionState {
   sessionFiles: SessionFileItem[];
   /** 会话文件拉取中（右栏会话文件区块加载态） */
   sessionFilesLoading: boolean;
+  /** 内置浏览器状态（browser_state；右栏浏览器区块数据源） */
+  browserState: BrowserState | null;
+  /** 浏览器最新画面帧（browser_frame；截图流数据源） */
+  browserFrame: BrowserFrame | null;
+  /** agent 是否正在操作浏览器（呼吸指示，工具启动后亮 5s） */
+  browserOpActive: boolean;
+  /** 浏览器启动中（openBrowserPreview 发出后到首个 open 状态间；启动指示器依据） */
+  browserStarting: boolean;
+  /** 元素拾取结果（seq 递增；null = 无新结果） */
+  browserPick: { seq: number; pick: BrowserPickResult | null; error: string } | null;
   /** 全量轮次大纲（null = 无后端大纲，导航退化为本地已载入轮次） */
   turnOutline: TurnOutlineEntry[] | null;
   /** 已载入最小轮号（1-based；分页恢复的头部边界） */
@@ -409,6 +427,8 @@ export interface WebSocketSessionState {
   requestGitStatus: () => void;
   /** 打开文件预览（web_read_file，内容视图；已打开同键 tab 时仅激活不重读） */
   openFilePreview: (path: string) => void;
+  /** 在预览卡片中打开/激活内置浏览器 Tab（未运行则启动） */
+  openBrowserPreview: (options?: { activateNewestBrowserTab?: boolean }) => void;
   /** 打开文件 diff 预览（web_file_diff，相对 HEAD 的变更视图） */
   openFileDiff: (path: string) => void;
   /** 拉取智能体与后台任务（web_request_agent_tasks，随活跃会话） */
@@ -567,9 +587,42 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   }, []);
   const [gitStatus, setGitStatus] = useState<GitStatusSnapshot | null>(null);
   const [gitLoading, setGitLoading] = useState(false);
+  // === 内置浏览器（右栏浏览器区块数据源）===
+  const [browserState, setBrowserState] = useState<BrowserState | null>(null);
+  // 最新浏览器状态 ref：事件回调内做顶栏标签页对账/切换判定（不经渲染闭包）
+  const browserStateRef = useRef<BrowserState | null>(null);
+  browserStateRef.current = browserState;
+  const [browserFrame, setBrowserFrame] = useState<BrowserFrame | null>(null);
+  /** 元素拾取结果（选择器模式；seq 递增供消费方去重） */
+  const [browserPick, setBrowserPick] = useState<{ seq: number; pick: BrowserPickResult | null; error: string } | null>(null);
+  const browserPickSeqRef = useRef(0);
+  /** agent 正在操作浏览器的呼吸指示（browser_* 工具启动后亮 5s） */
+  const [browserOpActive, setBrowserOpActive] = useState(false);
+  /** 浏览器启动中：openBrowserPreview 到首个 open 状态之间（预热后通常 <1s，冷启 2-5s） */
+  const [browserStarting, setBrowserStarting] = useState(false);
+  // 对账用同步读（reconcile 需要"启动中"判定占位页是否保留）
+  const browserStartingRef = useRef(false);
+  const browserStartingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearBrowserStarting = useCallback((): void => {
+    if (browserStartingTimerRef.current) {
+      clearTimeout(browserStartingTimerRef.current);
+      browserStartingTimerRef.current = null;
+    }
+    browserStartingRef.current = false;
+    setBrowserStarting(false);
+  }, []);
+  const browserOpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const markBrowserOpActive = useCallback((): void => {
+    setBrowserOpActive(true);
+    if (browserOpTimerRef.current) clearTimeout(browserOpTimerRef.current);
+    browserOpTimerRef.current = setTimeout(() => setBrowserOpActive(false), 5000);
+  }, []);
   // 预览标签页（多文件同时打开；随会话隔离，激活会话切换时统一清空）
   const [previewTabs, setPreviewTabs] = useState<PreviewTab[]>([]);
   const [activePreviewKey, setActivePreviewKey] = useState<string | null>(null);
+  // 最新激活键 ref：浏览器标签页对账（事件回调内）读取当前激活态
+  const activePreviewKeyRef = useRef<string | null>(null);
+  activePreviewKeyRef.current = activePreviewKey;
   const [modelOptions, setModelOptions] = useState<Option[]>([]);
   const [ready, setReady] = useState(false);
   /** 首帧引导中：ready 后首个会话内容（web_restore_completed）尚未呈现。
@@ -1067,16 +1120,121 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     openPreviewTab(path, 'diff');
   }, [openPreviewTab]);
 
-  /** 激活指定标签页 */
+  /** 零 tab 时的占位标签页键（用户打开浏览器但后端尚无 tab：显示引导层） */
+  const BROWSER_PLACEHOLDER_KEY = browserPreviewPlaceholderKey;
+  // 「+ 输入网址」流程：新 tab 落地后自动激活它（显式用户动作，不算抢前台）
+  const activateNewestBrowserTabRef = useRef(false);
+  // 在途关闭的浏览器 tab：本地已移除顶栏标签页、后端状态尚未回推的窗口内，
+  // 对账跳过后端列表里的这些 id（否则会被"补回缺失标签页"重新添加）
+  const closingBrowserTabsRef = useRef<Set<string>>(new Set());
+  // + 新建基准快照：置位时刻已知的后端 tab id（对账只认集合之外的新 tab，
+  // 防止 open 状态回推提前消费标记、焦点不迁移）
+  const knownBrowserTabIdsRef = useRef<Set<string>>(new Set());
+
+  /**
+   * 顶栏标签页对账：后端 tab 列表 → 预览卡片顶栏的浏览器标签页。
+   *
+   * 每个后端 tab 对应一个顶栏标签页（`browser|<id>`）。对账规则与边界见
+   * lib/browserPreviewTabs.reconcileBrowserPreviewTabs（纯函数，可单测）。
+   */
+  const syncBrowserPreviewTabs = useCallback((state: BrowserState | null): void => {
+    const activeKey = activePreviewKeyRef.current;
+    const result = reconcileBrowserPreviewTabs({
+      tabs: previewTabsRef.current,
+      state,
+      closingIds: closingBrowserTabsRef.current,
+      activateNewest: activateNewestBrowserTabRef.current,
+      activeKey,
+      knownBrowserTabIds: knownBrowserTabIdsRef.current,
+      placeholderHeld: state?.open === true || browserStartingRef.current,
+    });
+    closingBrowserTabsRef.current = result.closingIds;
+    activateNewestBrowserTabRef.current = result.activateNewest;
+    if (result.activateNewest === false) knownBrowserTabIdsRef.current = new Set();
+    if (result.tabs !== previewTabsRef.current) applyPreviewTabs([...result.tabs]);
+    if (result.activateKey !== undefined) setActivePreviewKey(result.activateKey);
+  }, [applyPreviewTabs]);
+
+  /**
+   * 在预览卡片中打开/激活内置浏览器 Tab。
+   *
+   * 顶栏标签页与后端 tab 一一对应（。后端浏览器未运行时随 web_browser_open 启动；
+   * 激活目标按优先级：显式 tabId（区块行点击的是哪一行就显示哪一行）→ 当前
+   * 后端激活 tab 对应者 → 最后一个浏览器标签页；activateNewestBrowserTab=true
+   * （+ 面板输入网址）时等新 tab 状态到达后激活最新一个。
+   */
+  const openBrowserPreview = useCallback(
+    (options?: { activateNewestBrowserTab?: boolean; tabId?: string }): void => {
+      if (options?.activateNewestBrowserTab) {
+        activateNewestBrowserTabRef.current = true;
+        knownBrowserTabIdsRef.current = new Set(
+          (browserStateRef.current?.tabs ?? []).map((tb) => tb.id),
+        );
+      }
+      const browserTabs = previewTabsRef.current.filter((tb) => tb.kind === 'browser' && tb.browserTabId);
+      if (browserTabs.length > 0) {
+        // 已有浏览器标签页：显式 tabId 优先，其次当前后端激活 tab 对应者
+        const activeBrowserId = browserStateRef.current?.tabs.find((tb) => tb.active)?.id;
+        const target = (options?.tabId
+          ? browserTabs.find((tb) => tb.browserTabId === options.tabId)
+          : undefined)
+          ?? browserTabs.find((tb) => tb.browserTabId === activeBrowserId)
+          ?? browserTabs[browserTabs.length - 1]!;
+        setActivePreviewKey(target.key);
+        // 显式指定行：同时把后端激活 tab 切到该 tab（否则画面/工具栏仍是旧 tab）
+        if (options?.tabId && options.tabId !== activeBrowserId) {
+          sendRequest({ type: 'web_browser_tabs', browser_action: 'select', tab_id: options.tabId });
+        }
+      } else if (!previewTabsRef.current.some((tb) => tb.key === BROWSER_PLACEHOLDER_KEY)) {
+        // 零 tab：占位标签页承接引导层（新 tab 到达后自动接管激活）
+        applyPreviewTabs([...previewTabsRef.current, {
+          key: BROWSER_PLACEHOLDER_KEY, path: 'browser', kind: 'browser',
+          payload: null, loading: false, synthetic: true,
+        }]);
+        setActivePreviewKey(BROWSER_PLACEHOLDER_KEY);
+      }
+      // 后端浏览器未运行时点亮启动指示（首个 open 状态到达或超时熄灭）
+      if (browserStateRef.current?.open !== true) {
+        browserStartingRef.current = true;
+        setBrowserStarting(true);
+        if (browserStartingTimerRef.current) clearTimeout(browserStartingTimerRef.current);
+        browserStartingTimerRef.current = setTimeout(clearBrowserStarting, 15000);
+      }
+      sendRequest({ type: 'web_browser_open' });
+    },
+    [sendRequest, applyPreviewTabs, clearBrowserStarting],
+  );
+
+  /** 激活指定标签页（浏览器标签页同时向后端切换对应 tab） */
   const activatePreviewTab = useCallback((key: string): void => {
     setActivePreviewKey(key);
-  }, []);
+    const tab = previewTabsRef.current.find((tb) => tb.key === key);
+    if (tab?.kind === 'browser' && tab.browserTabId
+      && browserStateRef.current?.tabs.find((tb) => tb.active)?.id !== tab.browserTabId) {
+      sendRequest({ type: 'web_browser_tabs', browser_action: 'select', tab_id: tab.browserTabId });
+    }
+  }, [sendRequest]);
 
   /** 关闭指定标签页（关闭激活 tab 时自动激活相邻 tab；agent 摘要在途请求一并作废） */
   const closePreviewTab = useCallback((key: string): void => {
     const tabs = previewTabsRef.current;
     const idx = tabs.findIndex((tb) => tb.key === key);
     if (idx < 0) return;
+    const closing = tabs[idx]!;
+    // 浏览器标签页：同步关闭后端 tab（顶栏与后端 tab 一一对应）；
+    // 登记在途关闭（状态回推前的对账不再补回该标签页）。
+    // 关闭最后一个浏览器标签页 = 关闭整个浏览器——留下零 tab 的空浏览器
+    // 只会得到一张空白卡片，需要再点一次才真正关闭
+    if (closing.kind === 'browser' && closing.browserTabId) {
+      const remaining = tabs.filter((tb) => tb.key !== key && tb.kind === 'browser');
+      if (remaining.length === 0) {
+        closingBrowserTabsRef.current.add(closing.browserTabId);
+        sendRequest({ type: 'web_browser_close' });
+      } else {
+        closingBrowserTabsRef.current.add(closing.browserTabId);
+        sendRequest({ type: 'web_browser_tabs', browser_action: 'close', tab_id: closing.browserTabId });
+      }
+    }
     const next = tabs.filter((tb) => tb.key !== key);
     applyPreviewTabs(next);
     if (agentViewRef.current) {
@@ -1093,11 +1251,20 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
 
   /** 关闭除指定 tab 外的全部标签页（保留智能体摘要合成 tab 时，在途请求结果仍需落地） */
   const closeOtherPreviewTabs = useCallback((key: string): void => {
+    const removed = previewTabsRef.current.filter((tb) => tb.key !== key);
+    // 被移除的浏览器标签页同步关闭后端 tab（本地单独移除会让注册表
+    // 留下无法 attached 的僵尸条目，tabs list 计数随之虚高）
+    for (const tb of removed) {
+      if (tb.kind === 'browser' && tb.browserTabId) {
+        closingBrowserTabsRef.current.add(tb.browserTabId);
+        sendRequest({ type: 'web_browser_tabs', browser_action: 'close', tab_id: tb.browserTabId });
+      }
+    }
     const kept = previewTabsRef.current.filter((tb) => tb.key === key);
     applyPreviewTabs(kept);
     if (!kept.some((tb) => tb.synthetic)) agentViewRef.current = null;
     setActivePreviewKey(key);
-  }, [applyPreviewTabs]);
+  }, [applyPreviewTabs, sendRequest]);
 
   /**
    * 原地切换指定 tab 的视图类型（内容 ↔ diff）
@@ -1581,6 +1748,9 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
 
         // 工具
         if ((evt.type === 'tool_started' || evt.type === 'tool_completed') && evt.item) {
+          // 浏览器工具呼吸指示（agent 操作中，右栏浏览器区块亮 5s）
+          const _bt = evt.item.tool_name ?? evt.tool_name ?? '';
+          if (_bt.startsWith('browser_')) markBrowserOpActive();
           if (evt.type === 'tool_started') {
             const buf = getBuffer(sid);
             if (buf.raw.trim() || buf.pending || buf.reasoning.trim()) {
@@ -1976,6 +2146,42 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
         setResourcesCwd(evt.cwd ?? null);
         return;
       }
+      if (evt.type === 'browser_state') {
+        // 内置浏览器状态（右栏浏览器区块 + 预览卡片顶栏标签页对账）
+        const next = (evt.browser as BrowserState) ?? null;
+        setBrowserState(next);
+        if (next?.open === true) clearBrowserStarting();
+        syncBrowserPreviewTabs(next);
+        return;
+      }
+      if (evt.type === 'browser_frame') {
+        // 浏览器画面帧（截图流数据源）
+        const frame = (evt.frame as BrowserFrame) ?? null;
+        setBrowserFrame(frame);
+        // 自动跟随：帧属于哪个后端 tab，就把预览卡片切到哪个标签页——
+        // agent 截图/操作的目标 tab 即用户应看到的内容（仅本地切换，
+        // 不回发 select，agent 的后端激活 tab 不被打扰）
+        const tabId = frame?.tab_id;
+        if (tabId) {
+          const key = `browser|${tabId}`;
+          const present = previewTabsRef.current.some((tb) => tb.key === key);
+          if (present && activePreviewKeyRef.current !== key) {
+            setActivePreviewKey(key);
+          }
+        }
+        return;
+      }
+      if (evt.type === 'browser_pick_result') {
+        // 元素拾取结果（选择器模式）
+        const payload = evt.pick as BrowserPickResult | { error: string } | undefined;
+        browserPickSeqRef.current += 1;
+        if (payload && 'error' in payload) {
+          setBrowserPick({ seq: browserPickSeqRef.current, pick: null, error: payload.error });
+        } else if (payload) {
+          setBrowserPick({ seq: browserPickSeqRef.current, pick: payload as BrowserPickResult, error: '' });
+        }
+        return;
+      }
       if (evt.type === 'web_agent_tasks') {
         // 智能体与后台任务（随会话隔离）：归属活跃会话或未标记时应用
         const sid = evt.session_id;
@@ -2240,7 +2446,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     }
 
     return () => { ws.close(); wsRef.current = null; };
-  }, [url, routeSessionId, ensureView, patchView, getBuffer, flushAssistantDelta, clearAssistantDelta, pushStatic, sendRaw, refreshRightPanel]);
+  }, [url, routeSessionId, ensureView, patchView, getBuffer, flushAssistantDelta, clearAssistantDelta, pushStatic, sendRaw, refreshRightPanel, syncBrowserPreviewTabs, clearBrowserStarting]);
 
   // 首次登录配置保存后手动清除 firstLogin 状态（避免再次打开表单仍显示首次登录）
   const clearFirstLogin = useCallback(() => setFirstLogin(false), []);
@@ -2276,7 +2482,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       activePreviewKey,
       activePreviewTab: previewTabs.find((tb) => tb.key === activePreviewKey) ?? null,
       activatePreviewTab, closePreviewTab, closeOtherPreviewTabs, switchPreviewTabKind,
-      requestFileTree, requestGitStatus, openFilePreview, openFileDiff, closeFilePreview,
+      requestFileTree, requestGitStatus, openFilePreview, openFileDiff, openBrowserPreview, closeFilePreview,
       requestAgentTasks, viewAgentSummary, requestSessionFiles, openSessionFile,
       ready, firstLogin, showThinking,
       swarmTeammates, swarmNotifications, bgAgentLabel, connected, connectionError,
@@ -2323,6 +2529,8 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       clearStaticItems, optimisticSubmit,
       // GoalBar（活跃视图）
       goalActionError, sendGoalAction, clearGoalActionError,
+      // 内置浏览器（右栏浏览器区块）
+      browserState, browserFrame, browserOpActive, browserStarting, browserPick,
       setOnSelectRequest, setOnCommandResult, setOnUpdateAvailable, setOnRewindRestored,
       setOnToast,
     };
@@ -2330,11 +2538,12 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     status, tasks, commands, mcpServers, skills, plugins, rules, modelOptions,
     agentTasks, fileTree, fileTreeLoadingPaths, gitStatus, gitLoading,
     sessionFiles, sessionFilesLoading,
+    browserState, browserFrame, browserOpActive, browserStarting, markBrowserOpActive,
     requestHistory, forkSession,
     subscribeFileMentions, requestFileMentions,
     previewTabs, activePreviewKey,
     activatePreviewTab, closePreviewTab, closeOtherPreviewTabs, switchPreviewTabKind,
-    requestFileTree, requestGitStatus, openFilePreview, openFileDiff, closeFilePreview,
+    requestFileTree, requestGitStatus, openFilePreview, openFileDiff, openBrowserPreview, closeFilePreview,
     requestAgentTasks, viewAgentSummary, requestSessionFiles, openSessionFile,
     ready, firstLogin, showThinking, swarmTeammates, swarmNotifications,
     bgAgentLabel, connected, connectionError, sessionViews, sessionList, activeSessionId,

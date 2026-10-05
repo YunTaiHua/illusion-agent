@@ -33,9 +33,18 @@ import { SetupForm } from './components/SetupForm';
 import { GoalBar } from './components/GoalBar';
 import { ToastMarkdown } from './components/ToastMarkdown';
 import type { GoalStatus } from './types/protocol';
+import { PICK_ELEMENT_SCRIPT } from './lib/webElementPickerScript';
+import {
+  buildPromptWithWebElementContexts,
+  dispatchWebElementContextAddToChat,
+  isWebElementContextPayload,
+  type WebElementContextComposerAttachment,
+  type WebElementContextPayload,
+} from './lib/webElementContext';
+import { useWebElementContexts } from './hooks/useWebElementContexts';
 import { isAppSupervised, notificationNeedsPriming, notifyDesktop, playToastSound, primeNotificationPermission, type NotifyLevel } from './utils/notify';
 import { authQueryString } from './utils/launchToken';
-import { FolderClosedIcon, FolderOpenIcon } from './components/icons';
+import { FolderClosedIcon, FolderOpenIcon, MaximizeIcon } from './components/icons';
 
 /** WebSocket 连接地址（附带 launch token：启动时 URL 携带，后续靠
  *  sessionStorage 恢复 / 后端签名 cookie 兜底） */
@@ -192,9 +201,159 @@ export default function App() {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   // 右栏默认折叠；折叠态下右栏整体隐藏，控制由顶部右侧按钮组（RightPanelControls）承载
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState(true);
+  const isDesktopShell = typeof window !== 'undefined' && !!window.illusionDesktop;
+  // 内置浏览器预览卡片只由显式用户动作打开（+ 面板/URL 栏/右栏浏览器区块），
+  // 浏览器启动（agent 首次操作或新 tab）不自动弹出、不抢占前台。
+  // 元素选择模式（预览卡片浏览器工具栏开关）+ 拾取结果 → 窗口事件 →
+  // composer pill 附件（picker payload 经事件流入 composer，
+  // 提交时序列化为 `# Web page elements:` 块）——两条拾取路径共用
+  const [browserPickMode, setBrowserPickMode] = useState(false);
+  const lastPickSeqRef = useRef(0);
+  // 工作区归属键（与 useWebElementContexts 同一口径：空目录回落 'default'）
+  const pickWorkspacePath = session.activeWorkspaceCwd || session.resourcesCwd || 'default';
+  /** 拾取 payload 归一化：picker 脚本返回 {status, element}，取 element 并补齐归属 */
+  const toElementPayload = useCallback((raw: Record<string, unknown>): WebElementContextPayload | null => {
+    const inner = (raw.element && typeof raw.element === 'object' && !Array.isArray(raw.element))
+      ? raw.element as Record<string, unknown>
+      : raw;
+    const payload = { ...inner, workspacePath: pickWorkspacePath } as WebElementContextPayload;
+    return isWebElementContextPayload(payload) ? payload : null;
+  }, [pickWorkspacePath]);
+  /** 拾取结果 → 派发加入聊天事件（web/桌面两条路径统一入口）。
+   *  必须引用稳定：桌面注入 effect 依赖该回调，引用抖动会导致
+   *  「重注入 + 取消脚本」把进行中的选择态打断、结果被丢弃。 */
+  const emitPickedElement = useCallback((raw: Record<string, unknown> | null | undefined) => {
+    if (!raw) return;
+    const payload = toElementPayload(raw);
+    if (payload) dispatchWebElementContextAddToChat(payload);
+  }, [toElementPayload]);
+  // composer 拾取附件（pill）：悬停展开详情、可单条/整组移除；提交时序列化
+  const webElementContexts = useWebElementContexts({
+    workspacePath: pickWorkspacePath,
+    scopeId: session.activeSessionId,
+  });
+  /** 桌面 webview 拾取回调（引用必须稳定：注入 effect 依赖它） */
+  const handleBrowserPickResult = useCallback((info: Record<string, unknown> | null) => {
+    setBrowserPickMode(false);
+    emitPickedElement(info);
+  }, [emitPickedElement]);
+  useEffect(() => {
+    const pick = session.browserPick;
+    if (!pick || pick.seq === lastPickSeqRef.current) return;
+    lastPickSeqRef.current = pick.seq;
+    if (pick.pick) {
+      emitPickedElement(pick.pick as unknown as Record<string, unknown>);
+    } else if (pick.error) {
+      showToast(pick.error, 'error');
+    }
+    setBrowserPickMode(false);
+  }, [session.browserPick, lang]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 拾取模式切换：开启向页面注入选择器脚本，关闭取消。
+  // 桌面模式由 BrowserHostLayer 直注入 webview（不经后端 pick 长任务），
+  // 避免同一 webview 双重注入；web 模式走后端 pick_start 长等待，
+  // 并顺带拉一帧截图让页面内的选择器 overlay 在流上可见。
+  const prevPickModeRef = useRef(false);
+  useEffect(() => {
+    if (browserPickMode === prevPickModeRef.current) return;
+    prevPickModeRef.current = browserPickMode;
+    if (isDesktopShell) return;
+    if (browserPickMode) {
+      session.sendRequest({ type: 'web_browser_pick_start', value: PICK_ELEMENT_SCRIPT });
+      session.sendRequest({ type: 'web_browser_capture' });
+    } else {
+      session.sendRequest({ type: 'web_browser_pick_cancel' });
+    }
+  }, [browserPickMode, session.sendRequest, isDesktopShell]);
+  // 选择态 Esc 兜底退出（焦点在页面内由注入脚本处理，
+  // 焦点在外层任何位置时此处兜底，保证选择态不因焦点位置卡住）
+  useEffect(() => {
+    if (!browserPickMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      setBrowserPickMode(false);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [browserPickMode]);
+  // 浏览器面板锁存：open 一旦发生就保持挂载（forceMount 语义），关闭浏览器
+  // 也不卸载 guest（下次 agent 导航零冷启动）
+  const [browserPaneOpen, setBrowserPaneOpen] = useState(false);
+  const prevActiveSessionRef = useRef<string | null>(null);
+
+  /**
+   * 预览卡片最大化：折叠区块栏 + 预览列占满右半屏
+   *
+   * 唯一实现，两个调用方——新标签页首次出现（自动）与用户显式打开浏览器
+   * （区块行点击 / 地址栏回车）。两处若各写一份就会互相覆盖（先展开又折叠
+   * 的抖动），也让宽度裁决分散成多份
+   */
+  const maximizePreview = useCallback(() => {
+    setRightPanelCollapsed(true);
+    setPreviewPanelWidth(Math.floor(window.innerWidth * MAX_RIGHT_STACK_RATIO));
+  }, []);
+
+  /**
+   * 展开预览卡片（agent 自动路径）
+   *
+   * 只挂载面板并激活浏览器标签页，绝不重排用户布局：agent 每个浏览器工具的
+   * 状态回推都会走到这里，任何宽度/折叠裁决都会让右栏反复展开折叠（闪烁根因）
+   */
+  const openBrowserPaneLight = (opts?: { activateNewestBrowserTab?: boolean }): void => {
+    setBrowserPaneOpen(true);
+    session.openBrowserPreview(opts);
+  };
+
+  /**
+   * 展开预览卡片（用户手动入口：区块行点击 / 地址栏回车）
+   *
+   * 揭开用户主动收起的那一层并最大化卡片——与文件预览的展开完全同路
+   * （同一 maximizePreview），不在这里另写宽度裁决
+   */
+  const expandForBrowser = (opts?: { activateNewestBrowserTab?: boolean; tabId?: string }): void => {
+    setBrowserPaneOpen(true);
+    setPreviewHidden(false);
+    maximizePreview();
+    session.openBrowserPreview(opts);
+  };
+  // 自动展开预览卡片（仅桌面）：agent 工具建 tab 的 create 指令需要渲染层
+  // guest 挂载点，否则 attach 超时、工具全瘫。web 端是截图流、没有 guest，
+  // 浏览器状态只显示在右栏区块——自动展开反而会在进入会话时误触发
+  // （后端先推 closed、随后真实 open 状态到达，被误读为"浏览器刚被打开"）。
+  //
+  // 触发面只有两个，都以"本页生命周期内的变化"为准：
+  // 1. 浏览器 closed→open 跃迁（agent 首次启动浏览器）；
+  // 2. 浏览器运行中出现新后端 tab（agent 建 tab 时卡片可能没开过——必须
+  //    展开，否则渲染层 guest 无处挂载、工具全瘫）。
+  // 首次收到 browser_state 时浏览器可能已经在运行（关窗即托盘、页面刷新）：
+  // 在场 tab 一律记为"已知"，绝不替用户弹开卡片——用户明确要求关闭的
+  // 状态必须保持关闭。
+  const browserPhaseRef = useRef<{ open: boolean; ids: Set<string> } | null>(null);
+  useEffect(() => {
+    if (!isDesktopShell) return;
+    const state = session.browserState;
+    if (!state) return; // 首个 browser_state 尚未到达
+    const prev = browserPhaseRef.current;
+    const ids = state.open ? state.tabs.map((tb) => tb.id) : [];
+    if (!prev) {
+      browserPhaseRef.current = { open: state.open === true, ids: new Set(ids) };
+      return;
+    }
+    const reopened = state.open === true && !prev.open;
+    const newTab = ids.some((id) => !prev.ids.has(id));
+    browserPhaseRef.current = { open: state.open === true, ids: new Set([...prev.ids, ...ids]) };
+    const noBrowserTab = !session.previewTabs.some((tb) => tb.kind === 'browser');
+    if (state.open && !document.hidden && noBrowserTab && (reopened || newTab)) {
+      setBrowserPaneOpen(true);
+      openBrowserPaneLight();
+    }
+  }, [isDesktopShell, session.browserState, expandForBrowser, session.previewTabs]);
   // 左栏宽度固定（不允许拖动调整宽度），仅保留折叠/展开能力
   const sidebarWidth = 280;
   const [rightPanelWidth, setRightPanelWidth] = useState(260);
+  // 预览列收起（display:none 保活：tab 与浏览器 guest 全部保留，
+  // 恢复按钮在 RightPanelControls 旁）
+  const [previewHidden, setPreviewHidden] = useState(false);
   // 文件预览停靠列宽与弹窗形态：默认停靠右栏右侧，可"弹窗查看"放大。
   // 初始宽度受右栏整体 ≤ 1/2 屏上限约束（窄窗口下收敛，避免拖拽级联在
   // 触底边界处产生跳变）
@@ -482,9 +641,15 @@ export default function App() {
 
     // 通道 2：所有其他输入（含 /resume、/model 等非 B 类指令）→ 当 user 消息发给 LLM
     // treat_as_text=true 告诉后端跳过命令注册表，直接当文本提交给 LLM
+    // 拾取附件（pill）在此提交边界序列化为 `# Web page elements:` 尾块
+    // （与composer 一致），发送后清空、不跨轮次残留；斜杠指令
+    // （通道 1）不携带上下文
+    const contexts: readonly WebElementContextComposerAttachment[] = webElementContexts.contexts;
+    const composed = buildPromptWithWebElementContexts(trimmed, contexts);
+    if (contexts.length > 0) webElementContexts.clearContexts();
     session.setBusyTrue();
-    session.optimisticSubmit(trimmed); // 乐观渲染 user 消息，后端回执按文本去重
-    session.sendRequest({ type: 'submit_line', line: trimmed, treat_as_text: true });
+    session.optimisticSubmit(composed); // 乐观渲染 user 消息，后端回执按文本去重
+    session.sendRequest({ type: 'submit_line', line: composed, treat_as_text: true });
     // 用户发送消息时清空持久化回退草稿，避免非欢迎态 rewind 残留影响后续
     setRewindDraft(null);
   };
@@ -568,7 +733,7 @@ export default function App() {
   // 设置配置表单显示状态（首次登录自动弹出，或点击左栏 settings 齿轮手动打开）
   const [showSetupForm, setShowSetupForm] = useState(false);
   // 设置表单初始页（目录按钮"管理目录…"直达目录空间页）
-  const [setupInitialTab, setSetupInitialTab] = useState<'settings' | 'agents' | 'workspaces' | 'channels' | 'cron' | 'sandbox'>('settings');
+  const [setupInitialTab, setSetupInitialTab] = useState<'settings' | 'agents' | 'workspaces' | 'channels' | 'cron' | 'sandbox' | 'extensions'>('settings');
   // 欢迎界面可见（无任何会话内容且非忙碌）：输入框目录按钮常显，可直接选目录新建。
   // 忙碌（首条消息生成）时不算欢迎态，输入框回到底部，避免与"思考中"指示器并存
   const welcomeVisible = session.connected && !session.busy
@@ -738,10 +903,11 @@ export default function App() {
     session.forkSession(turnsToKeep);
   }, [session.forkSession]);
 
-  // 文件/diff 预览出现时自动调整布局：折叠区块栏，让文件预览栏占满最大宽度（1/2 屏）。
-  // 以 tab 键（kind|path）首次出现为触发（打开新文件/切视图再次调整），载荷刷新
-  // （加载中→内容）不重复调整。若用户已手动点开区块栏或调整过各栏宽度
-  // （userAdjustedPanelsRef），不再自动折叠区块栏或调整预览列宽度，尊重用户自定义设置
+  // 文件/diff/浏览器预览出现时自动调整布局：折叠区块栏，让预览列占满最大
+  // 宽度（1/2 屏）。以 tab 键（kind|path）首次出现为触发（打开新文件/切视图
+  // 再次调整），载荷刷新（加载中→内容）不重复调整。若用户已手动点开区块栏
+  // 或调整过各栏宽度（userAdjustedPanelsRef），不再自动折叠区块栏或调整
+  // 预览列宽度，尊重用户自定义设置。进入浏览器与点击文件同样最大化。
   useEffect(() => {
     if (previewPopOut) return;
     // 用户已手动调整过右栏：不重置其折叠状态与预览列宽度
@@ -749,14 +915,12 @@ export default function App() {
     const tabs = session.previewTabs;
     if (tabs.length === 0) return;
     const seen = autoWidenKeysRef.current;
+    // 浏览器标签页与文件一致：首次出现即折叠区块栏 + 预览列满宽（最大化）
     const newKey = tabs.map((tb) => tb.key).find((k) => !seen.has(k));
     if (!newKey) return;
     seen.add(newKey);
-    // 首次打开该文件预览：折叠区块栏，让预览列占满最大宽度（1/2 屏）
-    setRightPanelCollapsed(true);
-    const maxTotal = Math.floor(window.innerWidth * MAX_RIGHT_STACK_RATIO);
-    setPreviewPanelWidth(maxTotal);
-  }, [session.previewTabs, previewPopOut]);
+    maximizePreview();
+  }, [session.previewTabs, previewPopOut, maximizePreview]);
 
   // 硬约束：区块栏与预览列同时可见时，两者总量不超 1/2 屏上限。
   // 用户拖宽区块栏或调整宽度后触发，仅收紧预览列以保证不越界，不改其余用户设置
@@ -775,12 +939,18 @@ export default function App() {
   // 仅清会话隔离数据），并统一触发 refreshRightPanel 重拉。
   useEffect(() => {
     if (!session.activeSessionId) return; // 尚未建立会话时不处理
+    // 仅在会话真正切换时重置：浏览器/文件预览 tab 与右栏状态跨渲染保持，
+    // 非切换触发的重置会让面板"展开又折叠"（闪烁根因）
+    if (prevActiveSessionRef.current === session.activeSessionId) return;
+    prevActiveSessionRef.current = session.activeSessionId;
+    if (browserPaneOpen) return; // 浏览器面板锁存期间不重置布局
+    setPreviewHidden(false);
     setRightPanelCollapsed(true);
     setPreviewPopOut(false);
     autoWidenKeysRef.current = new Set();
     userAdjustedPanelsRef.current = false;
     session.closeFilePreview();
-  }, [session.activeSessionId, session.closeFilePreview]);
+  }, [session.activeSessionId, session.closeFilePreview, browserPaneOpen]);
 
   /**
    * 处理选择会话（A 通道，零 suppress）
@@ -1055,7 +1225,10 @@ export default function App() {
         onConsumeInitialDraft={() => setRewindDraft(null)}
         subscribeFileMentions={session.subscribeFileMentions}
         onRequestFileMentions={session.requestFileMentions}
-        activeMenu={activeMenu} onMenuOpen={setActiveMenu}>
+        activeMenu={activeMenu} onMenuOpen={setActiveMenu}
+        webElementContexts={webElementContexts.contexts}
+        onRemoveWebElementContext={webElementContexts.removeContext}
+        onClearWebElementContexts={webElementContexts.clearContexts}>
         <Toolbar lang={lang} status={session.status}
           modelOptions={session.modelOptions}
           onSetSetting={(key, value) => {
@@ -1130,7 +1303,22 @@ export default function App() {
         )}
         {/* 顶部右侧按钮组（展开右栏/主题/上下文占比）：右栏折叠时显示；right=[20px] 避开滚动条 */}
         {rightPanelCollapsed && !welcomeVisible && !session.restoringSessionId && (
-          <RightPanelControls lang={lang} status={session.status} onToggle={toggleRightPanel} />
+          <RightPanelControls
+            lang={lang} status={session.status} onToggle={toggleRightPanel}
+            showPreviewRestore={previewHidden && session.previewTabs.length > 0}
+            onRestorePreview={() => setPreviewHidden(false)}
+          />
+        )}
+        {/* 预览列恢复（右栏展开、控件组不渲染时的独立入口；位于聊天列内不压右栏） */}
+        {previewHidden && !rightPanelCollapsed && session.previewTabs.length > 0 && !welcomeVisible && !session.restoringSessionId && (
+          <button
+            onClick={() => setPreviewHidden(false)}
+            title={t(lang, 'preview_restore')}
+            aria-label={t(lang, 'preview_restore')}
+            className="absolute top-3 right-3 z-20 w-8 h-8 flex items-center justify-center rounded-full glass-surface text-content-secondary glass-option-hover hover:text-primary transition-colors cursor-pointer"
+          >
+            <MaximizeIcon className="w-4 h-4" />
+          </button>
         )}
         {/* 顶部左侧按钮组（Sidebar 折叠态承载）：侧栏折叠即显示（欢迎态也可用），
             不与右栏显隐条件绑定 */}
@@ -1166,33 +1354,76 @@ export default function App() {
           onOpenFileDiff={(path) => session.openFileDiff(path)}
           skills={session.skills} plugins={session.plugins}
           rules={session.rules} mcpServers={session.mcpServers}
-          width={rightPanelWidth} />
+          width={rightPanelWidth}
+          browserState={session.browserState}
+          browserOpActive={session.browserOpActive}
+          onOpenBrowserPreview={(tabId) => expandForBrowser(tabId ? { tabId } : undefined)}
+          onCloseBrowser={() => session.sendRequest({ type: 'web_browser_close' })}
+          onOpenAndNavigate={(url, newTab) => {
+            // 右栏输入网址：打开浏览器；运行中=新开 tab（多开），未运行=直达到首 tab
+            expandForBrowser({ activateNewestBrowserTab: true });
+            if (newTab) {
+              session.sendRequest({ type: 'web_browser_tabs', browser_action: 'new', url });
+            } else {
+              session.sendRequest({ type: 'web_browser_navigate', url });
+            }
+          }}
+          onPluginToggle={(name, enabled) =>
+            session.sendRequest({ type: 'web_plugin_toggle', setting_key: name, setting_value: enabled })}
+        />
       </div>
       )}
 
       {/* 文件预览停靠列（多标签页）：右栏右侧独立显示（右栏折叠时仍在）；
           与右栏逻辑一致——欢迎界面时隐藏，回到会话视图自动恢复 */}
-      {session.previewTabs.length > 0 && session.activePreviewTab && !previewPopOut && !welcomeVisible && (
-        <div className="relative shrink-0">
+      {(session.previewTabs.length > 0 || browserPaneOpen) && !previewPopOut && (
+        <div
+          className="relative shrink-0"
+          style={previewHidden || welcomeVisible || session.previewTabs.length === 0
+            // 收起 = 整列移出屏幕保活（同宽、0.001 透明度保留合成层）：
+            // 布局空间立即释放（不留空白），guest 与 tab 全部存活。
+            // 判据只有用户动作（收起/欢迎页）与"确无标签页"：绝不依赖激活键，
+            // 激活键的中间态为空会让整列离屏 = "展开又瞬间折叠"的成因
+            ? {
+                position: 'fixed', left: -20000, top: 0,
+                width: previewPanelWidth, opacity: 0.001, pointerEvents: 'none',
+              }
+            : undefined}
+        >
           {/* 预览列拉伸热区：透明、不占布局、无视觉条 */}
           <div className="absolute inset-y-0 -left-2 w-4 cursor-col-resize z-10"
             onMouseDown={(e) => handleResizeStart('preview', e)} />
           <FilePreviewPanel
             lang={lang}
             tabs={session.previewTabs}
-            activeTab={session.activePreviewTab}
+            activeTab={session.activePreviewTab ?? session.previewTabs[0] ?? null}
             width={previewPanelWidth}
             hasDiff={previewHasDiff}
             rootDirLabel={session.activePreviewTab?.synthetic ? null : previewRootLabel}
             onActivateTab={session.activatePreviewTab}
             onCloseTab={session.closePreviewTab}
             onCloseOtherTabs={session.closeOtherPreviewTabs}
-            onCloseAllTabs={session.closeFilePreview}
             onOpenPath={(path) => session.openFilePreview(path)}
             onOpenContent={(key) => session.switchPreviewTabKind(key, 'content')}
             onOpenDiff={(key) => session.switchPreviewTabKind(key, 'diff')}
             onPopOut={() => setPreviewPopOut(true)}
-            onClose={() => session.closePreviewTab(session.activePreviewTab!.key)} />
+            browserState={session.browserState}
+            browserFrame={session.browserFrame}
+            browserOpActive={session.browserOpActive}
+            browserStarting={session.browserStarting}
+            isDesktop={isDesktopShell}
+            sendRequest={session.sendRequest}
+            onPickResult={handleBrowserPickResult}
+            onOpenBrowser={(url) => {
+              // + 面板输入网址：新建后端 tab（顶栏新增一个浏览器标签页），
+              // 新 tab 状态到达后自动激活它
+              expandForBrowser({ activateNewestBrowserTab: true });
+              session.sendRequest({ type: 'web_browser_tabs', browser_action: 'new', url });
+            }}
+            pickMode={browserPickMode && session.browserState?.open === true}
+            onTogglePickMode={() => setBrowserPickMode((v) => !v)}
+            onGuestTabOpened={() => session.openBrowserPreview({ activateNewestBrowserTab: true })}
+            onHideColumn={() => setPreviewHidden(true)} />
         </div>
       )}
       </div>
@@ -1360,6 +1591,11 @@ export default function App() {
           defaultWorkspace={session.sessions.find((s) => s.active)?.cwd}
           onSaved={handleSetupSaved}
           onClose={handleCloseSetupForm}
+          plugins={session.plugins}
+          onPluginToggle={(name, enabled) =>
+            session.sendRequest({ type: 'web_plugin_toggle', setting_key: name, setting_value: enabled })}
+          sendSetting={(key, value) =>
+            session.sendRequest({ type: 'web_set_setting', setting_key: key, setting_value: value })}
         />
       )}
 

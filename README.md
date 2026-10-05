@@ -38,6 +38,7 @@ a cron scheduler for unattended automation — spanning Feishu, WeChat, and QQ.
 - 🌍 **Bilingual Interface** - Chinese/English auto-switch via `ui_language` setting
 - 📝 **Comprehensive Markdown Rendering** - Tables, code blocks, rich text
 - 🔌 **Flexible Extension System** - Plugins, hooks, skills, MCP servers
+- 🌐 **Built-in Browser** - Agent-drivable browser with live view (desktop) or screenshot stream (web), ARIA snapshots, ref-based interaction, responsive viewport, element picking
 - 🔐 **Comprehensive Permission Control** - Three modes + fine-grained rules
 - 🎯 **Reasoning Effort Control** - low/medium/high/xhigh/max levels
 - 🪟 **Deep Windows Optimization** - Auto-detect Git, PowerShell support
@@ -164,6 +165,7 @@ The terminal (`illusion`) and Web UI (`illusion web`) are two independent, first
 | Messaging Channels | [docs/en/channels.md](docs/en/channels.md) | [docs/zh-CN/channels.md](docs/zh-CN/channels.md) |
 | @ Mentions (Skills / Sessions / Files) | [docs/en/mentions.md](docs/en/mentions.md) | [docs/zh-CN/mentions.md](docs/zh-CN/mentions.md) |
 | Desktop Edition | [docs/en/desktop.md](docs/en/desktop.md) | [docs/zh-CN/desktop.md](docs/zh-CN/desktop.md) |
+| Built-in Browser (browser-use) | [docs/en/browser.md](docs/en/browser.md) | [docs/zh-CN/browser.md](docs/zh-CN/browser.md) |
 
 ---
 
