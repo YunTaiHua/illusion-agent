@@ -2353,12 +2353,50 @@ class WebApiDispatcher:
         settings.enabled_plugins[name] = enabled
         _save_settings(settings)
 
-        if name == "browser-use":
-            for bundle in host._workspace_bundles():
-                try:
+        handled_engines: set[int] = set()
+        new_hook_by_cwd: dict[str, Any] = {}
+        for bundle in host._workspace_bundles():
+            try:
+                if name == "browser-use":
+                    # 工作区 bundle（管理器生命周期 + bundle 原引擎）+ 全部活会话引擎：
+                    # build_session_engine 对 tool_metadata 做了创建时快照拷贝，只更新
+                    # bundle 原引擎的话，用户正在对话的会话引擎拿到的仍是旧元数据
+                    # （browser_manager 缺失 → 工具调用报"插件未启用"）
                     await self._hot_toggle_browser_tools(bundle, enabled)
+                    handled_engines.add(id(bundle.engine))
+                # 插件钩子热生效（所有插件）：重建 bundle 级 HookExecutor
+                self._rebuild_hook_executor(bundle)
+                new_hook_by_cwd[str(bundle.cwd)] = bundle.hook_executor
+            except Exception:
+                log.exception("热切换插件失败: cwd=%s", bundle.cwd)
+        if name == "browser-use":
+            # 会话级 bundle 是工作区 bundle 的浅拷贝（browser_manager /
+            # hook_executor 是创建那一刻的引用快照）：逐会话把新管理器/
+            # 新执行器回绑，并补齐会话引擎的元数据快照，否则该会话永远
+            # 拿不到 browser_manager（工具调用报"插件未启用"）
+            managers_by_cwd = {
+                str(b.cwd): getattr(b, "browser_manager", None)
+                for b in host._workspace_bundles()
+            }
+            for session in getattr(host, "_sessions", {}).values():
+                engine = getattr(session, "engine", None)
+                s_bundle = getattr(session, "bundle", None)
+                if engine is None or s_bundle is None or id(engine) in handled_engines:
+                    continue
+                try:
+                    manager = managers_by_cwd.get(str(s_bundle.cwd)) or next(
+                        (m for m in managers_by_cwd.values() if m is not None), None)
+                    self._apply_browser_toggle(
+                        engine, s_bundle.tool_registry, manager, enabled)
+                    handled_engines.add(id(engine))
+                    if enabled and getattr(s_bundle, "browser_manager", None) is None:
+                        s_bundle.browser_manager = manager
+                    new_hook = new_hook_by_cwd.get(str(s_bundle.cwd))
+                    if new_hook is not None:
+                        s_bundle.hook_executor = new_hook
                 except Exception:
-                    log.exception("热切换 browser-use 工具失败: cwd=%s", bundle.cwd)
+                    log.exception("热切换 browser-use 会话引擎失败: sid=%s",
+                                  getattr(session, "session_id", "?"))
 
         # 推送新资源快照（插件/技能列表即时刷新）
         try:
@@ -2373,13 +2411,14 @@ class WebApiDispatcher:
             setting_value={"name": name, "enabled": enabled},
         ))
 
-    async def _hot_toggle_browser_tools(self, bundle: RuntimeBundle, enabled: bool) -> None:
-        """对单个 bundle 注册/注销浏览器工具并管理 BrowserManager 生命周期。"""
-        from illusion.browser import BrowserConfig, BrowserManager
-        from illusion.tools.browser_tools import create_browser_tools
+    async def _hot_toggle_browser_tools(self, bundle: RuntimeBundle, enabled: bool) -> Any:
+        """对单个 bundle 注册/注销浏览器工具并管理 BrowserManager 生命周期。
 
-        registry = bundle.tool_registry
-        engine = bundle.engine
+        Returns:
+            Any: 切换后的 BrowserManager（enabled=None 时为 None）。
+        """
+        from illusion.browser import BrowserConfig, BrowserManager
+
         settings = bundle.current_settings()
         if enabled:
             if getattr(bundle, "browser_manager", None) is None:
@@ -2392,19 +2431,44 @@ class WebApiDispatcher:
                 ))
             bundle.browser_manager.on_state_change = self._host._emit_browser_state
             bundle.browser_manager.on_frame = self._host._emit_browser_frame
-            engine._tool_metadata["browser_manager"] = bundle.browser_manager
-            existing = {t.name for t in registry.list_tools()}
-            for tool in create_browser_tools():
-                if tool.name not in existing:
-                    registry.register(tool)
-        else:
-            manager = getattr(bundle, "browser_manager", None)
-            if manager is not None:
-                await manager.aclose()
-            bundle.browser_manager = None
-            engine._tool_metadata.pop("browser_manager", None)
-            for tool in create_browser_tools():
-                registry.unregister(tool.name)
+            self._apply_browser_toggle(
+                bundle.engine, bundle.tool_registry, bundle.browser_manager, enabled)
+            return bundle.browser_manager
+        manager = getattr(bundle, "browser_manager", None)
+        if manager is not None:
+            await manager.aclose()
+        bundle.browser_manager = None
+        self._apply_browser_toggle(bundle.engine, bundle.tool_registry, None, enabled)
+        return None
+
+    def _apply_browser_toggle(self, engine: Any, registry: Any,
+                              manager: Any, enabled: bool) -> None:
+        """把浏览器工具注册/注销 + browser_manager 元数据落到一个引擎。"""
+        from illusion.tools.browser_tools import apply_browser_toggle
+
+        apply_browser_toggle(engine, registry, manager, enabled)
+
+    def _rebuild_hook_executor(self, bundle: RuntimeBundle) -> None:
+        """按最新设置/插件重建 bundle 级钩子执行器（插件热切换的 hooks 部分）。
+
+        会话运行时共享 bundle.hook_executor，重建即覆盖所有会话；
+        session_hook_store 原样保留（会话级钩子状态不丢）。
+        """
+        from illusion.hooks import HookExecutionContext, HookExecutor
+        from illusion.hooks.loader import load_hook_registry
+        from illusion.plugins.loader import load_plugins
+
+        settings = bundle.current_settings()
+        previous = bundle.hook_executor
+        bundle.hook_executor = HookExecutor(
+            load_hook_registry(settings, load_plugins(settings, bundle.cwd)),
+            HookExecutionContext(
+                cwd=Path(bundle.cwd).resolve(),
+                api_client=bundle.api_client,
+                default_model=settings.active_model_name,
+            ),
+            session_hook_store=previous._session_hook_store,
+        )
 
 def _collect_resources(bundle: RuntimeBundle) -> dict[str, Any]:
     """收集右侧栏资源快照（skills/agents/plugins/rules/mcp_servers）。

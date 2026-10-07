@@ -46,6 +46,30 @@ def _manager(context: ToolExecutionContext) -> BrowserManager:
     return manager
 
 
+def apply_browser_toggle(engine: Any, registry: Any, manager: Any, enabled: bool) -> None:
+    """把浏览器工具注册/注销 + browser_manager 元数据落到一个引擎。
+
+    供三端插件热切换共用（web dispatcher / TUI 斜杠命令）。engine 需要
+    持有可变映射 ``_tool_metadata``（QueryEngine 均满足）。
+
+    Args:
+        engine: 目标查询引擎（其 _tool_metadata 会被就地更新）
+        registry: 工具注册表（可能是每会话独立实例）
+        manager: BrowserManager（enabled=True 时必传；False 时忽略）
+        enabled: 启用（注册工具并注入元数据）或禁用（注销并移除）
+    """
+    if enabled:
+        engine._tool_metadata["browser_manager"] = manager
+        existing = {t.name for t in registry.list_tools()}
+        for tool in create_browser_tools():
+            if tool.name not in existing:
+                registry.register(tool)
+    else:
+        engine._tool_metadata.pop("browser_manager", None)
+        for tool in create_browser_tools():
+            registry.unregister(tool.name)
+
+
 def _error(exc: Exception) -> ToolResult:
     message = str(exc)
     if not isinstance(exc, BrowserCommandError):

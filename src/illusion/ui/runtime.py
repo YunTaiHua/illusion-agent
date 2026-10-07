@@ -902,10 +902,15 @@ async def close_runtime(bundle: RuntimeBundle) -> None:
     from illusion.swarm.team_helpers import cleanup_session_teams
 
     await cleanup_session_teams()
-    # 关闭内置浏览器（browser-use 插件启用时持有；幂等）
-    if bundle.browser_manager is not None:
+    # 关闭内置浏览器（browser-use 插件启用时持有；幂等）。
+    # TUI 斜杠命令热切换的 manager 存于引擎元数据（bundle 字段为空），一并兜底
+    metadata_manager = getattr(
+        getattr(bundle.engine, "_tool_metadata", None), "get", lambda k: None
+    )("browser_manager")
+    browser_manager = bundle.browser_manager or metadata_manager
+    if browser_manager is not None:
         try:
-            await bundle.browser_manager.aclose()
+            await browser_manager.aclose()
         except Exception:
             logging.getLogger(__name__).debug("关闭浏览器管理器失败", exc_info=True)
     # 关闭 MCP 管理器

@@ -831,3 +831,77 @@ class TestBrowserPickAndTabsHandlers:
         dispatcher = self._make_dispatcher(tmp_path, manager)
         await dispatcher.handle(FrontendRequest(type="web_browser_tabs", browser_action="close", tab_id="t1"))
         manager.panel_open.assert_not_awaited()
+
+
+class TestPluginToggleReachesSessionEngines:
+    """热切换必须覆盖会话引擎的元数据快照（build_session_engine 对
+    tool_metadata 做创建时拷贝——只更新 bundle 原引擎会让正在对话的
+    会话拿到旧元数据，browser_manager 缺失 → 工具调用报"插件未启用"）。"""
+
+    def test_toggle_on_sets_session_engine_metadata(self, monkeypatch, tmp_path):
+        from unittest.mock import AsyncMock, MagicMock
+        from illusion.ui.web.ws_web_api import WebApiDispatcher
+        from illusion.ui.protocol import FrontendRequest
+
+        host = MagicMock()
+        host._emit = AsyncMock()
+        host._bundle = MagicMock()
+        host._bundle.cwd = str(tmp_path)
+        session = MagicMock()
+        session.engine._tool_metadata = {}
+        session.bundle = host._bundle
+        host._sessions = {"s1": session}
+        host._workspace_bundles = MagicMock(return_value=[host._bundle])
+
+        # 热切换路径里的浏览器组件打桩（管理器/工具集均为 mock）
+        import illusion.ui.web.ws_web_api as mod
+        manager = MagicMock()
+        monkeypatch.setattr(
+            mod, "_load_settings",
+            lambda: MagicMock(enabled_plugins={}, browser=MagicMock(
+                kernel="auto", headless=True,
+                viewport_width=1280, viewport_height=720, proxy="auto")),
+        )
+        monkeypatch.setattr(mod, "_save_settings", lambda s: None)
+        import illusion.browser as browser_pkg
+        monkeypatch.setattr(browser_pkg, "BrowserManager", MagicMock(return_value=manager))
+        import illusion.tools.browser_tools as bt
+        monkeypatch.setattr(bt, "create_browser_tools", lambda: [])
+
+        dispatcher = WebApiDispatcher(host)
+        import asyncio
+        asyncio.run(dispatcher.handle(FrontendRequest(
+            type="web_plugin_toggle", setting_key="browser-use", setting_value=True)))
+
+        # 会话引擎元数据必须拿到 bundle 的 browser_manager（回归核心断言：
+        # 热切换前会话引擎的元数据快照里没有它）
+        assert session.engine._tool_metadata["browser_manager"]             is host._bundle.browser_manager
+
+    def test_toggle_off_clears_session_engine_metadata(self, monkeypatch, tmp_path):
+        from unittest.mock import AsyncMock, MagicMock
+        from illusion.ui.web.ws_web_api import WebApiDispatcher
+        from illusion.ui.protocol import FrontendRequest
+
+        host = MagicMock()
+        host._emit = AsyncMock()
+        host._bundle = MagicMock()
+        host._bundle.cwd = str(tmp_path)
+        session = MagicMock()
+        session.engine._tool_metadata = {"browser_manager": MagicMock()}
+        session.bundle = host._bundle
+        host._sessions = {"s1": session}
+        host._workspace_bundles = MagicMock(return_value=[])
+
+        import illusion.ui.web.ws_web_api as mod
+        monkeypatch.setattr(mod, "_load_settings",
+                            lambda: MagicMock(enabled_plugins={}))
+        monkeypatch.setattr(mod, "_save_settings", lambda s: None)
+        import illusion.tools.browser_tools as bt
+        monkeypatch.setattr(bt, "create_browser_tools", lambda: [])
+
+        dispatcher = WebApiDispatcher(host)
+        import asyncio
+        asyncio.run(dispatcher.handle(FrontendRequest(
+            type="web_plugin_toggle", setting_key="browser-use", setting_value=False)))
+
+        assert "browser_manager" not in session.engine._tool_metadata
