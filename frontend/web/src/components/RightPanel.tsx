@@ -485,7 +485,7 @@ export function CollapsibleSection({
         tabIndex={0}
         onClick={handleToggle}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleToggle(); } }}
-        className="group/head mx-3 px-2 py-2 flex items-center gap-2 glass-option-hover transition-colors rounded-lg cursor-pointer select-none"
+        className="group/head relative z-10 mx-3 px-2 py-2 flex items-center gap-2 glass-option-hover transition-colors rounded-lg cursor-pointer select-none"
       >
         <div className="flex-1 min-w-0 flex items-center gap-2 py-0.5">
           {/* 16px 图标槽位：常显类型图标；hover 时图标淡出、三角指示器淡入 */}
@@ -522,11 +522,13 @@ export function CollapsibleSection({
           )}
         </span>
       </div>
-      {/* 展开/折叠微动画（简洁 fade：纯透明度 150ms）。容器顶部留 2px 间隙：
-          首行悬浮高亮的圆角贴住滚动容器顶边时会被视觉截断 */}
+      {/* 展开/折叠微动画（简洁 fade：纯透明度 150ms）。首行视觉顶隙保持 2px（pt-3 -mt-2.5
+          相互抵消），但滚动容器上边缘随之抬升 10px，为行悬浮阴影的上半部分（上探 10px）
+          留出完整渲染空间——否则阴影会被容器上边缘裁掉，视觉上像被父区块截断。
+          头部 relative z-10 保证长列表滚动时行从头部下方穿过、且头部悬浮阴影盖住内容区 */}
       {!collapsed && (
         <div className="animate-fade">
-          <div className="px-5 pt-0.5 pb-2.5 flex flex-col gap-0.5 max-h-[50vh] overflow-y-auto scrollbar-hidden">
+          <div className="px-5 pt-3 pb-2.5 -mt-2.5 flex flex-col gap-0.5 max-h-[50vh] overflow-y-auto scrollbar-hidden">
             {children}
           </div>
         </div>

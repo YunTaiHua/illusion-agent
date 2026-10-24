@@ -939,12 +939,14 @@ pre code.hljs,
   box-shadow: var(--glass-shadow), var(--glass-highlight);
 }
 
-/* 玻璃面板内可交互项 — hover（白半透明 + 微高光 + 柔和阴影，不含 blur，避免嵌套性能问题） */
+/* 玻璃面板内可交互项 — hover（白半透明 + 微高光 + 柔和阴影，不含 blur，避免嵌套性能问题）
+   外阴影 0 2px 12px：列表行间距仅 2px（space-y-0.5），阴影浓密部分必须能跨过间隙
+   落在相邻卡片表面（reach≈14px），否则会在邻卡边缘处衰减殆尽，视觉上像被邻卡盖住截断 */
 .glass-option-hover:hover {
   background: var(--glass-option-hover-bg, rgba(255, 255, 255, 0.5));
   box-shadow:
     inset 0 1px 0 var(--glass-highlight-color, rgba(255, 255, 255, 0.5)),
-    0 2px 8px var(--glass-shadow-soft, rgba(31, 38, 135, 0.1));
+    0 2px 12px var(--glass-shadow-soft, rgba(31, 38, 135, 0.16));
 }
 
 /* 玻璃面板内可交互项 — 选中（更白 + 微高光 + 细线框） */

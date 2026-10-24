@@ -63,7 +63,7 @@ export default function BrowserSection({
         tabIndex={0}
         onClick={() => setCollapsed((v) => !v)}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCollapsed((v) => !v); } }}
-        className="group/head mx-3 px-2 py-2 flex items-center gap-2 glass-option-hover transition-colors rounded-lg cursor-pointer select-none"
+        className="group/head relative z-10 mx-3 px-2 py-2 flex items-center gap-2 glass-option-hover transition-colors rounded-lg cursor-pointer select-none"
       >
         <div className="flex-1 min-w-0 flex items-center gap-2 py-0.5">
           <span className="relative w-4 h-4 shrink-0 flex items-center justify-center">
@@ -91,8 +91,10 @@ export default function BrowserSection({
           + 底部常显网址输入框 */}
       {!collapsed && (
         <div className="animate-fade">
+          {/* pt-3 -mt-2.5：首行视觉顶隙 2px 不变，容器上边缘抬升 10px，
+              让 tab 行悬浮阴影的上半部分不被容器上边缘裁掉 */}
           {open && tabs.length > 0 && (
-            <div className="pt-0.5 pb-1 flex flex-col gap-0.5 max-h-56 overflow-y-auto dropdown-scroll">
+            <div className="pt-3 pb-1 -mt-2.5 flex flex-col gap-0.5 max-h-56 overflow-y-auto dropdown-scroll">
               {tabs.map((tb) => (
                 <div
                   key={tb.id}
@@ -130,8 +132,9 @@ export default function BrowserSection({
             </div>
           )}
           {/* 网址输入框（常显）：放大镜图标点击即提交；与子行同一网格
-              （mx-3 px-2 + 24px 图标槽），右缘 pr-6 与关闭 X 槽位等宽对齐 */}
-          <div className="mx-3 px-2 pr-8 pb-2.5 flex items-center gap-2">
+              （mx-3 px-2 + 24px 图标槽），右缘 pr-6 与关闭 X 槽位等宽对齐；
+              顶部留 10px 间隙：无 tab 展开时输入框不致贴住父区块头 */}
+          <div className="mx-3 px-2 pt-2.5 pr-8 pb-2.5 flex items-center gap-2">
             <span className="relative w-6 h-6 shrink-0 flex items-center justify-center">
               <button
                 onClick={submitUrl}
