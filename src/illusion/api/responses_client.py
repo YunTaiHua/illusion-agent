@@ -349,11 +349,14 @@ class ResponsesApiClient:
             ApiStreamEvent: 流式事件
         """
         # 事前降级：按当前模型能力将不支持的媒体块转为文本占位，
-        # 避免模型不支持时先失败一次再重试（切换模型后的历史媒体同理）
+        # 避免模型不支持时先失败一次再重试（切换模型后的历史媒体同理）；
+        # 模型有图片能力时也会过滤线格式不支持的媒体类型（如 SVG），
+        # 避免网关 422 拒绝后毒化该会话的后续所有请求
         stripped = strip_media_if_unsupported(request.messages, request.capabilities)
         if stripped is not None:
             log.info(
-                "Model %s lacks media capability; sending text placeholders instead of media.",
+                "Sending text placeholders for media blocks that cannot be "
+                "accepted as images (model %s).",
                 request.model,
             )
             request = replace(request, messages=stripped)

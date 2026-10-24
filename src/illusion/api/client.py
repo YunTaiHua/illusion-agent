@@ -226,6 +226,8 @@ def _is_media_related_error(exc: Exception) -> bool:
     Anthropic API 在不支持图片时可能返回：
     - 400 invalid_request_error
     - 404 "No endpoints found that support image input"
+    - 422（Anthropic 兼容网关对不支持的媒体类型返回
+      "unknown variant `image/svg+xml`" 一类的反序列化错误）
 
     注意：错误可能已被 _translate_api_error 转为 IllusionAgentApiError，
     此时 status_code 属性丢失，需从消息字符串中判断。
@@ -235,13 +237,13 @@ def _is_media_related_error(exc: Exception) -> bool:
 
     # 从错误消息字符串中提取状态码（适配已翻译的异常）
     if status is None:
-        for code in (404, 400):
+        for code in (404, 400, 422):
             if f"error code: {code}" in error_msg:
                 status = code
                 break
 
-    # 明确的图片不支持错误（404 或 400）
-    if status in {400, 404} and any(
+    # 明确的图片不支持错误（404/400/422）
+    if status in {400, 404, 422} and any(
         kw in error_msg for kw in ("image", "media", "unsupported")
     ):
         return True

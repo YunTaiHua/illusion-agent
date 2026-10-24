@@ -125,6 +125,18 @@ class MediaBlock(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict[str, Any])
 
 
+# API 线格式可解码的图片 MIME 类型。网关（Anthropic / OpenAI 兼容 / Responses）
+# 普遍只接受这几种位图；其余类型（如 image/svg+xml、image/bmp）一旦作为图片块
+# 进入历史，后续每个请求都会被 422 拒绝（毒化历史），必须在发送前转文本占位。
+SUPPORTED_IMAGE_MEDIA_TYPES: frozenset[str] = frozenset({
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+})
+
+
 def _build_tool_result_content(
     output: str,
     metadata: dict[str, Any],
@@ -161,7 +173,29 @@ def _messages_have_media(messages: list[ConversationMessage]) -> bool:
     return False
 
 
-def _media_placeholder(block: MediaBlock) -> str:
+def _messages_have_unsupported_media(messages: list[ConversationMessage]) -> bool:
+    """检查消息列表中是否包含线格式不支持的媒体类型块"""
+    for msg in messages:
+        for block in msg.content:
+            if (
+                isinstance(block, MediaBlock)
+                and block.media_type not in SUPPORTED_IMAGE_MEDIA_TYPES
+            ):
+                return True
+            if (
+                isinstance(block, ToolResultBlock)
+                and isinstance(block.content, list)
+                and any(
+                    isinstance(b, MediaBlock)
+                    and b.media_type not in SUPPORTED_IMAGE_MEDIA_TYPES
+                    for b in block.content
+                )
+            ):
+                return True
+    return False
+
+
+def _media_placeholder(block: MediaBlock, *, unsupported_format: bool = False) -> str:
     """生成图片块被降级为文本时的占位描述。
 
     无能力的模型看到的是文件元信息占位而非图片内容本身，
@@ -170,32 +204,64 @@ def _media_placeholder(block: MediaBlock) -> str:
     # MediaBlock.metadata 的键为 "size"——由 _build_tool_result_content 从
     # ToolResult 侧的 media_size 转码而来（file_read_tool 写入）
     size_str = f" ({block.metadata['size']} bytes)" if "size" in block.metadata else ""
+    if unsupported_format:
+        return (
+            f"[image file: {block.file_path}{size_str}, {block.media_type}] "
+            "This image format is not accepted by the API; "
+            "use the read_file tool to read it as text if you need its content."
+        )
     return (
         f"[image file: {block.file_path}{size_str}, {block.media_type}] "
         "This model does not support image input"
     )
 
 
-def _strip_media_from_messages(messages: list[ConversationMessage]) -> list[ConversationMessage]:
-    """将消息中的 MediaBlock 替换为文本描述（用于不支持图片的模型优雅降级）。
+def _strip_media_from_messages(
+    messages: list[ConversationMessage],
+    *,
+    model_supports_images: bool = False,
+) -> list[ConversationMessage]:
+    """将消息中的 MediaBlock 替换为文本描述。
 
     Args:
         messages: 原始消息列表（不修改）
+        model_supports_images: 模型具备图片能力时仅替换线格式不支持的
+            媒体类型块（如 SVG），能力可发的位图保留；不具备时替换全部
 
     Returns:
         转换后的消息列表
     """
+
+    def _should_strip(block: MediaBlock) -> bool:
+        return (
+            not model_supports_images
+            or block.media_type not in SUPPORTED_IMAGE_MEDIA_TYPES
+        )
+
     result: list[ConversationMessage] = []
     for msg in messages:
         new_blocks: list[Any] = []
         for block in msg.content:
             if isinstance(block, MediaBlock):
-                new_blocks.append(TextBlock(text=_media_placeholder(block)))
+                if _should_strip(block):
+                    new_blocks.append(TextBlock(
+                        text=_media_placeholder(
+                            block,
+                            unsupported_format=model_supports_images,
+                        ),
+                    ))
+                else:
+                    new_blocks.append(block)
             elif isinstance(block, ToolResultBlock) and isinstance(block.content, list):
                 stripped: list[Any] = []
                 for b in block.content:
-                    if isinstance(b, MediaBlock):
-                        stripped.append(TextBlock(text=_media_placeholder(b)))
+                    if isinstance(b, MediaBlock) and _should_strip(b):
+                        stripped.append(TextBlock(
+                            text=_media_placeholder(
+                                b,
+                                unsupported_format=model_supports_images,
+                            ),
+                        ))
                     else:
                         stripped.append(b)
                 new_blocks.append(ToolResultBlock(
@@ -213,9 +279,13 @@ def strip_media_if_unsupported(
     messages: list[ConversationMessage],
     capabilities: Any,
 ) -> list[ConversationMessage] | None:
-    """模型无图片能力时，将消息中的图片块转为文本占位。
+    """发送前将无法作为图片发出的媒体块转为文本占位。
 
-    capabilities 为 None（未声明）视为无图片能力（fail-closed）。
+    两类替换：
+    - 模型无图片能力（capabilities 为 None 视为无能力，fail-closed）：
+      全部图片块转占位；
+    - 模型有图片能力但历史携带线格式不支持的媒体类型（如 SVG）：
+      仅这些块转占位，避免 API 422 拒绝并毒化后续所有请求。
 
     Args:
         messages: 原始消息列表（不修改）
@@ -225,11 +295,14 @@ def strip_media_if_unsupported(
         需要替换时返回转换后的消息列表；无需任何修改时返回 None
         （调用方直接复用原列表，避免无谓深拷贝）。
     """
-    if bool(getattr(capabilities, "supports_images", False)):
+    model_supports_images = bool(getattr(capabilities, "supports_images", False))
+    if not model_supports_images:
+        if not _messages_have_media(messages):
+            return None
+        return _strip_media_from_messages(messages)
+    if not _messages_have_unsupported_media(messages):
         return None
-    if not _messages_have_media(messages):
-        return None
-    return _strip_media_from_messages(messages)
+    return _strip_media_from_messages(messages, model_supports_images=True)
 
 
 # 内容块联合类型

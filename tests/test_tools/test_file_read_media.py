@@ -85,6 +85,57 @@ async def test_read_image_oversized(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_read_svg_returns_text_not_media(tmp_path: Path):
+    """SVG 是文本格式：走文本路径返回源码，不作为图片块发给 API。
+
+    回归背景：API 线格式只接受 JPEG/PNG/GIF/WebP，SVG 以 image/svg+xml
+    图片块进入历史后，服务器 422 且会话历史被毒化（后续所有请求失败）。
+    """
+    context = _media_context(tmp_path, capabilities=ModelCapabilities(supports_images=True))
+    svg_path = tmp_path / "icon.svg"
+    svg_path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>\n',
+        encoding="utf-8",
+    )
+    result = await FileReadTool().execute(
+        FileReadToolInput(path=str(svg_path)),
+        context,
+    )
+    assert result.is_error is False
+    assert "<svg" in result.output
+    assert not result.metadata.get("media_category")
+
+
+@pytest.mark.asyncio
+async def test_read_bmp_rejected_as_binary(tmp_path: Path):
+    """BMP 位图不被 API 接受：按二进制读取报错，不产生媒体块毒化历史。"""
+    context = _media_context(tmp_path, capabilities=ModelCapabilities(supports_images=True))
+    bmp_path = tmp_path / "pic.bmp"
+    bmp_path.write_bytes(b"BM" + b"\x00" * 100)
+    result = await FileReadTool().execute(
+        FileReadToolInput(path=str(bmp_path)),
+        context,
+    )
+    assert result.is_error is True
+    assert "binary" in result.output.lower()
+    assert not result.metadata.get("media_category")
+
+
+@pytest.mark.asyncio
+async def test_read_webp_still_image(tmp_path: Path):
+    context = _media_context(tmp_path, capabilities=ModelCapabilities(supports_images=True))
+    img_path = tmp_path / "pic.webp"
+    img_path.write_bytes(b"RIFF" + b"\x00" * 100)
+    result = await FileReadTool().execute(
+        FileReadToolInput(path=str(img_path)),
+        context,
+    )
+    assert result.is_error is False
+    assert result.metadata.get("media_category") == "image"
+    assert result.metadata.get("media_type") == "image/webp"
+
+
+@pytest.mark.asyncio
 async def test_read_text_file_unchanged(tmp_path: Path):
     context = ToolExecutionContext(cwd=tmp_path)
     txt_path = tmp_path / "notes.txt"

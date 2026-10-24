@@ -729,11 +729,14 @@ class OpenAICompatibleClient:
             ApiStreamEvent: 流式事件
         """
         # 事前降级：按当前模型能力将不支持的媒体块转为文本占位，
-        # 避免模型不支持时先失败一次再重试（切换模型后的历史媒体同理）
+        # 避免模型不支持时先失败一次再重试（切换模型后的历史媒体同理）；
+        # 模型有图片能力时也会过滤线格式不支持的媒体类型（如 SVG），
+        # 避免网关 422 拒绝后毒化该会话的后续所有请求
         stripped = strip_media_if_unsupported(request.messages, request.capabilities)
         if stripped is not None:
             log.info(
-                "Model %s lacks media capability; sending text placeholders instead of media.",
+                "Sending text placeholders for media blocks that cannot be "
+                "accepted as images (model %s).",
                 request.model,
             )
             request = replace(request, messages=stripped)
@@ -1162,8 +1165,10 @@ class OpenAICompatibleClient:
     def _is_media_related_error(exc: Exception) -> bool:
         """检查错误是否可能由图片内容导致（用于优雅降级判断）
 
-        包括：JSON 解析错误、400/404 错误中与 content/image 相关的消息、
+        包括：JSON 解析错误、400/404/422 错误中与 content/image 相关的消息、
         空响应（某些模型遇到 image_url 直接返回空内容）。
+        422 是 vLLM 等网关对不支持的媒体类型（如 image/svg+xml）返回
+        "unknown variant `image/svg+xml`" 时的状态码，必须同样触发降级。
 
         注意：错误可能已被 _translate_error 转为 IllusionAgentApiError，
         此时 status_code 属性丢失，需从消息字符串中判断。
@@ -1173,7 +1178,7 @@ class OpenAICompatibleClient:
 
         # 从错误消息字符串中提取状态码（适配已翻译的异常）
         if status is None:
-            for code in (404, 400):
+            for code in (404, 400, 422):
                 if f"error code: {code}" in error_msg:
                     status = code
                     break
@@ -1182,8 +1187,8 @@ class OpenAICompatibleClient:
         if "expecting value" in error_msg:
             return True
 
-        # 400/404 错误且包含图片/内容相关关键词
-        return status in {400, 404} and any(
+        # 400/404/422 错误且包含图片/内容相关关键词
+        return status in {400, 404, 422} and any(
             kw in error_msg for kw in ("image", "media", "content", "param", "unsupported")
         )
 

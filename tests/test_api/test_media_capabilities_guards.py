@@ -126,6 +126,84 @@ class TestStreamPreGuard:
         blocks = collected[0].messages[0].content
         assert not any(isinstance(b, MediaBlock) for b in blocks)
 
+    @pytest.mark.asyncio
+    async def test_openai_strips_unsupported_media_type_with_capability(
+        self, monkeypatch
+    ):
+        """图片能力具备但媒体类型不被线格式接受（如 SVG）→ 发送前转文本占位。
+
+        回归背景：read_file 曾把 .svg 作为 image/svg+xml 图片块写入历史，
+        服务器 422 后该会话所有请求持续失败。
+        """
+        from illusion.api.openai_client import OpenAICompatibleClient
+
+        svg = MediaBlock(
+            file_path="/tmp/a.svg",
+            media_type="image/svg+xml",
+            data="PHN2Zy8+",
+            metadata={"size": 42},
+        )
+        collected: list[ApiMessageRequest] = []
+        client = OpenAICompatibleClient(api_key="k")
+        monkeypatch.setattr(client, "_stream_once", _capture_stream_once(collected))
+
+        request = _request(
+            ModelCapabilities(supports_images=True),
+            [svg, TextBlock(text="hi")],
+        )
+        await _drain(client, request)
+
+        blocks = collected[0].messages[0].content
+        assert not any(isinstance(b, MediaBlock) for b in blocks)
+        assert "image/svg+xml" in blocks[0].text
+
+    @pytest.mark.asyncio
+    async def test_openai_keeps_supported_media_type_with_capability(
+        self, monkeypatch
+    ):
+        from illusion.api.openai_client import OpenAICompatibleClient
+
+        collected: list[ApiMessageRequest] = []
+        client = OpenAICompatibleClient(api_key="k")
+        monkeypatch.setattr(client, "_stream_once", _capture_stream_once(collected))
+
+        request = _request(
+            ModelCapabilities(supports_images=True),
+            [_make_image()],
+        )
+        await _drain(client, request)
+
+        blocks = collected[0].messages[0].content
+        assert len([b for b in blocks if isinstance(b, MediaBlock)]) == 1
+
+
+class TestMediaRelatedErrorDetection:
+    """422（Unprocessable Entity）中与图片内容相关的错误也应触发媒体降级重试。
+
+    回归背景：vLLM 等网关对不支持的 image/svg+xml 返回 422
+    "unknown variant `image/svg+xml`"，此前仅识别 400/404，降级重试未触发。
+    """
+
+    def test_422_unsupported_image_variant_matches(self):
+        from illusion.api.openai_client import OpenAICompatibleClient
+
+        exc = Exception(
+            "Error code: 422 - {'error': {'message': 'Failed to deserialize the "
+            "JSON body into the target type: messages[185].content: unknown "
+            "variant `image/svg+xml`, expected one of `image/jpeg`, `image/jpg`, "
+            "`image/png`, `image/gif`, `image/webp`'}}"
+        )
+        assert OpenAICompatibleClient._is_media_related_error(exc) is True
+
+    def test_422_unrelated_error_does_not_match(self):
+        from illusion.api.openai_client import OpenAICompatibleClient
+
+        exc = Exception(
+            "Error code: 422 - {'error': {'message': 'Failed to deserialize the "
+            "JSON body into the target type: messages[5]: invalid tool schema'}}"
+        )
+        assert OpenAICompatibleClient._is_media_related_error(exc) is False
+
 
 class TestOpenaiImageSerialization:
     def test_image_serialized_as_image_url(self):

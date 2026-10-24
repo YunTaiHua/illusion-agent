@@ -33,9 +33,12 @@ from illusion.config.paths import resolve_relative_path
 from illusion.tools.base import BaseTool, ToolExecutionContext, ToolResult
 from illusion.utils.file_state_cache import FileState, FileStateCache
 
-# 图片文件扩展名集合
+# 图片文件扩展名集合：仅限 API 线格式可解码的位图类型
+# （网关普遍只接受 image/jpeg、image/png、image/gif、image/webp）。
+# SVG 是文本格式，走文本路径可让模型直接读源码；BMP 等其余位图若作为
+# 图片块进入历史，会被 API 以 422 拒绝并毒化该会话的后续所有请求。
 _IMAGE_EXTENSIONS: frozenset[str] = frozenset({
-    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg",
+    ".png", ".jpg", ".jpeg", ".gif", ".webp",
 })
 
 # 图片文件大小限制（字节）
@@ -50,12 +53,7 @@ def _is_image_file(path: Path) -> bool:
 def _get_media_type(path: Path) -> str:
     """获取文件的 MIME 类型。"""
     media_type, _ = mimetypes.guess_type(str(path))
-    if media_type:
-        return media_type
-    fallback = {
-        ".svg": "image/svg+xml",
-    }
-    return fallback.get(path.suffix.lower(), "application/octet-stream")
+    return media_type or "application/octet-stream"
 
 
 def _supports_images(capabilities: ModelCapabilities | None) -> bool:
@@ -97,8 +95,9 @@ class FileReadToolInput(BaseModel):
 class FileReadTool(BaseTool[FileReadToolInput]):
     """读取文本文件和图片/视频文件。
 
-    支持图片（PNG, JPG, GIF, WebP 等）与视频（MP4, WebM 等），通过
-    base64 编码传递给多模态模型。媒体读取受模型能力约束：工具执行上下文
+    支持图片（PNG, JPG, GIF, WebP——API 线格式可解码的位图类型）与
+    视频（MP4, WebM 等），通过 base64 编码传递给多模态模型。媒体读取
+    受模型能力约束：工具执行上下文
     metadata["model_capabilities"] 声明当前模型能力，缺失或未声明能力的
     媒体类别直接返回明确报错（fail-closed）。
     """
