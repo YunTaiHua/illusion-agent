@@ -82,6 +82,10 @@ export default function FileViewerModal({ lang, payload, loading, onClose, rootD
   if (!payload) return null;
 
   const [dir, filename] = splitFilePath(payload.path);
+  // 已删除/不存在文件：正文区已有居中空态卡片（图标 + 标题 + 路径 + 提示），
+  // 头部左上角不再重复渲染同一错误文案
+  const showMetaLine =
+    payload.error !== 'file_deleted' && payload.error !== 'file_not_found';
 
   return (
     <div
@@ -101,7 +105,7 @@ export default function FileViewerModal({ lang, payload, loading, onClose, rootD
               {(dir || rootDirLabel) && <span className="text-content-disabled font-normal">{dir || rootDirLabel}</span>}
               {filename}
             </div>
-            <PreviewMetaLine lang={lang} payload={payload} />
+            {showMetaLine && <PreviewMetaLine lang={lang} payload={payload} />}
           </div>
           <CopyButton lang={lang} payload={payload} />
           <button
