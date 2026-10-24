@@ -643,6 +643,88 @@ export default function ChatArea({
     setActiveTurn(current);
   }, [firstLoadedTurn, turns.length]);
 
+  // === 宽度重排时的视口再适应（手动滚动锚点）===
+  // 右栏展开/收起、拖拽改宽、预览列最大化、侧栏折叠等都会瞬时改写聊天列
+  // 宽度：全部文本按新宽度重新换行、scrollHeight 随之增减，而 scrollTop 是
+  // 像素值不会随重排自动校正——视口内容整体漂移（底部跟随脱底、阅读位置
+  // 窜上窜下）。容器上的原生 overflow-anchor 已显式关闭（会与底部跟随、
+  // 历史前插的补偿逻辑互相打架），这里手动实现：
+  // - 持续记录「视口顶缘锚点」（顶缘命中的屏幕尺度最深块级内容 + 距顶缘
+  //   的偏移 + 捕获时的容器宽度）；
+  // - 容器尺寸变化后（RO 回调运行于重排后、绘制前，无闪烁）：底部跟随态
+  //   直接重新贴底；阅读态把锚点块拉回原视口偏移处。仅高度变化（输入框
+  //   增高等，不引起换行）不干预，交由浏览器 scrollTop 钳制兜底。
+  // 关键不变量：锚点必须反映「重排前」的视口几何。宽度变化常随 React 提交
+  // 而来（面板挂载/卸载、拖拽 setState），提交内的无依赖捕获 effect 会在
+  // 重排之后量取几何——若照常覆盖锚点，RO 恢复会空转（目标==当前位置）。
+  // 因此锚点带宽度戳：捕获发现宽度不一致即跳过，旧锚点留给 RO 消费。
+  const viewportAnchorRef = useRef<{
+    el: Element;
+    offset: number;
+    width: number;
+  } | null>(null);
+
+  /** 记录当前视口顶缘锚点：自内容包裹层向下，取首个底缘越过容器顶缘的
+   *  子级；若其横跨顶缘（阅读线穿块而过）且比视口还高、仍有非 inline 子级
+   *  则继续下沉——长轮次内阅读时锚点落在消息级而非整轮级，重排后视口漂移
+   *  最小（选点规则近似浏览器原生滚动锚定；inline 元素跨行时是联合矩形，
+   *  不作锚点）。
+   *  默认带宽度戳守卫：锚点宽度与当前容器宽度不一致（宽度变化的重排在即）
+   *  时跳过，保留重排前的真锚点给 RO 消费；RO 消费完毕经 force 重建。 */
+  const captureScrollAnchor = useCallback((force = false) => {
+    const el = scrollRef.current;
+    const wrapper = el?.firstElementChild ?? null;
+    if (!el || !wrapper) {
+      viewportAnchorRef.current = null;
+      return;
+    }
+    if (
+      !force &&
+      viewportAnchorRef.current &&
+      viewportAnchorRef.current.width !== el.clientWidth
+    ) {
+      return;
+    }
+    const contTop = el.getBoundingClientRect().top;
+    let node: Element | null = null;
+    let current: Element = wrapper;
+    for (;;) {
+      let next: Element | null = null;
+      const children = current.children;
+      for (let i = 0; i < children.length; i++) {
+        const child = children[i]!;
+        if (child.getBoundingClientRect().bottom > contTop) {
+          next = child;
+          break;
+        }
+      }
+      if (!next) {
+        // 全部子级都在顶缘之上（内容矮于视口等）：以包裹层自身为锚
+        node = current === wrapper ? wrapper : current;
+        break;
+      }
+      if (
+        next.getBoundingClientRect().top > contTop ||
+        next.children.length === 0 ||
+        getComputedStyle(next).display === "inline" ||
+        next.getBoundingClientRect().height <= el.clientHeight
+      ) {
+        // 完全位于顶缘之下（顶缘即阅读线）、叶子块、inline 元素，或高度
+        // 不超过视口的块：定锚。只对"比视口还高的块"继续下沉——锚点停在
+        // 屏幕尺度的块上，选点跨重排稳定（深入段内会抓到随换行漂移的
+        // inline 碎片，恢复后同一位置的重新选点会换成别的节点）。
+        node = next;
+        break;
+      }
+      current = next; // 横跨顶缘且比视口还高：继续下沉
+    }
+    viewportAnchorRef.current = {
+      el: node,
+      offset: node.getBoundingClientRect().top - contTop,
+      width: el.clientWidth,
+    };
+  }, []);
+
   // 未载入轮跳转的挂起目标：分页加载循环逐页向前，目标载入后滚动落地
   const pendingJumpRef = useRef<number | null>(null);
   const [busyJumpTurn, setBusyJumpTurn] = useState<number | null>(null);
@@ -803,6 +885,9 @@ export default function ChatArea({
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
+    // 刷新视口顶缘锚点：无论何种滚动路径（用户/程序/平滑动画中段），
+    // 锚点必须始终对应最新视口状态，供宽度重排后的再适应消费
+    captureScrollAnchor();
     if (
       performance.now() - lastSmoothScrollAtRef.current <
       SMOOTH_EVENT_IGNORE_MS
@@ -835,7 +920,7 @@ export default function ChatArea({
     }
     lastScrollTopRef.current = top;
     syncActiveTurn();
-  }, [syncActiveTurn]);
+  }, [syncActiveTurn, captureScrollAnchor]);
 
   /** 一键回到底部：恢复自动跟随 + 平滑滚动（同时收起"显示更多"展开的历史轮次）。
    *  导航高亮立即指到最后一轮（平滑滚动动画中的 scroll 事件只覆盖中段，
@@ -889,6 +974,72 @@ export default function ChatArea({
     pendingToolCalls,
     modal,
   ]);
+
+  // 每次提交后刷新视口锚点（声明在两个滚动编排 effect 之后，量取的是编排
+  // 后的最终视口状态）：内容增删（工具行出现、折叠区收起、流式追加）会
+  // 移动锚点块而不触发 scroll 事件（scrollTop 未变），仅靠 scroll 事件记录
+  // 会留下陈旧锚点；布局效应在绘制前同步量取，随下次宽度变化一起消费。
+  // 宽度戳守卫（见 captureScrollAnchor）：宽度变化的重排发生在本提交内时
+  // 跳过，保留重排前的真锚点给 RO 消费。
+  useLayoutEffect(() => {
+    captureScrollAnchor();
+  });
+
+  // 容器尺寸变化 → 视口再适应（顶部注释见锚点一节）。restoringSessionId
+  // 期间滚动容器整体卸载（恢复加载卡分支），依赖该 prop 重挂观察器。
+  const lastContainerSizeRef = useRef({ w: 0, h: 0 });
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    lastContainerSizeRef.current = { w: 0, h: 0 };
+    const ro = new ResizeObserver(() => {
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      const prev = lastContainerSizeRef.current;
+      lastContainerSizeRef.current = { w, h };
+      // 初次回调仅建立基线；尺寸未变（RO 也可因其他源触发）不干预
+      if (prev.w === 0 && prev.h === 0) return;
+      if (prev.w === w && prev.h === h) return;
+      // 平滑滚动动画中无法恢复（会拽断动画）：把锚点刷新到当前几何，
+      // 保证动画结束后的下一次宽度变化仍有可用锚点
+      if (performance.now() < smoothScrollGuardUntilRef.current) {
+        captureScrollAnchor(true);
+        return;
+      }
+      if (followingRef.current) {
+        // 底部跟随态：重排后重新贴底——右栏展开后“原本位于底部的视口
+        // 上移、换行新增内容落在视口下方”的主场景
+        const prevTop = el.scrollTop;
+        el.scrollTop = el.scrollHeight;
+        if (el.scrollTop !== prevTop) programmaticScrollRef.current = true;
+        captureScrollAnchor(true);
+        return;
+      }
+      // 仅高度变化（不引起换行重排）不干预：阅读线本就稳定
+      if (prev.w === w) return;
+      // 阅读态：把锚点块拉回原视口偏移（RO 回调在重排后、绘制前执行，
+      // 无闪烁）；目标越界由浏览器 scrollTop 钳制兜底
+      const anchor = viewportAnchorRef.current;
+      if (!anchor || !anchor.el.isConnected) {
+        // 锚点失效（块被卸载等）：以当前几何重建，保证后续宽度变化可用
+        captureScrollAnchor(true);
+        return;
+      }
+      const anchorTop =
+        anchor.el.getBoundingClientRect().top -
+        el.getBoundingClientRect().top +
+        el.scrollTop;
+      const target = Math.max(0, anchorTop - anchor.offset);
+      if (Math.abs(target - el.scrollTop) >= 0.5) {
+        programmaticScrollRef.current = true;
+        el.scrollTop = target;
+      }
+      // 恢复完成（或本就到位）：以新宽度重建锚点，供下一次宽度变化消费
+      captureScrollAnchor(true);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [restoringSessionId]);
 
   // 平滑揭示在 rAF 中分批写 DOM，高度增长不一定伴随 assistantBuffer 变化；
   // 用 ResizeObserver 盯住流式块，揭示长出新行时同样贴底跟随。
@@ -1001,8 +1152,16 @@ export default function ChatArea({
         onNavigate={handleNavigate}
       />
       <div className="flex-1 min-w-0 min-h-0 relative flex flex-col">
+        {/* 右侧预留与左侧轮次导航等宽的位置（sm+ 下导航条恒占 40px）：内容列
+            与输入框卡片必须共享同一中轴——输入框容器比内容列每边宽 17px（两个
+            圆角宽度，--composer-card-max-width = 内容宽 + 34px）的错位设计依赖
+            两列同轴居中；此前右侧仅留 ~14px，导航条插入后内容轴右偏 ~13px 无法
+            与输入框对齐。40px 预留拆为 4px 外边距（滚动条贴列缘、留一点空隙）
+            + 8px 滚动条槽 + 28px 右内边距，内容盒与 32px 外边距方案完全一致。
+            px 任意值取整（rem 受 15px 根字号影响产生小数像素），sm 断点与导航条
+            显隐保持一致 */}
         <div
-          className="flex-1 min-w-0 min-h-0 overflow-y-auto mr-1.5 chat-scroll-cap [overflow-anchor:none]"
+          className="flex-1 min-w-0 min-h-0 overflow-y-auto mr-1.5 sm:mr-[4px] sm:pr-[28px] chat-scroll-cap [overflow-anchor:none]"
           ref={scrollRef}
           onScroll={handleScroll}
           style={{ scrollbarGutter: "stable" }}
@@ -1112,11 +1271,14 @@ export default function ChatArea({
           )}
         </div>
         {/* 一键回到底部浮动按钮：绝对定位于内层列容器（非滚动）底部，紧贴输入框上方，
-          随输入框高度自动调整；不硬编码视口 bottom 偏移 */}
+          随输入框高度自动调整；不硬编码视口 bottom 偏移。
+          水平对齐内容列中轴而非内层列中轴：左侧导航条(40px)与右侧预留带(40px)
+          对称抵消后内容轴位于内层列 50%-20px（sm+）；移动端无导航条，右侧仅
+          5.6px 边距 + 8px 滚动条槽，取 50%-7px */}
         {showScrollDown && (
           <button
             onClick={scrollToBottom}
-            className="absolute left-1/2 -translate-x-1/2 bottom-3 z-30 w-9 h-9 flex items-center justify-center rounded-full glass-surface text-content-secondary hover:text-content-primary shadow-lg transition-all duration-200 hover:scale-110 active:scale-95 cursor-pointer animate-fade-in-up"
+            className="absolute left-[calc(50%-7px)] sm:left-[calc(50%-20px)] -translate-x-1/2 bottom-3 z-30 w-9 h-9 flex items-center justify-center rounded-full glass-surface text-content-secondary hover:text-content-primary shadow-lg transition-all duration-200 hover:scale-110 active:scale-95 cursor-pointer animate-fade-in-up"
             title={t(lang, "scroll_to_bottom")}
           >
             <svg

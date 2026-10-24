@@ -668,8 +668,10 @@ function formatTokens(n: number): string {
  * - 主题按钮：循环切换浅色/深色/跟随系统
  * - 上下文占比：以百分数展示上下文窗口使用量（点击展开右栏查看明细）
  *
- * 定位：absolute top，right 对齐主视图滚动条左侧并留出间距
- * （主视图滚动条经 margin 内移 6px，按钮组右移相应避开，避免被遮挡）。
+ * 定位：absolute top，悬浮于聊天列右侧 40px 常驻预留带内（sm+ 下为 4px
+ * 外边距 + 8px 滚动条槽 + 28px 右内边距，与左侧轮次导航条等宽对称；主视图
+ * 滚动条贴列缘渲染，按钮组经 scrollbar-track 的 132px 顶部留空与滑块避让，
+ * 避免被遮挡）。
  *
  * @param props.lang - 当前 UI 语言
  * @param props.status - 后端状态（读 context_window / context_tokens）

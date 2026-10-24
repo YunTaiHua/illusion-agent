@@ -1301,7 +1301,10 @@ export default function App() {
             {composer}
           </div>
         )}
-        {/* 顶部右侧按钮组（展开右栏/主题/上下文占比）：右栏折叠时显示；right=[20px] 避开滚动条 */}
+        {/* 顶部右侧按钮组（展开右栏/主题/上下文占比）：右栏折叠时显示。
+            悬浮于聊天列右侧 40px 常驻预留带内（sm+：4px 外边距 + 8px 滚动条槽
+            + 28px 右内边距，与左侧轮次导航条等宽对称）——按钮挂载/卸载自身
+            不占布局位，预留带保证聊天内容中轴稳定、且与输入框卡片同轴对齐 */}
         {rightPanelCollapsed && !welcomeVisible && !session.restoringSessionId && (
           <RightPanelControls
             lang={lang} status={session.status} onToggle={toggleRightPanel}
