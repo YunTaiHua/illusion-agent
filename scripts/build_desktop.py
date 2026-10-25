@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import subprocess
 import sys
@@ -73,18 +74,8 @@ def _plat_arch() -> str:
     return f"{plat}-{arch}"
 
 
-def install_backend() -> None:
-    """将 illusion 包及全量依赖预装到内置 Python（让无环境用户解压即用）"""
-    print("\n=== Installing backend into bundled Python ===")
-
-    # 检测前端 dist 存在（pyproject force-include 需要，缺失则打包进 wheel 的是空目录）
-    web_dist = REPO_ROOT / "frontend" / "web" / "dist"
-    terminal_dist = REPO_ROOT / "frontend" / "terminal" / "dist"
-    if not web_dist.exists() or not terminal_dist.exists():
-        print("ERROR: 前端 dist 缺失，请先构建前端：python scripts/build_frontend.py", file=sys.stderr)
-        sys.exit(1)
-
-    # 穷举内置 python 可执行路径（兼容不同平台 install_only 解压布局）
+def _find_bundled_python() -> Path | None:
+    """定位内置 Python 可执行文件（兼容不同平台 install_only 解压布局）"""
     base_dir = DESKTOP_DIR / "resources" / "python" / _plat_arch()
     candidates = [
         base_dir / "python" / "python.exe",                   # win: python/python.exe
@@ -109,15 +100,105 @@ def install_backend() -> None:
                     break
             if python_exe:
                 break
+    return python_exe
+
+
+def _pyproject_version() -> str:
+    """读取 pyproject.toml 顶层 version（[project] 段，列 0 起始不受嵌套键干扰）"""
+    text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'(?m)^version\s*=\s*"([^"]+)"', text)
+    if match is None:
+        print("ERROR: pyproject.toml 缺少顶层 version 字段", file=sys.stderr)
+        sys.exit(1)
+    return match.group(1)
+
+
+def _verify_bundled_runtime(python_exe: Path) -> None:
+    """构建断言：内置 Python 已装的 illusion_agent 版本必须与 pyproject 一致。
+
+    --dist 可在未执行 --install 时单独运行，内置 runtime 若为历史构建残留
+    （曾在 9 月安装包中封入两个月前的 0.4.6 后端），桌面壳与后端整体错位。
+    版本不一致直接让构建失败，杜绝错位产物出厂。
+    """
+    expected = _pyproject_version()
+    proc = subprocess.run(
+        [str(python_exe), "-c",
+         "import importlib.metadata as m; print(m.version('illusion-agent'))"],
+        capture_output=True, text=True,
+    )
+    actual = proc.stdout.strip() if proc.returncode == 0 else ""
+    if proc.returncode != 0 or actual != expected:
+        if actual:
+            shown = actual
+        else:
+            tail = proc.stderr.strip().splitlines()
+            shown = f"元数据读取失败: {tail[-1] if tail else '未知错误'}"
+        print(
+            f"ERROR: 内置 Python 的 illusion_agent 版本（{shown}）与 pyproject（{expected}）"
+            f"不一致，内置 runtime 为过期残留。请重新执行 --install（必要时先 --fetch）。",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    print(f"  内置 runtime 校验通过: illusion_agent {actual}")
+
+
+def _uv_cmd() -> list[str]:
+    """返回可用的 uv 命令：PATH 优先；CI 裸环境幂等安装后经 python -m 调用"""
+    uv = shutil.which("uv")
+    if uv:
+        return [uv]
+    _run([sys.executable, "-m", "pip", "install", "--quiet",
+          "--disable-pip-version-check", "uv"])
+    return [sys.executable, "-m", "uv"]
+
+
+def install_backend() -> None:
+    """将 illusion 包与锁定版本依赖预装到内置 Python（让无环境用户解压即用）
+
+    依赖一律按 uv.lock 安装：uv export 生成带哈希的 requirements（--locked
+    校验锁与 pyproject 同步，不同步直接失败，需先 uv lock），pip 按清单安装；
+    项目本体 --no-deps 从本地源码构建安装。此前 `pip install {项目根}` 每次
+    构建浮动解析 PyPI 最新版，打包的 openai/anthropic 等版本随构建日期漂移，
+    与开发测试环境从未一致——"开发态正常、打包态必崩"（issue #4 启动卡遮罩
+    的根因类别）。
+    """
+    print("\n=== Installing backend into bundled Python ===")
+
+    # 检测前端 dist 存在（pyproject force-include 需要，缺失则打包进 wheel 的是空目录）
+    web_dist = REPO_ROOT / "frontend" / "web" / "dist"
+    terminal_dist = REPO_ROOT / "frontend" / "terminal" / "dist"
+    if not web_dist.exists() or not terminal_dist.exists():
+        print("ERROR: 前端 dist 缺失，请先构建前端：python scripts/build_frontend.py", file=sys.stderr)
+        sys.exit(1)
+
+    python_exe = _find_bundled_python()
     if python_exe is None:
+        base_dir = DESKTOP_DIR / "resources" / "python" / _plat_arch()
         print(f"ERROR: 内置 Python 不存在于 {base_dir}\n请先运行 --fetch 下载运行时", file=sys.stderr)
         sys.exit(1)
 
-    # 安装项目根的 illusion[all]（含 feishu/weixin optional 全量依赖）
+    # 1) 锁定依赖：uv export 产出 requirements（含哈希）。--no-emit-project
+    #    排除项目本体行（随后从本地源码 --no-deps 安装）；产物落
+    #    desktop/release/（构建产物目录，已 gitignore）
+    lock_path = DESKTOP_DIR / "release" / "requirements.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    _run(_uv_cmd() + [
+        "export", "--locked", "--no-dev", "--extra", "all",
+        "--no-emit-project", "--output-file", str(lock_path),
+    ])
+
+    # 2) 按锁安装依赖：版本与哈希逐字节等于开发测试环境（uv.lock）
     _run([
         str(python_exe), "-m", "pip", "install",
         "--no-input", "--disable-pip-version-check",
-        f"{REPO_ROOT}[all]",
+        "-r", str(lock_path),
+    ])
+
+    # 3) 项目本体：本地源码构建安装，依赖已由锁清单提供故 --no-deps
+    _run([
+        str(python_exe), "-m", "pip", "install",
+        "--no-input", "--disable-pip-version-check",
+        "--no-deps", f"{REPO_ROOT}[all]",
     ])
 
     # 确保 Scripts/pip.exe 存在：python-build-standalone 运行时不带 pip 入口脚本，
@@ -130,10 +211,21 @@ def install_backend() -> None:
         "--force-reinstall", "--no-deps", "pip",
     ])
 
+    _verify_bundled_runtime(python_exe)
+
 
 def build_dist() -> None:
     """编译 TypeScript + electron-builder 打包"""
     print("\n=== Building distribution ===")
+
+    # --dist 可单独执行：发行前断言内置 runtime 与当前源码版本一致，
+    # 防止跳过 --install 把历史构建残留的后端封进安装包
+    python_exe = _find_bundled_python()
+    if python_exe is None:
+        print("ERROR: 内置 Python 不存在，请先运行 --fetch + --install", file=sys.stderr)
+        sys.exit(1)
+    _verify_bundled_runtime(python_exe)
+
     npm = shutil.which("npm")
     if npm is None:
         print("ERROR: npm not found in PATH", file=sys.stderr)

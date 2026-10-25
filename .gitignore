@@ -57,9 +57,6 @@ temp/
 .DS_Store
 Thumbs.db
 
-# uv
-uv.lock
-
 # Node.js
 node_modules/
 npm-debug.log*
