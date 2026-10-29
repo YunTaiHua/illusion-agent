@@ -884,7 +884,7 @@ _COMMAND_SUBSTITUTIONS: list[tuple[str, str | Callable[[re.Match[str]], str]]] =
     (r"^Added PR comment to (.+)$", r"已添加 PR 评论到 \1"),
     # 初始化
     (r"^Initialized project files:$", r"已初始化项目文件："),
-    (r"^\*\*Illusion Agent project initialization complete\.\*\*$", r"✨ **Illusion Agent 项目初始化完成**"),
+    (r"^\*\*IllusionAgent project initialization complete\.\*\*$", r"✨ **IllusionAgent 项目初始化完成**"),
     (r"^- \*\*Languages\*\*: (.+)$", r"- **检测到语言**: \1"),
     (r"^- \*\*Frameworks\*\*: (.+)$", r"- **检测到框架**: \1"),
     (r"^- \*\*Package Manager\*\*: (.+)$", r"- **包管理器**: \1"),

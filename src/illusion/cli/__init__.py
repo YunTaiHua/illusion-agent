@@ -68,7 +68,7 @@ def _version_callback(value: bool) -> None:
 app = typer.Typer(
     name="illusion",
     help=(
-        "Illusion Agent - AI 驱动的编程助手\n"
+        "IllusionAgent - AI 驱动的编程助手\n"
         "默认启动交互式会话，使用 -p/--print 进入非交互模式"
     ),
     add_completion=False,

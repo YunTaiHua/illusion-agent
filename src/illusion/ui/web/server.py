@@ -279,7 +279,7 @@ def create_app(
     # 它们不受栅栏保护且含完整接口 schema，属于 DNS rebinding 页面可读的
     # 侦察信息 —— 直接禁用，恢复「Host 栅栏绑定一切请求」的不变性。
     app = FastAPI(
-        title="Illusion Agent Web",
+        title="IllusionAgent Web",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,

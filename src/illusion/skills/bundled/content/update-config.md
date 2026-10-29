@@ -1,11 +1,11 @@
 ---
 name: update-config
-description: Configure Illusion Agent via settings.json, permissions.json, project-level directories, and instruction files. Use for permissions, hooks, env vars, MCP servers, skills, plugins, sandbox, and other settings. Examples: "allow npm commands", "set DEBUG=true", "add a hook to format code after writes", "disable a skill for this project".
+description: Configure IllusionAgent via settings.json, permissions.json, project-level directories, and instruction files. Use for permissions, hooks, env vars, MCP servers, skills, plugins, sandbox, and other settings. Examples: "allow npm commands", "set DEBUG=true", "add a hook to format code after writes", "disable a skill for this project".
 ---
 
 # Update Config Skill
 
-Modify Illusion Agent configuration across three layers: global `settings.json`, project-level `.illusion/` directory, and AI instruction files.
+Modify IllusionAgent configuration across three layers: global `settings.json`, project-level `.illusion/` directory, and AI instruction files.
 
 ## CRITICAL: Read Before Write
 

@@ -10,7 +10,7 @@ Review the user's memory landscape and produce a clear report of proposed change
 
 ## Memory System Overview
 
-Illusion Agent uses a file-based memory system (aligned with Claude Code Auto Memory):
+IllusionAgent uses a file-based memory system (aligned with Claude Code Auto Memory):
 - **Memory directory**: `~/.illusion/memory/<project-name>-<hash>/` (or the custom directory configured via `settings.json` → `memory.directory`)
 - **Entry point**: `MEMORY.md` (index file with one-line pointers to memory files, format `- [Title](user/user_role.md) — one-line hook`, paths relative to the memory directory)
 - **Type subdirectories**: memory files are stored in `user/`, `feedback/`, `project/`, `reference/` subdirectories matching their `type` field (root-layout legacy files are also scanned)

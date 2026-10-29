@@ -213,7 +213,7 @@ def _build_report(
 ) -> CommandResult:
     """生成初始化报告"""
     lines = [
-        "✨ **Illusion Agent project initialization complete.**\n",
+        "✨ **IllusionAgent project initialization complete.**\n",
     ]
 
     if created:

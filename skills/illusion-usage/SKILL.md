@@ -1,9 +1,9 @@
 ---
 name: illusion-usage
-description: Dual-purpose guide for agents. Scenario A — agent autonomously drives Illusion Agent via non-interactive print mode (-p). Scenario B — agent helps its human master install and use Illusion Agent's interactive TUI/Web modes. Invoke when an agent needs to operate Illusion Agent, install it for a user, or teach a user how to use it.
+description: Dual-purpose guide for agents. Scenario A — agent autonomously drives IllusionAgent via non-interactive print mode (-p). Scenario B — agent helps its human master install and use IllusionAgent's interactive TUI/Web modes. Invoke when an agent needs to operate IllusionAgent, install it for a user, or teach a user how to use it.
 ---
 
-# Illusion Agent Usage: Agent Dual-Role Guide
+# IllusionAgent Usage: Agent Dual-Role Guide
 
 This skill serves two scenarios. **Detect your role first**, then follow the matching track.
 
@@ -14,14 +14,14 @@ This skill serves two scenarios. **Detect your role first**, then follow the mat
 | Your situation | Track to follow |
 |----------------|-----------------|
 | You (the agent) will invoke `illusion -p` as a subprocess to do coding tasks autonomously | **Track A: Agent-Driven Print Mode** |
-| Your human master wants to install/use Illusion Agent themselves, and you guide them | **Track B: Human-Friendly TUI & Web** |
+| Your human master wants to install/use IllusionAgent themselves, and you guide them | **Track B: Human-Friendly TUI & Web** |
 | Both — you'll drive it AND teach your master | Read both tracks; Track A for your own use, Track B for your master |
 
 ---
 
 # Track A: Agent-Driven Print Mode
 
-Use print mode when YOU (the agent) operate Illusion Agent as a non-interactive subprocess. Every `-p` invocation is an atomic request-response — no waiting for interactive input within the same turn.
+Use print mode when YOU (the agent) operate IllusionAgent as a non-interactive subprocess. Every `-p` invocation is an atomic request-response — no waiting for interactive input within the same turn.
 
 ## A.0 Fetch Current Docs (MANDATORY before install)
 
@@ -242,7 +242,7 @@ illusion -r <session-id> -p "Continue"
 
 # Track B: Human-Friendly TUI & Web
 
-Use this track when your human master wants to install and use Illusion Agent themselves. **Default to interactive modes** (TUI/Web) — they are far more user-friendly than print mode for humans. Guide your master step by step, and fetch the latest docs to give accurate instructions.
+Use this track when your human master wants to install and use IllusionAgent themselves. **Default to interactive modes** (TUI/Web) — they are far more user-friendly than print mode for humans. Guide your master step by step, and fetch the latest docs to give accurate instructions.
 
 ## B.0 Fetch Current Docs (MANDATORY before guiding)
 
@@ -370,7 +370,7 @@ If your master wants to customize, point them to `~/.illusion/settings.json`:
 
 ## B.6 Guide Channel Setup (Optional, Mobile Access)
 
-If your master wants to use Illusion Agent from their phone via messaging apps:
+If your master wants to use IllusionAgent from their phone via messaging apps:
 
 - **Feishu/Lark** — `illusion channel login`, select Feishu
 - **WeChat** — `illusion channel login`, select WeChat (iLink Bot API)

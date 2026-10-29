@@ -32,7 +32,7 @@ def web_start(
         ),
     ] = None,
 ) -> None:
-    """启动 Illusion Agent Web UI / Launch Illusion Agent Web UI"""
+    """启动 IllusionAgent Web UI / Launch IllusionAgent Web UI"""
     # working_directory 已由主回调统一切换（见 cli/main.py）
     import sys
     import threading
@@ -128,7 +128,7 @@ def web_start(
     app = create_app(dev=dev, host_config=config, auth=auth)
 
     url = auth.authenticated_url(f"http://{host}:{port}")
-    typer.echo(f"Illusion Agent Web UI: {url}")
+    typer.echo(f"IllusionAgent Web UI: {url}")
     typer.echo(_t("web_auth_enabled"))
     # 信任栅栏状态（栅栏非认证层；REST /api 特权平面仅限回环，
     # 受信主机仅可接入 /ws 会话平面）

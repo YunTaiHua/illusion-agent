@@ -2,7 +2,7 @@
 钩子事件定义模块
 ================
 
-定义 Illusion Agent 支持的全部 27 个钩子事件
+定义 IllusionAgent 支持的全部 27 个钩子事件
 事件值使用 PascalCase 格式。
 """
 

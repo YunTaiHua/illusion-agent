@@ -41,9 +41,9 @@ class ConfigTool(BaseTool[ConfigToolInput]):
     """
 
     name = "config"
-    description = """Get or set Illusion Agent configuration settings.
+    description = """Get or set IllusionAgent configuration settings.
 
-View or change Illusion Agent settings (stored in ~/.illusion/settings.json). Use when the user requests configuration changes or asks about current settings.
+View or change IllusionAgent settings (stored in ~/.illusion/settings.json). Use when the user requests configuration changes or asks about current settings.
 
 ## Usage
 - **Show all settings:** action="show" — dumps the entire config as JSON

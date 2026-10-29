@@ -457,7 +457,7 @@ export default function App() {
     //      一事件"系统横幅 + 应用内 toast"双重打扰。
     session.setOnToast((payload) => {
       if (isAppSupervised()) return;
-      notifyDesktop(payload.title || 'Illusion Agent', payload.body);
+      notifyDesktop(payload.title || 'IllusionAgent', payload.body);
       if (payload.play_sound) playToastSound(payload.level);
     });
     return () => {

@@ -1,15 +1,15 @@
 ---
 name: illusion-print-mode
-description: Guide for using Illusion Agent's non-interactive print mode (-p) for automation and agent control. Invoke when user asks about print mode, non-interactive usage, scripting illusion, or controlling illusion from another agent.
+description: Guide for using IllusionAgent's non-interactive print mode (-p) for automation and agent control. Invoke when user asks about print mode, non-interactive usage, scripting illusion, or controlling illusion from another agent.
 ---
 
 # Print Mode: Non-Interactive Automation
 
-Print mode (`-p`) lets you run Illusion Agent as a non-interactive command: submit a prompt, stream the response, then exit. Designed for scripts, CI, and controlling Illusion Agent from other agents.
+Print mode (`-p`) lets you run IllusionAgent as a non-interactive command: submit a prompt, stream the response, then exit. Designed for scripts, CI, and controlling IllusionAgent from other agents.
 
 ## Core Principle
 
-**Print mode is fully non-interactive.** Every `-p` invocation is an atomic request-response — no waiting for interactive input within the same turn. This lets other agents control Illusion Agent programmatically.
+**Print mode is fully non-interactive.** Every `-p` invocation is an atomic request-response — no waiting for interactive input within the same turn. This lets other agents control IllusionAgent programmatically.
 
 ## Basic Usage
 

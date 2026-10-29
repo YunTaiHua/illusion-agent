@@ -171,7 +171,7 @@ illusion -e high
 
 ## Print 模式详解
 
-`-p` / `--print` 以非交互方式执行单次提示词并立即退出，适用于脚本、CI 或其他智能体控制 Illusion Agent 的场景。
+`-p` / `--print` 以非交互方式执行单次提示词并立即退出，适用于脚本、CI 或其他智能体控制 IllusionAgent 的场景。
 
 ### 重要规则
 

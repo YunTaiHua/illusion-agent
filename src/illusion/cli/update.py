@@ -2,7 +2,7 @@
 自更新子命令
 ============
 
-提供 Illusion Agent 的自更新功能。
+提供 IllusionAgent 的自更新功能。
 
 子命令:
     - update: 检查并更新到最新版本

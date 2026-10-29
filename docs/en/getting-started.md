@@ -169,7 +169,7 @@ illusion -e high
 
 ## Print Mode Details
 
-`-p` / `--print` runs a single prompt non-interactively and exits. It is designed for scripts, CI, and controlling Illusion Agent from other agents.
+`-p` / `--print` runs a single prompt non-interactively and exits. It is designed for scripts, CI, and controlling IllusionAgent from other agents.
 
 ### Important rules
 

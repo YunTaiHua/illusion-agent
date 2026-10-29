@@ -2,7 +2,7 @@
  * 后端进程管理模块
  * ==================
  *
- * 负责以子进程方式启动 Illusion Agent 后端（`python -m illusion web`），
+ * 负责以子进程方式启动 IllusionAgent 后端（`python -m illusion web`），
  * 动态分配空闲端口，等待后端就绪后通知主进程加载 URL。
  *
  * 关键设计：
@@ -134,7 +134,7 @@ export class Backend extends EventEmitter {
       this.emit('exit', code);
     });
 
-    // 等待后端打印访问 URL（web.py 输出 "Illusion Agent Web UI: http://...?token=..."）。
+    // 等待后端打印访问 URL（web.py 输出 "IllusionAgent Web UI: http://...?token=..."）。
     // 该行为后端就绪的前置信号：URL 行出现后再轮询 HTTP 直至可服务。
     const urlPromise = new Promise<string>((resolve, reject) => {
       const timer = setTimeout(

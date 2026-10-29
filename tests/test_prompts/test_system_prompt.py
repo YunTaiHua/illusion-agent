@@ -52,4 +52,4 @@ def test_build_system_prompt_git_no_branch():
 def test_build_system_prompt_default_includes_base():
     env = _make_env()
     prompt = build_system_prompt(env=env)
-    assert "Illusion Agent" in prompt
+    assert "IllusionAgent" in prompt

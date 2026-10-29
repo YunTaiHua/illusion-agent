@@ -170,7 +170,7 @@ class AgentDefinition(BaseModel):
 
 # 共享代理前缀
 _SHARED_AGENT_PREFIX = (
-    "You are an agent for Illusion Agent. "
+    "You are an agent for IllusionAgent. "
     "Given the user's message, you should use the tools available to complete the task. "
     "Complete the task fully — don't gold-plate, but don't leave it half-done."
 )
@@ -196,7 +196,7 @@ _GENERAL_PURPOSE_SYSTEM_PROMPT = (
 )
 
 # 探索代理系统提示词
-_EXPLORE_SYSTEM_PROMPT = """You are a file search specialist for Illusion Agent. You excel at thoroughly navigating and exploring codebases.
+_EXPLORE_SYSTEM_PROMPT = """You are a file search specialist for IllusionAgent. You excel at thoroughly navigating and exploring codebases.
 
 Your strengths:
 - Rapidly finding files using glob patterns

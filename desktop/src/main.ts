@@ -61,7 +61,7 @@ function createWindow(): BrowserWindow {
     show: false,               // 由 app.whenReady 在加载本地加载页后 show
     // 遮罩层为浅色（白），窗口底色保持白色与其一致，避免遮罩阶段露出色差
     backgroundColor: '#ffffff',
-    title: 'Illusion Agent',
+    title: 'IllusionAgent',
     icon: resolveWindowIcon(),
     autoHideMenuBar: true, // Windows/Linux 菜单栏自动隐藏（按 Alt 可唤出）
     // 自定义顶部栏：macOS 隐藏标题栏保留交通灯按钮，Win/Linux 完全无边框
@@ -129,7 +129,7 @@ function quitApp(): void {
 function openTerminal(): void {
   // TODO: 集成应用内 xterm 终端，注入内置 python/node 到 PATH
   if (process.platform === 'win32') {
-    spawn('cmd', ['/k', 'title Illusion Agent Terminal'], { detached: true, shell: true });
+    spawn('cmd', ['/k', 'title IllusionAgent Terminal'], { detached: true, shell: true });
   } else if (process.platform === 'darwin') {
     spawn('open', ['-a', 'Terminal'], { detached: true });
   } else {
@@ -453,7 +453,7 @@ ipcMain.on('show-notification', (_event, payload: { title?: unknown; body?: unkn
   if (!title && !body) return;
   try {
     const notification = new Notification({
-      title: title || 'Illusion Agent',
+      title: title || 'IllusionAgent',
       body,
       icon: resolveWindowIcon(),
       silent: true,
