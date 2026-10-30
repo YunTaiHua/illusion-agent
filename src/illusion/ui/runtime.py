@@ -428,7 +428,9 @@ async def _prewarm_browser(manager: Any, kernel: str = "auto") -> None:
         )
         return
     try:
-        await manager.ensure_started()
+        # prewarm=True：只装配后端进程。不置 open、不推 browser_state——
+        # 预热先于用户/agent 意图，推 open 会让桌面端自动展开预览卡片
+        await manager.ensure_started(prewarm=True)
     except Exception:
         logging.getLogger(__name__).debug(
             "[browser] 预热失败（首次使用时将重试）", exc_info=True

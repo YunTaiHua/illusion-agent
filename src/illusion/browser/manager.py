@@ -85,16 +85,30 @@ class BrowserManager:
             proxy=self.config.proxy,
         )
 
-    async def ensure_started(self) -> BrowserBackend:
-        """懒启动：首次使用时装配 runtime 并启动后端（并发调用合并为一次）。"""
+    async def ensure_started(self, *, prewarm: bool = False) -> BrowserBackend:
+        """懒启动：首次使用时装配 runtime 并启动后端（并发调用合并为一次）。
+
+        prewarm=True（bundle 创建时的启动预热）只装配后端进程，不标记面板
+        open、不推送状态——预热先于任何用户/agent 意图发生，若置 open 会让
+        桌面端把「进程就绪」误判为「浏览器刚被打开」（closed→open 跃迁），
+        预览卡片凭空自动展开（未使用浏览器功能时右栏自己弹出浏览器标签页
+        的根因）。真实使用（panel_open / 工具 command）走默认路径，照常
+        置 open 并推送，桌面端自动展开预览卡片的功能不受影响。
+        """
         if self._backend is not None:
+            if not prewarm:
+                self._open = True
             return self._backend
         async with self._start_lock:
             if self._backend is not None:
+                if not prewarm:
+                    self._open = True
                 return self._backend
             backend = self._create_backend()
             await backend.start()
             self._backend = backend
+        if prewarm:
+            return self._backend
         self._open = True
         await self.notify_state()
         return self._backend

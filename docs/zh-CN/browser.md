@@ -113,14 +113,15 @@ Web/终端端展示下列托管配置，桌面端展示浏览器数据管理）�
 
 ## 插件与开关
 
-浏览器能力由内置 **browser-use** 插件承载（默认启用）：
+浏览器能力由内置 **browser-use** 插件承载（**默认禁用**，首次使用前需先启用）：
 
 - **设置 → 扩展能力**：Switch 开关热切换（当前会话即时生效，无需重启）；
 - 右栏插件列表：同名开关；
 - 斜杠命令：`/plugin enable browser-use`、`/plugin disable browser-use`。
 
-禁用后 12 个 `browser_*` 工具与两个技能立即注销，重新启用即时恢复。
-插件 seed 于 `~/.illusion/plugins/browser-use/`，随版本自动更新。
+启用后 agent 获得 12 个 `browser_*` 工具与两个浏览器技能；禁用后工具与技能
+立即注销，重新启用即时恢复。插件 seed 于 `~/.illusion/plugins/browser-use/`，
+随版本自动更新。
 
 ## 浏览器数据管理
 

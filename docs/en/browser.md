@@ -123,15 +123,16 @@ browser data management):
 ## Plugin and switches
 
 The browser capability is carried by the built-in **browser-use** plugin
-(enabled by default):
+(**disabled by default**; enable it before first use):
 
 - **Settings → Extensions**: toggle switch, hot-reloads the current session;
 - Right-panel plugin list: the same switch inline;
 - Slash commands: `/plugin enable browser-use`,
   `/plugin disable browser-use`.
 
-Disabling immediately unregisters the 12 `browser_*` tools and both skills;
-re-enabling restores them instantly. The plugin is seeded to
+Once enabled, the agent gets the 12 `browser_*` tools and both browser
+skills; disabling immediately unregisters them, and re-enabling restores
+them instantly. The plugin is seeded to
 `~/.illusion/plugins/browser-use/` and updated with package versions.
 
 ## Browser data management

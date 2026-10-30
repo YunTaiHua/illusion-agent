@@ -91,10 +91,11 @@ export default function BrowserSection({
           + 底部常显网址输入框 */}
       {!collapsed && (
         <div className="animate-fade">
-          {/* pt-3 -mt-2.5：首行视觉顶隙 2px 不变，容器上边缘抬升 10px，
-              让 tab 行悬浮阴影的上半部分不被容器上边缘裁掉 */}
+          {/* pt-3 -mt-2.5 / pb-3.5 -mb-2.5：首行/末行视觉间距不变（顶 2px、距网址框 14px），
+              但容器上/下边缘各外移 10px，让 tab 行悬浮阴影的上/下半部分不被容器边缘裁掉
+              （上方裁切线原本贴着父区块头、下方贴着网址输入框，阴影看起来像被截断） */}
           {open && tabs.length > 0 && (
-            <div className="pt-3 pb-1 -mt-2.5 flex flex-col gap-0.5 max-h-56 overflow-y-auto dropdown-scroll">
+            <div className="pt-3 pb-3.5 -mt-2.5 -mb-2.5 flex flex-col gap-0.5 max-h-56 overflow-y-auto dropdown-scroll">
               {tabs.map((tb) => (
                 <div
                   key={tb.id}

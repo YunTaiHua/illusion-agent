@@ -57,7 +57,7 @@ class TestSeeding:
         assert target is not None
         manifest = json.loads((target / "plugin.json").read_text(encoding="utf-8"))
         assert manifest["name"] == "browser-use"
-        assert manifest["enabled_by_default"] is True
+        assert manifest["enabled_by_default"] is False
         assert (target / "skills" / "control-browser" / "SKILL.md").is_file()
         assert (target / "skills" / "web-gui-tester" / "SKILL.md").is_file()
         # 文档资产存在且不含 recording（范围外）
@@ -96,8 +96,8 @@ class TestPluginDiscoverable:
         names = [p.manifest.name for p in plugins]
         assert "browser-use" in names
         browser_plugin = next(p for p in plugins if p.manifest.name == "browser-use")
-        # 默认启用（对标 ZCode DEFAULT_ENABLED_OFFICIAL_PLUGIN_IDS）
-        assert browser_plugin.enabled is True
+        # 默认禁用（用户可经设置/插件列表开关或 /plugin enable browser-use 启用）
+        assert browser_plugin.enabled is False
         # 技能被插件装载（带插件命名空间，与 ZCode 的 browser-use:control-browser 一致）
         skill_names = [s.name for s in browser_plugin.skills]
         assert "browser-use:control-browser" in skill_names
