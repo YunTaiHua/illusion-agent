@@ -11,6 +11,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 try:
@@ -160,6 +162,34 @@ def update_package_lock_version(package_path: Path, version: str) -> None:
     print(f"Updated version in: {package_path}")
 
 
+def sync_uv_lock() -> None:
+    """运行 `uv lock` 同步 uv.lock 中项目自身版本号
+
+    release-desktop CI 通过 `uv export --locked` 导出依赖，--locked 会严格
+    校验 uv.lock 与 pyproject.toml 一致；版本号变更后若不同步，三平台
+    桌面打包会全部失败。uv lock 只更新项目自身版本号一行，依赖零变化。
+    """
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "uv", "lock"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        print("Warning: uv not available (python -m uv failed), skipping uv.lock sync")
+        return
+
+    if result.returncode == 0:
+        if result.stdout.strip():
+            print(result.stdout.strip())
+        print("Synced uv.lock via `uv lock`.")
+    else:
+        print(f"Warning: uv lock failed (exit {result.returncode}), skipping")
+        if result.stderr.strip():
+            print(result.stderr.strip())
+
+
 def main() -> None:
     """主函数"""
     version = read_version_from_pyproject()
@@ -179,6 +209,9 @@ def main() -> None:
     # 同步桌面壳版本号
     update_package_json_version(root / "desktop" / "package.json", version)
     update_package_lock_version(root / "desktop" / "package-lock.json", version)
+
+    # 同步 uv.lock（uv export --locked 严格校验，不同步会导致桌面打包 CI 失败）
+    sync_uv_lock()
 
     print("Version sync completed successfully.")
 
