@@ -41,6 +41,8 @@ interface UseWebElementContextsResult {
   hasContexts: boolean;
   removeContext: (id: string) => void;
   clearContexts: () => void;
+  /** 程序化加入（rewind 回填解析出的附件，不经窗口事件、不做工作区过滤） */
+  addContexts: (items: readonly WebElementContextComposerAttachment[]) => void;
 }
 
 function isRemovePayload(payload: unknown): payload is WebElementContextRemovePayload {
@@ -95,6 +97,22 @@ export function useWebElementContexts({
     setContexts([]);
   }, []);
 
+  // 程序化加入：供 rewind 回填等内部路径复用（同 id 覆盖，与事件路径一致）
+  const addContexts = useCallback((items: readonly WebElementContextComposerAttachment[]) => {
+    if (items.length === 0) return;
+    setContexts((existing) => {
+      let next = existing;
+      for (const item of items) {
+        const index = next.findIndex((candidate) => candidate.id === item.id);
+        next =
+          index < 0
+            ? [...next, item]
+            : next.map((candidate) => (candidate.id === item.id ? item : candidate));
+      }
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     if (!listenAddToChatEvents || typeof window === "undefined") return;
 
@@ -141,7 +159,8 @@ export function useWebElementContexts({
       hasContexts: contexts.length > 0,
       removeContext,
       clearContexts,
+      addContexts,
     }),
-    [clearContexts, contexts, removeContext],
+    [addContexts, clearContexts, contexts, removeContext],
   );
 }

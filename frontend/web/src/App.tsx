@@ -38,6 +38,7 @@ import {
   buildPromptWithWebElementContexts,
   dispatchWebElementContextAddToChat,
   isWebElementContextPayload,
+  parsePromptWebElementContexts,
   type WebElementContextComposerAttachment,
   type WebElementContextPayload,
 } from './lib/webElementContext';
@@ -433,10 +434,17 @@ export default function App() {
     // 注：select_request 内联选项已由 hook 按会话路由（session.inlineOptions），
     // 无需在此注册 onSelectRequest 回调
     session.setOnRewindRestored((text) => {
+      // 被回退的 user 消息可能带拾取块（`# Web page elements:`）：解析回
+      // composer 附件（卡片形态），只把可见正文回填输入框，避免整块以
+      // 纯文本形式落进输入框、重发时块内容重复拼接
+      const parsed = parsePromptWebElementContexts(text, {
+        workspacePath: pickWorkspacePath,
+      });
+      webElementContexts.addContexts(parsed.webElementContexts);
       // 持久化回退文本：回退到欢迎界面时输入框重挂载，靠 initialDraft 兜底回填；
       // 普通 rewind 时 ref 即时回填（两者不冲突）
-      setRewindDraft(text);
-      promptInputRef.current?.setDraft(text);
+      setRewindDraft(parsed.visibleContent);
+      promptInputRef.current?.setDraft(parsed.visibleContent);
     });
     session.setOnCommandResult((text, type) => {
       // Usage 用法提示是终端专属信息，web/desktop 的 toast 不展示；
@@ -467,7 +475,7 @@ export default function App() {
       session.setOnUpdateAvailable(null);
       session.setOnToast(null);
     };
-  }, [session.setOnSelectRequest, session.setOnCommandResult, session.setOnUpdateAvailable, session.setOnToast, showToast, lang]);
+  }, [session.setOnSelectRequest, session.setOnCommandResult, session.setOnUpdateAvailable, session.setOnToast, session.setOnRewindRestored, webElementContexts.addContexts, pickWorkspacePath, showToast, lang]);
 
   // 浏览器模式下的通知权限预申请：Chromium 拦截后台/无手势的
   // requestPermission，若等页面隐藏后透传时才申请会被静默拒绝。
