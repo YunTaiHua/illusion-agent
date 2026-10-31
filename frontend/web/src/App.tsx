@@ -24,7 +24,7 @@ import PromptInput, { type PromptInputHandle } from './components/PromptInput';
 import Toolbar from './components/Toolbar';
 import RightPanel, { RightPanelControls } from './components/RightPanel';
 import TitleBar from './components/TitleBar';
-import ConnectingOverlay from './components/ConnectingOverlay';
+import ConnectingOverlay, { type IconPhase } from './components/ConnectingOverlay';
 import ImagePreview from './components/ImagePreview';
 import FileViewerModal from './components/FileViewerModal';
 import FilePreviewPanel from './components/FilePreviewPanel';
@@ -58,6 +58,10 @@ const WS_URL = (() => {
 
 /** Toast 通知显示时长（毫秒） */
 const TOAST_DURATION = 5000;
+
+/** 遮罩图标就绪鼓点（swell）时长：与 tailwind.config.js 的 icon-swell 定义
+ *  保持一致，arming 兜底定时器以此为基准（见遮罩退场 effect） */
+const ICON_SWELL_ANIMATION_MS = 1100;
 
 /**
  * 去掉命令反馈中的 Usage 用法提示段
@@ -129,29 +133,62 @@ export default function App() {
     }
   }, [session.connected, session.bootstrapping]);
 
-  // 遮罩淡出：两段式——先保持不透明（主界面重组件在同 commit 挂载，双
-  // rAF + 90ms 空闲拍等长尾冲刷），再启动 700ms ease-out 过渡；过渡自然
-  // 结束经 onFaded 回调在此卸载，另有兜底定时器防 transitionEnd 丢失
-  // （后台节流 / reduced-motion）。淡出期间放行下层交互，结束后再卸载。
+  // 遮罩退场：三段式递进——arming（就绪瞬间在持续旋转之上叠发一次就绪
+  // 鼓点 scale 1→1.06→1，onAnimationEnd 门控播完才继续，期间遮罩保持
+  // 不透明）→ 双 rAF + 90ms 空闲拍等主界面挂载长尾冲刷 → 700ms ease-out
+  // 揭幕过渡；过渡自然结束经 onFaded 回调在此卸载，另有兜底定时器防
+  // transitionEnd 丢失（后台节流 / reduced-motion）。淡出期间放行下层
+  // 交互，结束后再卸载。
   const overlayVisible = !session.connected || session.bootstrapping || !revealReady;
   const [overlayMounted, setOverlayMounted] = useState(overlayVisible);
   const [overlayFading, setOverlayFading] = useState(false);
+  // 收束动画完成标记：arming → fading 的闸门（false 期间淡出链不启动，
+  // 收束动画"完整播完不被打断"由此保证）
+  const [ascendDone, setAscendDone] = useState(false);
   const handleOverlayFaded = useCallback(() => setOverlayMounted(false), []);
+  const handleAscendComplete = useCallback(() => setAscendDone(true), []);
   // 遮罩错误「重新连接」：整页重载（WebSocket 会话重建；token 来自
   // sessionStorage / URL，cookie 由后端自动携带）
   const handleOverlayRetry = useCallback(() => window.location.reload(), []);
+
+  // 首帧静态遮罩（index.html #boot-splash）退场：本遮罩挂载即完全不透明、
+  // 与静态层像素级同画面（同 /icon.png、同 clamp 尺寸、同 drop-shadow），
+  // 此刻移除无感。挂载即移除而非等揭幕，避免错误态遮罩常显时残留僵尸
+  // 节点；静态层已把 /icon.png 拉进内存缓存，overlay 图标解码零延迟。
+  useEffect(() => {
+    document.getElementById('boot-splash')?.remove();
+  }, []);
+
+  // 阶段一（arming）：就绪瞬间立即叠发就绪鼓点。兜底截止（deadline）应对
+  // 后台节流下 animationend 延迟/丢失（对齐阶段二双 rAF 链的 deadline
+  // 模式，setTimeout 后台仅节流到秒级、仍会触发）——兜底触发直接放行，
+  // 仅牺牲后台场景（用户不可见）的动画完整性。overlayVisible 期间复位
+  // 三态：错误/断连把遮罩拉回常显后，下一次就绪重新走完整递进。
   useEffect(() => {
     if (overlayVisible) {
       setOverlayMounted(true);
       setOverlayFading(false);
+      setAscendDone(false);
       return;
     }
-    if (!overlayMounted) return;
+    if (!overlayMounted || ascendDone) return;
+    const deadline = window.setTimeout(
+      () => setAscendDone(true),
+      ICON_SWELL_ANIMATION_MS + 500,
+    );
+    return () => clearTimeout(deadline);
+  }, [overlayVisible, overlayMounted, ascendDone]);
+
+  // 阶段二（fading）：就绪鼓点播完（ascendDone）后进入既有两段式淡出。
+  useEffect(() => {
+    if (overlayVisible || !overlayMounted || !ascendDone) return;
     // 两段式淡出：本 effect 触发时主界面正与遮罩在同一个 React commit 里
     // 完成首次大规模挂载（revealReady 门控翻转）——若同帧启动 opacity 过渡，
     // 过渡前几帧会被挂载长任务挤掉，表现为起步卡顿。故先保持遮罩完全不
     // 透明（重挂载被盖在背后，卡顿不可见），双 rAF 确认该帧绘制完成、主
-    // 线程空闲后再启动过渡；此后 opacity 走合成器，稳定顺滑。
+    // 线程空闲后再启动过渡；此后 opacity 走合成器，稳定顺滑。收束动画的
+    // ~1.1s 已顺带给挂载长尾充裕的冲刷时间，双 rAF + 空闲拍保留为帧对齐
+    // 保险。
     //
     // 兜底截止（deadline）：桌面壳窗口被遮挡/最小化时 Chromium 会暂停后台
     // 页面的 requestAnimationFrame（background throttling），双 rAF 链可能
@@ -184,7 +221,19 @@ export default function App() {
       clearTimeout(deadline);
       clearTimeout(beat);
     };
-  }, [overlayVisible, overlayMounted]);
+  }, [overlayVisible, overlayMounted, ascendDone]);
+  // 兜底卸载：正常由 onTransitionEnd 触发；900ms 覆盖 700ms 过渡 + 余量，
+  // 防过渡事件丢失（后台节流 / reduced-motion 场景）
+  useEffect(() => {
+    if (!overlayFading) return;
+    const timer = setTimeout(() => setOverlayMounted(false), 900);
+    return () => clearTimeout(timer);
+  }, [overlayFading]);
+  // 图标运动阶段下发：匀速旋转 + 呼吸自挂载即持续（连接期 = 收束期，合并
+  // 为一段环境运动）；就绪后叠发一次缩放鼓点（ascend），播完进 rest 待揭幕。
+  // 幅度递进：环境呼吸 ±3.5% < 就绪鼓点 ±6% < 揭幕整层淡出
+  const overlayIconPhase: IconPhase =
+    overlayVisible || !overlayMounted ? 'breathe' : ascendDone ? 'rest' : 'ascend';
   // 兜底卸载：正常由 onTransitionEnd 触发；900ms 覆盖 700ms 过渡 + 余量，
   // 防过渡事件丢失（后台节流 / reduced-motion 场景）
   useEffect(() => {
@@ -1641,15 +1690,18 @@ export default function App() {
       )}
 
       {/* 全屏遮罩层：仅覆盖连接未建立 / 首帧引导（首个会话内容未呈现）期间，
-          首个会话内容呈现完成后先播淡出动画再卸载。会话恢复不再走全屏遮罩——
-          由 ChatArea 的局部加载卡承担反馈，侧栏/右栏保持可见可交互，避免切换
-          会话时整屏闪烁。避免"连接 → 欢迎 → 恢复 → 欢迎"的时序翻转在未就绪时
-          露出主界面。 */}
+          首个会话内容呈现完成后先播图标收束动画（arming 门控，播完才允许
+          揭幕）再两段式淡出卸载。会话恢复不再走全屏遮罩——由 ChatArea 的
+          局部加载卡承担反馈，侧栏/右栏保持可见可交互，避免切换会话时整屏
+          闪烁。避免"连接 → 欢迎 → 恢复 → 欢迎"的时序翻转在未就绪时露出
+          主界面。 */}
       {overlayMounted && (
         <ConnectingOverlay
           lang={lang}
           fading={overlayFading}
           onFaded={handleOverlayFaded}
+          iconPhase={overlayIconPhase}
+          onAscendComplete={handleAscendComplete}
           connectionError={session.connectionError}
           onRetry={handleOverlayRetry}
         />

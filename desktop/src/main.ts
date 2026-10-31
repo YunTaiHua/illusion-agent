@@ -228,16 +228,16 @@ app.whenReady().then(async () => {
   // 后台启动可能耗时（运行时检测 + Python 初始化），若等后端就绪再建窗，
   // 用户会长时间看到"空白/无响应"，造成"启动很慢"的体感。故先把窗口
   // 亮出来并展示本地加载页，后端就绪后再切换到应用 URL。
-  // 加载页为纯白底：与 web 端 ConnectingOverlay 的 bg-white 同框一致，
-  // 消除粒子球旋转 + 切白底之间的间隙卡顿感。web 端遮罩层淡入接管，
-  // 700ms ease-out 过渡柔化（两段式启动）切换。
+  // 加载页为纯白底：与 web 端首帧静态遮罩（index.html #boot-splash）及
+  // ConnectingOverlay 的 bg-white 同框一致，交接全程白底不闪色。
   mainWindow = createWindow();
-  // 启动页：白底延续（与 web 端 ConnectingOverlay 的 bg-white 无缝同框），
-  // 中央嵌入圆角应用图标作品牌锚点。图标文件经 base64 内嵌——data-url 页
-  // 无法再发起相对资源请求。收到后端就绪信号（backend.start() resolve）
-  // 后由 executeJavaScript 触发 __splashFadeOut() 淡出图标，短暂停留于
-  // 纯白再整页交接 web——衔接链：Desktop 白底+图标 → 淡出 → web 白底
-  // → ConnectingOverlay 淡入（700ms ease-out，App.tsx 事件驱动卸载）。
+  // 启动页：白底延续，中央嵌入圆角应用图标作品牌锚点。图标文件经 base64
+  // 内嵌——data-url 页无法再发起相对资源请求。收到后端就绪信号（backend.
+  // start() resolve）后由 executeJavaScript 触发 __splashFadeOut() 快速
+  // 淡出图标，短暂停留于纯白即导航交接——web 端首次绘制即由静态遮罩带回
+  // 同款图标，衔接链：Desktop 白底+图标 → 图标淡出 → 短暂纯白 → web
+  // 白底+图标（#boot-splash）→ ConnectingOverlay 即时不透明接管（匀速
+  // 旋转+呼吸 → 就绪鼓点 → 两段式淡出揭幕，见 ConnectingOverlay.tsx）。
   const splashIconPath = resolveWindowIcon();
   let splashLogo = '';
   if (splashIconPath) {
@@ -257,7 +257,7 @@ app.whenReady().then(async () => {
           #splash-logo{
             width:clamp(84px,16vmin,120px);height:auto;display:block;
             filter:drop-shadow(0 3px 10px rgba(0,0,0,0.19)) drop-shadow(0 14px 40px rgba(0,0,0,0.36));
-            transition:opacity .5s ease;
+            transition:opacity .4s ease;
           }
         </style></head><body>${splashLogo}<script>
           window.__splashFadeOut = function(){
@@ -334,12 +334,13 @@ app.whenReady().then(async () => {
   });
 
   // --- 后端就绪后加载应用并显示（窗口已在启动时创建并展示加载页） ---
-  // 先淡出启动页图标（0.5s 过渡）并停留半拍，让画面交接时是"纯白 →
-  // web 白底"的同色衔接，再由 web 端 ConnectingOverlay 接管视觉焦点
+  // 先淡出启动页图标（0.4s 过渡）并短暂停留纯白（淡出触发到导航合计
+  // 450ms，压缩交接期白窗）。导航必须在图标完全淡出后发起：web 端首次
+  // 绘制就会带回同款图标，若残留半透明残影会出现图标跳变
   await mainWindow.webContents
     .executeJavaScript('window.__splashFadeOut && window.__splashFadeOut()')
     .catch(() => undefined);
-  await new Promise((resolve) => setTimeout(resolve, 600));
+  await new Promise((resolve) => setTimeout(resolve, 450));
   try {
     await mainWindow.loadURL(url);
   } catch (e) {

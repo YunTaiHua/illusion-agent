@@ -28,6 +28,17 @@
     </style>
   </head>
   <body>
+    <!-- 首帧静态遮罩：白底 + 居中应用图标，与 ConnectingOverlay 的图标像素级
+         一致（同 /icon.png、同 clamp 尺寸、同 drop-shadow）。页面一提交即绘制，
+         消除「桌面 splash 淡出 → 纯白空窗 → web 遮罩淡入」的图标空窗与灰蓝
+         首帧；React 挂载后 overlay 以完全不透明同画面接管，由 App 卸载本层。
+         z-index 55 低于 overlay 的 z-[60]；pointer-events:none 保证残留时不挡
+         交互。深色模式同样保持白底——与桌面端 splash 白底契约一致。 -->
+    <div id="boot-splash" style="position:fixed;inset:0;z-index:55;background:#ffffff;display:flex;align-items:center;justify-content:center;pointer-events:none;">
+      <img src="/icon.png" alt="" draggable="false"
+           style="display:block;width:clamp(84px,16vmin,120px);height:auto;user-select:none;
+                  filter:drop-shadow(0 3px 10px rgba(0,0,0,0.19)) drop-shadow(0 14px 40px rgba(0,0,0,0.36));" />
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

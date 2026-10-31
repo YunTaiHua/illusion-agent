@@ -115,6 +115,30 @@ export default {
           '0%': { width: '100%' },
           '100%': { width: '0%' },
         },
+        /* 连接遮罩图标 · 微呼吸循环（作用于外层呼吸层，贯穿遮罩整个生命周期；
+           与内层匀速旋转叠加为环境运动——图标从出现到揭幕无静止帧；幅度
+           ±3.5%，与收束缩放分属两个元素、乘法叠加） */
+        'icon-breathe': {
+          '0%': { scale: '1' },
+          '100%': { scale: '1.035' },
+        },
+        /* 连接遮罩图标 · 匀速旋转（挂载即转，linear 无限循环——每圈边界
+           速度连续，无起停停顿；贯穿连接期/收束期/揭幕淡出，随整层溶解） */
+        'icon-spin': {
+          to: { rotate: '360deg' },
+        },
+        /* 连接遮罩图标 · 就绪鼓点（收束签名）：就绪瞬间在持续旋转之上叠发
+           一次 scale 1→1.06→1（缩放与旋转角无关，无需与圈相位对齐，无
+           跳变），播完（animationend 门控）才允许揭幕淡出——"动画完整
+           不打断"由这条有界动画承担。时长 1100ms 与 App.tsx 的
+           ICON_SWELL_ANIMATION_MS 契约一致（兜底定时器依据）。
+           reduced-motion 下由全局规则降级为 0.01ms 单次，animationend 照常
+           触发 → 揭幕零延迟。滤镜在外层：投影偏移方向不随内部旋转公转。 */
+        'icon-swell': {
+          '0%': { scale: '1' },
+          '50%': { scale: '1.06' },
+          '100%': { scale: '1' },
+        },
       },
       animation: {
         'fade': 'fade 0.15s ease-out both',
@@ -126,6 +150,9 @@ export default {
         'toast-in': 'toast-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) both',
         'toast-out': 'toast-out 0.2s ease-in both',
         'progress-shrink': 'progress-shrink linear forwards',
+        'icon-breathe': 'icon-breathe 2.4s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate',
+        'icon-spin': 'icon-spin 1400ms linear infinite',
+        'icon-swell': 'icon-swell 1100ms cubic-bezier(0.3, 0.3, 0.5, 1) both',
       },
     },
   },
