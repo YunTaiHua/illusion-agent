@@ -34,7 +34,7 @@ def read_version_from_pyproject() -> str:
     if not version:
         raise ValueError("Version not found in pyproject.toml")
 
-    return version
+    return str(version)
 
 
 def generate_terminal_version_file(version: str) -> None:
