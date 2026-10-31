@@ -915,6 +915,12 @@ async def close_runtime(bundle: RuntimeBundle) -> None:
             await browser_manager.aclose()
         except Exception:
             logging.getLogger(__name__).debug("关闭浏览器管理器失败", exc_info=True)
+    # 关闭 web_search 的无头搜索浏览器实例（与可见浏览器独立；未启动时
+    # 为幂等空操作）。必须在会话循环内关闭：Playwright 连接绑定所属事件
+    # 循环，拖到循环关闭后会残留子进程并在解释器退出时报 Event loop is closed
+    from illusion.browser.search_engine import aclose_search_browser
+
+    await aclose_search_browser()
     # 关闭 MCP 管理器
     await bundle.mcp_manager.close()
     # 执行会话结束钩子

@@ -10,6 +10,7 @@ IllusionAgent 内置浏览器
     - desktop_bridge: Electron <webview> 桥接后端（桌面模式）
     - snapshot: ARIA 快照 + ref 体系
     - manager: 会话级浏览器管理器（RuntimeBundle 持有）
+    - search_engine: 无头浏览器搜索引擎（web_search 工具后端）
     - seeding: 内置 browser-use 插件 seed
 """
 

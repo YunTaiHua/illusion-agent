@@ -66,36 +66,37 @@ class PlaywrightBackend(BrowserBackend):
         async with self._lock:
             if self._browser is not None:
                 return
-            try:
-                from playwright.async_api import async_playwright
-            except ImportError as exc:
-                raise BrowserCommandError(
-                    "Playwright import failed (it is a required dependency; reinstall with "
-                    "`pip install illusion-agent`). Chromium kernel missing? "
-                    "Run `illusion browser setup` once."
-                ) from exc
-            self._pw = await async_playwright().start()
-            kwargs = await resolve_launch_kwargs(self._pw, self._kernel)
-            launch_kwargs: dict[str, Any] = {
-                "headless": self._headless,
-                "args": ["--no-first-run", "--no-default-browser-check"],
-            }
-            launch_kwargs.update(kwargs)
-            # 无头 Chromium 不继承 Windows 系统代理，按配置显式接入
-            # （auto=系统代理/env 自动探测；失败时静默直连）
+            from playwright.async_api import async_playwright
+
             from illusion.browser.executable import resolve_proxy
-            proxy = resolve_proxy(self._proxy_setting)
-            if proxy:
-                launch_kwargs["proxy"] = proxy
+            # start/launch/new_context 必须都在此 try 内归一化为
+            # BrowserCommandError：裸 playwright Error 会逃出预热任务与
+            # 面板调用链，且 browser 已置位而 context 为 None 时，后续所有
+            # browser_* 命令都会在 None context 上 AttributeError 卡死
             try:
+                self._pw = await async_playwright().start()
+                kwargs = await resolve_launch_kwargs(self._pw, self._kernel)
+                launch_kwargs: dict[str, Any] = {
+                    "headless": self._headless,
+                    "args": ["--no-first-run", "--no-default-browser-check"],
+                }
+                launch_kwargs.update(kwargs)
+                # 无头 Chromium 不继承 Windows 系统代理，按配置显式接入
+                # （auto=系统代理/env 自动探测；失败时静默直连）
+                proxy = resolve_proxy(self._proxy_setting)
+                if proxy:
+                    launch_kwargs["proxy"] = proxy
                 self._browser = await self._pw.chromium.launch(**launch_kwargs)
+                self._context = await self._browser.new_context(
+                    viewport={"width": self._viewport[0], "height": self._viewport[1]},
+                    device_scale_factor=1,
+                )
+            except BrowserCommandError:
+                await self._teardown()
+                raise
             except Exception as exc:
                 await self._teardown()
                 raise BrowserCommandError(f"Failed to launch browser: {exc}") from exc
-            self._context = await self._browser.new_context(
-                viewport={"width": self._viewport[0], "height": self._viewport[1]},
-                device_scale_factor=1,
-            )
             # popup 收编挂在逐页 "popup" 事件上（new_tab 建页时注册）：
             # 不用 context.on("page")——它对 new_page() 创建的页面同样触发，
             # 与 new_tab 的注册存在竞态，会导致同一页面双重编号
