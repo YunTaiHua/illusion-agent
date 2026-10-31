@@ -177,8 +177,23 @@ class DesktopBridgeBackend(BrowserBackend):
     # 观察
     # ------------------------------------------------------------------
     async def screenshot(self, tab_id: str, full_page: bool = False) -> ScreenshotData:
-        result = await self._post("screenshot", {"tabId": tab_id, "fullPage": full_page},
-                                  timeout=35.0)
+        if not full_page:
+            return await self._screenshot_viewport(tab_id)
+        # 整页链路全部在 Electron 宿主侧完成（模拟视口单帧 → 失败转逐屏
+        # capturePage + guest 页内画布拼接，零 Python 依赖）；任一环节不可用
+        # 时诚实降级为视口截图
+        try:
+            result = await self._post("screenshotFullPage", {"tabId": tab_id}, timeout=120.0)
+        except BrowserCommandError as exc:
+            logger.warning("Host full-page capture failed: %s", exc)
+            result = {}
+        raw = str(result.get("jpegBase64", ""))
+        if not raw:
+            return await self._screenshot_viewport(tab_id)
+        return ScreenshotData(data=base64.b64decode(raw), mime="image/jpeg")
+
+    async def _screenshot_viewport(self, tab_id: str) -> ScreenshotData:
+        result = await self._post("screenshot", {"tabId": tab_id}, timeout=35.0)
         raw = str(result.get("jpegBase64", ""))
         if not raw:
             raise BrowserCommandError("Desktop bridge returned an empty screenshot")

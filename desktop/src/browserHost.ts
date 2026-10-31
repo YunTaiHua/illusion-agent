@@ -20,7 +20,7 @@
 import * as http from 'node:http';
 import * as crypto from 'node:crypto';
 import { webContents } from 'electron';
-import type { BrowserWindow, WebContents } from 'electron';
+import type { BrowserWindow, NativeImage, WebContents } from 'electron';
 
 /** guest 注册表条目 */
 interface TabEntry {
@@ -84,6 +84,27 @@ function wrapEvalExpression(expression: string): string {
   return `(() => (${expr}))()`;
 }
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.round(v)));
+
+/** 整页模拟视口单边 CSS 上限：超长页取顶部（widget 尺寸留在 Chromium 纹理安全区） */
+const FULLPAGE_MAX_DIM = 16384;
+
+/** 拼接条带数护栏（防异常小视口把条带数放大到不可收场） */
+const MAX_STITCH_STRIPS = 64;
+
+/** 拼接用：隐藏 fixed/sticky 元素（它们随滚动驻留，逐屏捕获会每屏重复） */
+const STITCH_HIDE_SCRIPT =
+  "(function () { var s = window.__illuStitch; if (!s) return 0; " +
+  "var els = Array.prototype.slice.call(document.querySelectorAll('body *')).filter(function (el) { " +
+  "var p = getComputedStyle(el).position; return p === 'fixed' || p === 'sticky'; }); " +
+  "s.hidden = els.map(function (el) { return [el, el.style.visibility]; }); " +
+  "els.forEach(function (el) { el.style.visibility = 'hidden'; }); return els.length; })()";
+
+/** 拼接用：还原隐藏元素与平滑滚动（幂等，未准备成功时为 no-op） */
+const STITCH_RESTORE_SCRIPT =
+  "(function () { var s = window.__illuStitch; if (!s) return 0; " +
+  "s.hidden.forEach(function (pair) { pair[0].style.visibility = pair[1]; }); " +
+  "document.documentElement.style.scrollBehavior = s.scrollBehavior; " +
+  "window.__illuStitch = undefined; return 1; })()";
 
 /** Attach 等待超时（渲染进程创建 webview 的往返） */
 const ATTACH_TIMEOUT_MS = 8000;
@@ -386,6 +407,170 @@ export function startBrowserHost(options: BrowserHostOptions): BrowserHost {
         (e) => { clearTimeout(timer); reject(e instanceof Error ? e : new Error(String(e))); },
       );
     });
+  }
+
+  /** 视口捕获（invalidate 促帧 + 限时）：普通截图与拼接条带共用 */
+  async function captureViewport(wc: WebContents): Promise<NativeImage> {
+    try { wc.invalidate(); } catch { /* 销毁竞态忽略 */ }
+    return withTimeout(wc.capturePage(), CAPTURE_TIMEOUT_MS, 'capture');
+  }
+
+  /**
+   * 整页单帧捕获（第一优先）：Emulation 模拟视口撑到整页高度 + 原生
+   * capturePage 读回。capturePage 自带 capturer 反节流（= 截图泵机制，
+   * 强制 guest 产出新帧）；native 读回无 CDP 的"小 raster 平铺回填"，
+   * getSize() 即真实 raster 尺寸。尺寸不符 = 整页帧未产出（guest 离屏/
+   * 节流），返回结构化 error 由调用方转拼接兜底——绝不产出假长图。
+   */
+  async function captureFullPageSingleFrame(
+    wc: WebContents,
+  ): Promise<{ jpegBase64?: string; error?: string }> {
+    const dbg = wc.debugger;
+    dbg.attach('1.3');
+    try {
+      try {
+        const metrics = (await withTimeout(
+          dbg.sendCommand('Page.getLayoutMetrics'),
+          5000,
+          'layout metrics',
+        )) as {
+          cssContentSize?: { width: number; height: number };
+          contentSize?: { width: number; height: number };
+        };
+        const box = metrics.cssContentSize ?? metrics.contentSize;
+        if (!box || !(box.width > 0) || !(box.height > 0)) {
+          return { error: 'full-page capture: empty content size' };
+        }
+        const emuWidth = Math.min(Math.ceil(box.width), FULLPAGE_MAX_DIM);
+        const emuHeight = Math.min(Math.ceil(box.height), FULLPAGE_MAX_DIM);
+        await withTimeout(
+          dbg.sendCommand('Emulation.setDeviceMetricsOverride', {
+            width: emuWidth,
+            height: emuHeight,
+            deviceScaleFactor: 1,
+            mobile: false,
+          }),
+          5000,
+          'viewport override',
+        );
+        // 两次机会两种形态：无参（GetViewBounds=模拟尺寸时直接整页）与
+        // 显式全页 rect。每轮先 invalidate 促帧。
+        for (let attempt = 0; attempt < 2; attempt++) {
+          if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 300));
+          const image = await captureViewport(wc);
+          const size = image.getSize();
+          // 容差带 [0.95, 2]：精确匹配为主；上限放行 DPI/缩放扰动（比目标
+          // 大=同一画面更高清），小于 0.95 即判定整页帧未产出
+          const widthRatio = size.width / emuWidth;
+          const heightRatio = size.height / emuHeight;
+          if (widthRatio >= 0.95 && widthRatio <= 2 && heightRatio >= 0.95 && heightRatio <= 2) {
+            return { jpegBase64: image.toJPEG(80).toString('base64') };
+          }
+        }
+        return { error: 'full-frame-not-rastered' };
+      } finally {
+        // 模拟必须无条件清除：残留会把可见 webview 钉在整页缩放态
+        try {
+          await withTimeout(dbg.sendCommand('Emulation.clearDeviceMetricsOverride'), 3000, 'override clear');
+        } catch { /* 会话已失效等，忽略 */ }
+      }
+    } catch (exc) {
+      return { error: exc instanceof Error ? exc.message : String(exc) };
+    } finally {
+      try { dbg.detach(); } catch { /* 已分离/销毁竞态忽略 */ }
+    }
+  }
+
+  /**
+   * 整页拼接捕获（单帧出不了整页帧时的兜底）：逐屏 capturePage——native
+   * 读回自带 capturer 反节流，强制离屏/节流 guest 出帧（普通视口截图即此
+   * 路径，全状态可用）。滚动经页内 JS 并回读实际 scrollY（按实际位置贴图，
+   * 杜绝缝隙/错位）；fixed/sticky 元素仅保留首屏原位（对齐 DevTools 整页
+   * 截图语义）；合成在 guest 页内画布完成——条带以 JPEG 字节经 atob→Blob→
+   * createImageBitmap 纯 JS 解码（无网络请求，不受页面 CSP 约束，零原生
+   * 依赖），完毕无条件还原页面状态。
+   */
+  async function captureFullPageByStitch(wc: WebContents): Promise<{ jpegBase64: string }> {
+    const geometryText = await wc.executeJavaScript(
+      'JSON.stringify({vw: innerWidth, vh: innerHeight, '
+      + 'sh: document.documentElement.scrollHeight, y: scrollY})',
+      false,
+    );
+    const geo = JSON.parse(String(geometryText ?? '{}')) as {
+      vw?: number; vh?: number; sh?: number; y?: number;
+    };
+    const vw = Math.max(1, Math.round(Number(geo.vw ?? 0)));
+    const vh = Math.max(1, Math.round(Number(geo.vh ?? 0)));
+    const totalH = Math.min(Math.max(1, Math.round(Number(geo.sh ?? 0))), FULLPAGE_MAX_DIM);
+    const originY = Math.max(0, Math.round(Number(geo.y ?? 0)));
+    if (totalH <= vh + 2) throw new Error('stitch: page fits one viewport');
+
+    await wc.executeJavaScript(
+      "(function () { window.__illuStitch = { scrollBehavior: "
+      + "document.documentElement.style.scrollBehavior, hidden: [] }; "
+      + "document.documentElement.style.scrollBehavior = 'auto'; return 1; })()",
+      false,
+    );
+    const strips: Array<{ y: number; image: NativeImage }> = [];
+    try {
+      // 绝对滚动并回读实际位置（平滑滚动/节流页可能未到位，重滚重读）
+      const scrollToY = async (targetY: number): Promise<number> => {
+        let actual = -1;
+        for (let i = 0; i < 3; i++) {
+          await wc.executeJavaScript(`window.scrollTo(0, ${targetY})`, false);
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          const text = await wc.executeJavaScript('JSON.stringify({y: scrollY})', false);
+          actual = Math.round(Number(JSON.parse(String(text ?? '{}')).y ?? -1));
+          if (actual >= 0 && Math.abs(actual - targetY) <= 2) return actual;
+        }
+        if (actual < 0) throw new Error('stitch: cannot read scroll position');
+        return actual; // 页面到底/被截断：按实际位置贴图
+      };
+      // 首屏（fixed/sticky 保持原位，整页只出现一次）
+      strips.push({ y: await scrollToY(0), image: await captureViewport(wc) });
+      await wc.executeJavaScript(STITCH_HIDE_SCRIPT, false);
+      let y = vh;
+      while (y < totalH && strips.length < MAX_STITCH_STRIPS) {
+        const target = Math.min(y, totalH - vh);
+        strips.push({ y: await scrollToY(target), image: await captureViewport(wc) });
+        y += vh;
+      }
+    } finally {
+      // 无条件还原页面状态（可见性 + 平滑滚动 + 滚动位置）
+      try { await wc.executeJavaScript(STITCH_RESTORE_SCRIPT, false); } catch { /* ignore */ }
+      try { await wc.executeJavaScript(`window.scrollTo(0, ${originY})`, false); } catch { /* ignore */ }
+    }
+    if (strips.length < 2) throw new Error('stitch: not enough strips');
+
+    // 页内画布合成：条带尺寸为设备像素（HiDPI 下大于 CSS），按首条带换算
+    const stripSize = strips[0].image.getSize();
+    const scale = stripSize.height / vh;
+    const outHeight = Math.max(stripSize.height, Math.round(totalH * scale));
+    const payload = strips.map((strip) => ({
+      y: Math.round(strip.y * scale),
+      b64: strip.image.toJPEG(80).toString('base64'),
+    }));
+    const composite =
+      '(async () => {'
+      + ` const strips = ${JSON.stringify(payload)};`
+      + ` const canvas = document.createElement('canvas');`
+      + ` canvas.width = ${stripSize.width}; canvas.height = ${outHeight};`
+      + ` const ctx = canvas.getContext('2d');`
+      + ` ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height);`
+      + ` for (const s of strips) {`
+      + '  const bin = atob(s.b64);'
+      + '  const bytes = new Uint8Array(bin.length);'
+      + '  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);'
+      + "  const bmp = await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' }));"
+      + '  ctx.drawImage(bmp, 0, s.y);'
+      + '  bmp.close();'
+      + ' }'
+      + " const url = canvas.toDataURL('image/jpeg', 0.8);"
+      + " return url.indexOf('base64,') >= 0 ? url.slice(url.indexOf('base64,') + 7) : '';"
+      + ' })()';
+    const jpegBase64 = String(await wc.executeJavaScript(composite, false) ?? '');
+    if (!jpegBase64) throw new Error('stitch: canvas composite returned empty');
+    return { jpegBase64 };
   }
 
   // ---- 命令实现 ----
@@ -791,6 +976,23 @@ export function startBrowserHost(options: BrowserHostOptions): BrowserHost {
       });
       const jpeg = image.toJPEG(80);
       return { jpegBase64: jpeg.toString('base64') };
+    },
+    async screenshotFullPage(payload) {
+      const wc = await awaitWc(payload.tabId ? String(payload.tabId) : undefined);
+      try { wc.invalidate(); } catch { /* 销毁竞态忽略 */ }
+      // 第一优先：模拟视口整页单帧（质量最高，无拼接痕迹）。CDP
+      // captureBeyondViewport 读回在 Windows 下会把"小于请求尺寸的 raster"
+      // 平铺成目标尺寸（guest 离屏/节流不出整页帧时长图=页首逐块重复），
+      // 故读回走原生 capturePage 并做尺寸校验。
+      const single = await captureFullPageSingleFrame(wc);
+      if (single.jpegBase64) return { jpegBase64: single.jpegBase64 };
+      // 整页帧未产出 → 逐屏 capturePage + 页内画布拼接兜底；拼接也失败 →
+      // 结构化 error（Python 侧降级为视口截图，绝不产出内容错误的假长图）
+      try {
+        return await captureFullPageByStitch(wc);
+      } catch (exc) {
+        return { error: exc instanceof Error ? exc.message : String(exc) };
+      }
     },
     async snapshot(payload) {
       const wc = await awaitWc(payload.tabId ? String(payload.tabId) : undefined);
