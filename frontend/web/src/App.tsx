@@ -1362,14 +1362,13 @@ export default function App() {
           browserOpActive={session.browserOpActive}
           onOpenBrowserPreview={(tabId) => expandForBrowser(tabId ? { tabId } : undefined)}
           onCloseBrowser={() => session.sendRequest({ type: 'web_browser_close' })}
-          onOpenAndNavigate={(url, newTab) => {
-            // 右栏输入网址：打开浏览器；运行中=新开 tab（多开），未运行=直达到首 tab
+          onOpenAndNavigate={(url) => {
+            // 右栏输入网址：总是新开 tab（后端 tabs new 分支对未运行的浏览器
+            // 自动 panel_open，未运行=启动+直达、运行中=多开）。不按本地
+            // open 状态分流 navigate——ws 重连/会话切换后 open 可能过期，
+            // navigate 会替换现有 tab 内容而非新开（desktop 实测替换根因）
             expandForBrowser({ activateNewestBrowserTab: true });
-            if (newTab) {
-              session.sendRequest({ type: 'web_browser_tabs', browser_action: 'new', url });
-            } else {
-              session.sendRequest({ type: 'web_browser_navigate', url });
-            }
+            session.sendRequest({ type: 'web_browser_tabs', browser_action: 'new', url });
           }}
           onPluginToggle={(name, enabled) =>
             session.sendRequest({ type: 'web_plugin_toggle', setting_key: name, setting_value: enabled })}

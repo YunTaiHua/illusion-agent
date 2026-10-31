@@ -106,8 +106,8 @@ interface RightPanelProps {
   onOpenBrowserPreview?: (tabId?: string) => void;
   /** 关闭浏览器（WS 请求发送器） */
   onCloseBrowser?: () => void;
-  /** 打开浏览器并直达 URL（未运行则启动后导航） */
-  onOpenAndNavigate?: (url: string, newTab?: boolean) => void;
+  /** 提交网址：新开 tab 直达（浏览器未运行则自动启动） */
+  onOpenAndNavigate?: (url: string) => void;
   /** 插件启用/禁用开关回调 */
   onPluginToggle?: (name: string, enabled: boolean) => void;
 }

@@ -85,13 +85,10 @@ class DesktopBridgeBackend(BrowserBackend):
         await self._post("closeAll", {})
 
     async def aclose(self) -> None:
-        # 桥接后端不拥有浏览器生命周期（webview 归 Electron 管），仅释放连接。
-        # aclose 前先 closeAll：否则控制服务器 tabs 表留下僵尸 tab，下次
-        # ensure_started 的 getState 仍回报它们（"关闭后仍显示 tabs"根因）。
-        try:
-            await self.close_all()
-        except Exception:  # 控制服务器已退出时无需清理
-            logger.debug("[browser] closeAll skipped (control server gone)", exc_info=True)
+        # 只释放 Python 侧 HTTP 连接，不清 Electron 侧 tabs/webview——它们归
+        # Electron 主进程持有，跨 ws 断开/host 退出存活。重连后新 manager 的
+        # ensure_started→getState 回报存活 tabs，前端浏览器状态无损恢复。
+        # 显式关闭（用户关面板/禁用插件）由调用方走 close_all() 彻底清理。
         if self._client:
             await self._client.aclose()
             self._client = None

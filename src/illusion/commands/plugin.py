@@ -44,7 +44,9 @@ async def plugin_handler(args: str, context: CommandContext) -> CommandResult:
             if not enabled and manager is not None:
                 import asyncio
 
-                asyncio.get_running_loop().create_task(manager.aclose())
+                # 禁用插件=彻底关闭：purge 清空 Electron 侧 tabs/webview，
+                # 避免重新启用后残留 tabs 复活（僵尸 tab）
+                asyncio.get_running_loop().create_task(manager.aclose(purge=True))
                 manager = None
             apply_browser_toggle(context.engine, context.tool_registry, manager, enabled)
         verb = "Enabled" if enabled else "Disabled"

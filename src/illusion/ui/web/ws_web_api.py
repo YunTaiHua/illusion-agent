@@ -2436,7 +2436,8 @@ class WebApiDispatcher:
             return bundle.browser_manager
         manager = getattr(bundle, "browser_manager", None)
         if manager is not None:
-            await manager.aclose()
+            # 禁用插件=彻底关闭：purge 清空 Electron 侧 tabs/webview
+            await manager.aclose(purge=True)
         bundle.browser_manager = None
         self._apply_browser_toggle(bundle.engine, bundle.tool_registry, None, enabled)
         return None

@@ -201,10 +201,17 @@ export function useFitCanvasMeasure(
   enabled: boolean,
 ): ResponsiveSize | null {
   const [canvasSize, setCanvasSize] = useState<ResponsiveSize | null>(null);
+  // 已建立观察的画布节点。画布在条件渲染分支里（浏览器面板未打开时不在 DOM），
+  // 节点晚于 effect 首次执行才挂载——固定依赖数组捕获不到它的出现，观察器
+  // 永远建立不起来 → canvasSize 恒 null → fit 回退 scale=1（网页以原始
+  // 1280×720 渲染，横向溢出卡片）。因此每次渲染后重查 ref：节点首次出现
+  // （或被替换）的渲染随即补建 ResizeObserver。
+  const observedRef = useRef<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
     if (!enabled) return;
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || observedRef.current === canvas) return;
+    observedRef.current = canvas;
     const update = (w: number, h: number) => {
       if (w <= 0 || h <= 0) return;
       setCanvasSize((prev) => (prev && prev.width === w && prev.height === h ? prev : { width: w, height: h }));
@@ -216,8 +223,11 @@ export function useFitCanvasMeasure(
       if (entry) update(entry.contentRect.width, entry.contentRect.height);
     });
     observer.observe(canvas);
-    return () => observer.disconnect();
-  }, [canvasRef, enabled]);
+    return () => {
+      observer.disconnect();
+      if (observedRef.current === canvas) observedRef.current = null;
+    };
+  });
   return canvasSize;
 }
 

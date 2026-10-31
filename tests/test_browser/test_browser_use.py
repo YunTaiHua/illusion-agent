@@ -174,6 +174,67 @@ class TestManager:
         assert result == {"open": False}
 
 
+class _RecordingBackend:
+    """aclose(purge) 语义契约的桩后端：记录 close_all / aclose 调用。"""
+
+    def __init__(self, with_close_all: bool = True) -> None:
+        self.calls: list[str] = []
+        if with_close_all:
+            self.close_all = self._record("close_all")
+        self.aclose = self._record("aclose")
+
+    def _record(self, name: str):
+        async def fn(*args, **kwargs):
+            self.calls.append(name)
+        return fn
+
+
+class TestAclosePurgeSemantics:
+    """aclose 的 purge 契约：host 退出（默认）保活 desktop 侧 tabs，
+    显式关闭（panel_close / 禁用插件）才 purge 清空并广播 closed 态。"""
+
+    def _make_manager(self, backend: _RecordingBackend) -> BrowserManager:
+        import asyncio
+
+        manager = BrowserManager(BrowserConfig())
+        manager._backend = backend
+        manager._open = True
+        pushed: list[dict] = []
+        manager.on_state_change = lambda payload: pushed.append(payload) or asyncio.sleep(0)
+        return manager, pushed
+
+    def test_default_aclose_keeps_desktop_tabs(self) -> None:
+        import asyncio
+
+        backend = _RecordingBackend(with_close_all=True)
+        manager, pushed = self._make_manager(backend)
+        asyncio.run(manager.aclose())
+        assert backend.calls == ["aclose"]  # 未 purge：close_all 不得出现
+        assert manager.is_open is False
+        assert pushed == []  # host 退出路径不推状态（避免恢复会话时凭空展开）
+
+    def test_purge_calls_close_all_and_emits_closed(self) -> None:
+        import asyncio
+
+        backend = _RecordingBackend(with_close_all=True)
+        manager, pushed = self._make_manager(backend)
+        asyncio.run(manager.aclose(purge=True))
+        assert backend.calls == ["close_all", "aclose"]
+        assert len(pushed) == 1
+        assert pushed[0]["open"] is False
+        assert pushed[0]["tabs"] == []
+
+    def test_purge_without_close_all_is_safe(self) -> None:
+        """托管后端没有 close_all：purge 不抛错，进程照常关闭。"""
+        import asyncio
+
+        backend = _RecordingBackend(with_close_all=False)
+        manager, pushed = self._make_manager(backend)
+        asyncio.run(manager.aclose(purge=True))
+        assert backend.calls == ["aclose"]
+        assert pushed and pushed[0]["open"] is False
+
+
 # ---------------------------------------------------------------------------
 # TabInfo 序列化（协议契约）
 # ---------------------------------------------------------------------------

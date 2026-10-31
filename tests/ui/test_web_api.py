@@ -832,6 +832,30 @@ class TestBrowserPickAndTabsHandlers:
         await dispatcher.handle(FrontendRequest(type="web_browser_tabs", browser_action="close", tab_id="t1"))
         manager.panel_open.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_tabs_new_desktop_creates_tab_with_url(self, tmp_path):
+        """desktop 模式 + 带 URL 的 new：create-with-url 一次建页（右栏网址
+        输入框现在恒走此分支——不得退化为 new_tab(None)+导航的托管路径）。"""
+        manager = MagicMock()
+        manager.is_open = True
+        backend = MagicMock()
+        backend.mode = "desktop"
+        backend.new_tab = AsyncMock(return_value=TabInfo(id="t9", url="https://new.example", active=True))
+        backend.get_state = AsyncMock()
+        backend.get_state.return_value.tabs = [TabInfo(id="t9", url="https://new.example", active=True)]
+        backend.get_state.return_value.viewport_width = 1280
+        backend.get_state.return_value.viewport_height = 720
+        manager.ensure_started = AsyncMock(return_value=backend)
+        manager.panel_capture = AsyncMock()
+        dispatcher = self._make_dispatcher(tmp_path, manager)
+        req = FrontendRequest(type="web_browser_tabs", browser_action="new", url="https://new.example")
+        await dispatcher.handle(req)
+        # 桌面 create-with-url：一次调用携带 URL（绝非 None 占位 + 后台导航）
+        backend.new_tab.assert_awaited_once_with("https://new.example")
+        dispatcher._host._create_background_task.assert_not_called()
+        evts = [c.args[0] for c in dispatcher._host._emit.call_args_list]
+        assert any(e.type == "browser_state" for e in evts)
+
 
 class TestPluginToggleReachesSessionEngines:
     """热切换必须覆盖会话引擎的元数据快照（build_session_engine 对

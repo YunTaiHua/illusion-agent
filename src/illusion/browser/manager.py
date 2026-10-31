@@ -108,12 +108,36 @@ class BrowserManager:
             await backend.start()
             self._backend = backend
         if prewarm:
+            # 不标记 open、不推送任何状态。此处若推 browser_state（哪怕只为
+            # 回报 desktop 桥跨重连存活的 tabs），前端对账会把 tabs 加进预览
+            # 标签条并激活 → 恢复/切换会话时预览卡片凭空自动展开（bundle
+            # 重建即 prewarm）。存活 tabs 的恢复走惰性路径：bundle 重建后的
+            # manager 是全新实例，首次交互（panel_open / tabs new）触发
+            # ensure_started 创建后端并推送完整状态（本函数末尾），届时一并
+            # 回报 Electron 侧存活的 tabs；prewarm 复用同 bundle 既有后端时
+            # 由 panel_open 自己的 notify_state 覆盖。
             return self._backend
         self._open = True
         await self.notify_state()
         return self._backend
 
-    async def aclose(self) -> None:
+    async def aclose(self, *, purge: bool = False) -> None:
+        """释放管理器。
+
+        Args:
+            purge: 彻底清理。desktop 模式下先 close_all 清空 Electron 侧
+                tabs/webview（用户主动关闭面板、禁用插件时 True）；host 退出
+                （ws 断开重连场景）保持 False——存活 tabs 是重连恢复的数据源，
+                清了会让用户浏览器会话凭空消失。托管模式无论 purge 与否都关
+                浏览器进程（无跨连接存活的宿主）。
+        """
+        if purge and self._backend is not None:
+            close_all = getattr(self._backend, "close_all", None)
+            if close_all is not None:
+                try:
+                    await close_all()
+                except Exception:
+                    logger.debug("[browser] purge close_all failed", exc_info=True)
         if self._backend is not None:
             try:
                 await self._backend.aclose()
@@ -122,6 +146,12 @@ class BrowserManager:
         self._backend = None
         self._open = False
         self.last_frame = None
+        if purge and self.on_state_change is not None:
+            # 彻底关闭（用户关面板/禁用插件）必须同步推 closed 态：否则前端
+            # 右栏浏览器区块继续渲染已被 purge 的 tabs 与过期计数，点击行
+            # 会对 None manager 报 "Browser is unavailable"。desktop 桥 purge
+            # 后 Electron 侧 tabs 已清空，closed 是唯一真实状态。
+            await self._emit_closed()
 
     def _require_backend(self) -> BrowserBackend:
         if self._backend is None:
@@ -206,13 +236,11 @@ class BrowserManager:
         return {"open": True, "mode": backend.mode}
 
     async def panel_close(self) -> dict[str, Any]:
-        """关闭右栏面板。托管模式同时关闭浏览器进程。"""
-        if self._backend is not None:
-            await self._backend.aclose()
-        self._backend = None
-        self._open = False
-        self.last_frame = None
-        await self._emit_closed()
+        """关闭右栏面板。托管模式同时关闭浏览器进程；desktop 模式清空
+        Electron 侧 tab 注册表并通知渲染层卸载 guest（用户主动关闭=彻底关，
+        与 host 退出时 aclose 的「保活待重连恢复」语义区分）。closed 态由
+        aclose(purge=True) 统一广播。"""
+        await self.aclose(purge=True)
         return {"open": False}
 
     async def _emit_closed(self) -> None:

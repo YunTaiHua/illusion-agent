@@ -7,7 +7,7 @@
  *   页」同构，缩进对齐其他区块子行）：放大镜图标 + 标题/URL；无计数徽标、
  *   无关闭按钮（多 tab 管理在预览卡片顶栏）；
  * - 底部常显网址输入框：放大镜图标点击即提交（不再单独保留右箭头按钮），
- *   回车同样提交；浏览器未运行时提交=启动并直达，运行中=新开 tab。
+ *   回车同样提交；提交恒为新开 tab（浏览器未运行则自动启动并直达）。
  *
  * 本区块自身不触发"打开浏览器"——打开动作只来自 URL 提交或显式按钮，
  * 避免展开查看时闪现空白页。
@@ -33,8 +33,8 @@ interface BrowserSectionProps {
   onOpenPreview: (tabId: string) => void;
   /** 关闭浏览器 */
   onCloseBrowser: () => void;
-  /** 启动浏览器并直达 URL（右栏输入框提交；newTab=true 时新开 tab） */
-  onOpenAndNavigate: (url: string, newTab?: boolean) => void;
+  /** 提交网址：在预览卡片中打开浏览器并新开 tab 直达（未运行则自动启动） */
+  onOpenAndNavigate: (url: string) => void;
 }
 
 export default function BrowserSection({
@@ -50,8 +50,10 @@ export default function BrowserSection({
     const target = normalizeBrowserInput(urlDraft);
     if (!target) return;
     setUrlDraft('');
-    // 运行中：新开 tab（多开）；未运行：启动并直达
-    onOpenAndNavigate(target, open);
+    // 总是新开 tab：不依赖本地 open 状态分流——ws 重连/会话切换后该状态
+    // 可能过期，走 navigate 会替换现有 tab 内容而非新开（后端 tabs new
+    // 分支对未运行的浏览器自动 panel_open，两种场景统一）
+    onOpenAndNavigate(target);
   };
 
   return (
@@ -95,7 +97,7 @@ export default function BrowserSection({
               但容器上/下边缘各外移 10px，让 tab 行悬浮阴影的上/下半部分不被容器边缘裁掉
               （上方裁切线原本贴着父区块头、下方贴着网址输入框，阴影看起来像被截断） */}
           {open && tabs.length > 0 && (
-            <div className="pt-3 pb-3.5 -mt-2.5 -mb-2.5 flex flex-col gap-0.5 max-h-56 overflow-y-auto dropdown-scroll">
+            <div className="pt-3 pb-3.5 -mt-2.5 -mb-2.5 flex flex-col gap-0.5 max-h-[234px] overflow-y-auto dropdown-scroll">
               {tabs.map((tb) => (
                 <div
                   key={tb.id}
