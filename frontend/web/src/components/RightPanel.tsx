@@ -716,7 +716,7 @@ export function RightPanelControls({
           aria-label={t(lang, 'preview_restore')}
           className="w-8 h-8 flex items-center justify-center rounded-full glass-surface text-content-secondary glass-option-hover hover:text-primary transition-colors cursor-pointer"
         >
-          <MaximizeIcon className="w-4 h-4" />
+          <MaximizeIcon className="w-[15px] h-[15px]" />
         </button>
       )}
       {/* 展开/收起右栏 */}

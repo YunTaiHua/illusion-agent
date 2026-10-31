@@ -1328,7 +1328,7 @@ export default function App() {
             aria-label={t(lang, 'preview_restore')}
             className="absolute top-3 right-3 z-20 w-8 h-8 flex items-center justify-center rounded-full glass-surface text-content-secondary glass-option-hover hover:text-primary transition-colors cursor-pointer"
           >
-            <MaximizeIcon className="w-4 h-4" />
+            <MaximizeIcon className="w-[15px] h-[15px]" />
           </button>
         )}
         {/* 顶部左侧按钮组（Sidebar 折叠态承载）：侧栏折叠即显示（欢迎态也可用），
