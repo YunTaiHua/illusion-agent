@@ -50,8 +50,10 @@ export function allocatePort(): Promise<number> {
   });
 }
 
-/** 轮询 URL 直至返回 2xx 或超时 */
-function waitUntilReady(host: string, port: number, timeoutMs = 30000): Promise<void> {
+/** 轮询 URL 直至返回 2xx 或超时。
+ *  默认 60s：安装后首次启动 Python 冷启动（杀软逐个扫描全量 site-packages）
+ *  实测可达 40s+，旧值 30s 会误杀健康的冷启动后端。 */
+function waitUntilReady(host: string, port: number, timeoutMs = 60000): Promise<void> {
   const start = Date.now();
   return new Promise((resolve, reject) => {
     const check = () => {
@@ -136,10 +138,13 @@ export class Backend extends EventEmitter {
 
     // 等待后端打印访问 URL（web.py 输出 "IllusionAgent Web UI: http://...?token=..."）。
     // 该行为后端就绪的前置信号：URL 行出现后再轮询 HTTP 直至可服务。
+    // 超时 120s：安装后首次启动 Python 冷启动（杀软扫描全量 site-packages）
+    // 实测可达 40s+，旧值 30s 撞上冷启动会误判失败（后端随后仍会启动完成，
+    // 而桌面壳已放弃——修复退出流程前更是产生无退出入口的僵尸实例）。
     const urlPromise = new Promise<string>((resolve, reject) => {
       const timer = setTimeout(
-        () => reject(new Error('后端未在 30s 内输出访问 URL')),
-        30000,
+        () => reject(new Error('后端未在 120s 内输出访问 URL')),
+        120000,
       );
       if (!this.proc?.stdout) {
         clearTimeout(timer);

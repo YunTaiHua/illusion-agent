@@ -277,7 +277,7 @@ app.whenReady().then(async () => {
   const runtime = resolveRuntime();
   if (!runtime.python) {
     dialog.showErrorBox(t(lang, 'app_name'), t(lang, 'err_no_runtime'));
-    app.quit();
+    quitApp();
     return;
   }
 
@@ -308,7 +308,19 @@ app.whenReady().then(async () => {
   // 注入后端 env，Python 侧 desktop_bridge 据此驱动渲染进程的 <webview> guest。
   // 必须在 Backend.start 之前完成（后端启动时读取 env 决定后端模式）。
   browserHost = startBrowserHost({ getWindow: () => mainWindow });
-  await browserHost.ready;
+  try {
+    await browserHost.ready;
+  } catch (e) {
+    // 回环监听失败极罕见，但若发生且不接住：await 抛出的 unhandled rejection
+    // 会让 whenReady 静默死亡——窗口永远停在启动页且无任何弹窗、无退出入口。
+    // 失败必须响亮且干净：弹窗 + 走 quitApp（isQuitting 置位 + 杀净子进程）。
+    dialog.showErrorBox(
+      t(lang, 'app_name'),
+      t(lang, 'err_backend_failed', { message: (e as Error).message }),
+    );
+    quitApp();
+    return;
+  }
   env.ILLUSION_DESKTOP_BROWSER_URL = browserHost.getUrl();
   env.ILLUSION_DESKTOP_BROWSER_TOKEN = browserHost.getToken();
   backend = new Backend({ pythonPath: runtime.python, env });
@@ -321,7 +333,11 @@ app.whenReady().then(async () => {
       t(lang, 'app_name'),
       t(lang, 'err_backend_failed', { message: (e as Error).message }),
     );
-    app.quit();
+    // 失败分支必须走 quitApp 而非裸 app.quit：后者会被窗口 close 处理器的
+    // preventDefault（关闭=隐藏到托盘）取消退出——isQuitting 无人置位、托盘
+    // 又尚未创建，主进程与后端双双沦为无退出入口的僵尸；下次启动只被
+    // 单实例锁唤醒隐藏窗口，表现为永远卡在启动遮罩。
+    quitApp();
     return;
   }
 
