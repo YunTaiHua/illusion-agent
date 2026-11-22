@@ -20,12 +20,8 @@ import { t, type UiLanguage } from '../i18n';
 import { cronApi, type CronJob, type CronSchedulerStatus, type CronSessionSummary, type CronChannelSession } from '../api';
 import { GlassDropdown } from './GlassDropdown';
 import ToggleSwitch from './ToggleSwitch';
+import { inputClass, labelClass, FieldLabel } from './settingsUi';
 import type { WebWorkspaceItem } from '../types/protocol';
-
-/** 输入框通用样式（聚焦散光，与 SetupForm 保持一致） */
-const inputClass = 'w-full px-3 py-2 rounded-md bg-surface-card-alt border border-border-light text-content-primary text-sm focus:outline-none focus:border-primary focus:shadow-glow transition-all duration-200';
-/** 字段标签样式 */
-const labelClass = 'text-xs font-medium text-content-secondary mb-1.5';
 
 /** 前端 cron 表达式基础校验（5 字段 + 合法字符；后端 croniter 严格校验兜底） */
 function isValidCron(s: string): boolean {
@@ -402,7 +398,7 @@ export function CronTab({ lang, workspaces }: CronTabProps) {
 
           {/* cron 表达式 */}
           <div>
-            <div className={labelClass}>{t(lang, 'cronFieldSchedule')}</div>
+            <FieldLabel label={t(lang, 'cronFieldSchedule')} hint={t(lang, 'cronFieldScheduleHint')} />
             <input
               type="text"
               value={draft.schedule}
@@ -410,25 +406,23 @@ export function CronTab({ lang, workspaces }: CronTabProps) {
               className={`${inputClass} font-mono`}
               placeholder="0 9 * * *"
             />
-            <div className="text-[11px] text-content-disabled mt-1">{t(lang, 'cronFieldScheduleHint')}</div>
           </div>
 
           {/* 提示词 */}
           <div>
-            <div className={labelClass}>{t(lang, 'cronFieldPrompt')}</div>
+            <FieldLabel label={t(lang, 'cronFieldPrompt')} hint={t(lang, 'cronFieldPromptHint')} />
             <textarea
               value={draft.prompt}
               onChange={(e) => setDraft({ ...draft, prompt: e.target.value })}
               className={`${inputClass} resize-none`}
               rows={3}
             />
-            <div className="text-[11px] text-content-disabled mt-1">{t(lang, 'cronFieldPromptHint')}</div>
           </div>
 
           {/* 执行目录（必选）：任务运行的目录空间，会话下拉随其过滤；
               直接显示所选目录，无"跟随默认工作区"选项 */}
           <div>
-            <div className={labelClass}>{t(lang, 'cronFieldCwd')}</div>
+            <FieldLabel label={t(lang, 'cronFieldCwd')} hint={t(lang, 'cronFieldCwdHint')} />
             <GlassDropdown
               value={draft.cwd}
               placeholder={t(lang, 'cronFieldCwdPlaceholder')}
@@ -443,7 +437,6 @@ export function CronTab({ lang, workspaces }: CronTabProps) {
                 loadSessions(v || undefined);
               }}
             />
-            <div className="text-[11px] text-content-disabled mt-1">{t(lang, 'cronFieldCwdHint')}</div>
           </div>
 
           {/* 重复执行 / 启用 / 执行后自动删除 */}
@@ -455,19 +448,18 @@ export function CronTab({ lang, workspaces }: CronTabProps) {
 
           {/* 投递目标（渠道会话多选） */}
           <div>
-            <div className={labelClass}>{t(lang, 'cronFieldDeliverTo')}</div>
+            <FieldLabel label={t(lang, 'cronFieldDeliverTo')} hint={t(lang, 'cronFieldDeliverToHint')} />
             <DeliverToPicker
               lang={lang}
               channels={channelSessions}
               value={draft.deliver_to}
               onChange={(v) => setDraft({ ...draft, deliver_to: v })}
             />
-            <div className="text-[11px] text-content-disabled mt-1">{t(lang, 'cronFieldDeliverToHint')}</div>
           </div>
 
           {/* 指定会话（可选）：项目会话下拉（随执行目录过滤） */}
           <div>
-            <div className={labelClass}>{t(lang, 'cronFieldSession')}</div>
+            <FieldLabel label={t(lang, 'cronFieldSession')} hint={t(lang, 'cronFieldSessionHint')} />
             <GlassDropdown
               value={draft.session_id}
               options={[
@@ -479,7 +471,6 @@ export function CronTab({ lang, workspaces }: CronTabProps) {
               ]}
               onChange={(v) => setDraft({ ...draft, session_id: v })}
             />
-            <div className="text-[11px] text-content-disabled mt-1">{t(lang, 'cronFieldSessionHint')}</div>
           </div>
 
           {/* 表单错误 */}
@@ -589,7 +580,7 @@ function CronJobCard({ lang, job, workspaces, expanded, onToggleExpand, running,
         <div className="px-3 py-2.5 border-t border-border-light space-y-2.5 bg-surface-card">
           {/* 提示词预览 */}
           <div>
-            <div className="text-[11px] text-content-disabled mb-1">{t(lang, 'cronFieldPrompt')}</div>
+            <div className={labelClass}>{t(lang, 'cronFieldPrompt')}</div>
             <div className="text-xs text-content-secondary break-words leading-relaxed">{job.prompt}</div>
           </div>
 

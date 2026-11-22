@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { t, type UiLanguage } from '../i18n';
 import { GlassDropdown, type DropdownOption } from './GlassDropdown';
+import { labelClass } from './settingsUi';
 import { AgentWizardForm } from './AgentWizardForm';
 import type {
   AgentCatalog,
@@ -71,6 +72,10 @@ interface AgentsTabProps {
   api: AgentsSessionApi;
   /** 可选模型列表（含 env_N.model_M 引用与多模态声明；由设置表单从 envs 配置构建，挂载即就绪） */
   models: AgentModelOption[];
+  /** 内嵌向导模式（受控，宿主 SetupForm 持有；null 关闭 / 'create' 创建 / AgentEntry 编辑） */
+  wizardMode: 'create' | AgentEntry | null;
+  /** 向导模式变更回调（打开编辑 / 关闭向导；创建入口在宿主标题行） */
+  onWizardModeChange: (mode: 'create' | AgentEntry | null) => void;
 }
 
 /** 条目行的 scope 徽标文案 */
@@ -259,9 +264,7 @@ function AgentRow({
 /**
  * 设置表单 - 子智能体管理标签页组件
  */
-export function AgentsTab({ lang, workspaces, defaultWorkspace, api, models }: AgentsTabProps) {
-  /** 内嵌向导模式：null 关闭 / 'create' 创建 / AgentEntry 编辑 */
-  const [wizardMode, setWizardMode] = useState<'create' | AgentEntry | null>(null);
+export function AgentsTab({ lang, workspaces, defaultWorkspace, api, models, wizardMode, onWizardModeChange }: AgentsTabProps) {
   /** 已消费的向导成功结果（避免重复关闭） */
   const handledResultRef = useRef<object | null>(null);
 
@@ -278,8 +281,8 @@ export function AgentsTab({ lang, workspaces, defaultWorkspace, api, models }: A
     if (handledResultRef.current === r) return;
     handledResultRef.current = r;
     api.clearWizardState();
-    setWizardMode(null);
-  }, [api.wizardResult, api.clearWizardState, api]);
+    onWizardModeChange(null);
+  }, [api.wizardResult, api.clearWizardState, api, onWizardModeChange]);
 
   // 操作结果显示后 4s 自动清理，避免失败横幅常驻（成功无提示不占位）
   useEffect(() => {
@@ -288,25 +291,18 @@ export function AgentsTab({ lang, workspaces, defaultWorkspace, api, models }: A
     return () => clearTimeout(t);
   }, [api.opResult, api.clearOpResult]);
 
-  /** 打开创建向导 */
-  const openCreate = useCallback(() => {
-    api.clearWizardState();
-    api.wizardInit();
-    setWizardMode('create');
-  }, [api]);
-
   /** 打开编辑向导 */
   const openEdit = useCallback((entry: AgentEntry) => {
     api.clearWizardState();
     api.wizardInit();
-    setWizardMode(entry);
-  }, [api]);
+    onWizardModeChange(entry);
+  }, [api, onWizardModeChange]);
 
   /** 关闭向导 */
   const closeWizard = useCallback(() => {
     api.clearWizardState();
-    setWizardMode(null);
-  }, [api]);
+    onWizardModeChange(null);
+  }, [api, onWizardModeChange]);
 
   /** 创建提交 → wizardSubmit；编辑提交 → updateAgent */
   const handleWizardSubmit = useCallback((fields: Record<string, unknown>, scope: 'user' | 'project', cwd?: string) => {
@@ -314,11 +310,11 @@ export function AgentsTab({ lang, workspaces, defaultWorkspace, api, models }: A
       api.updateAgent(fields);
       // 更新无 agent_wizard_result 回执，直接关闭（结果经 web_agent_op_result 行内展示）
       api.clearWizardState();
-      setWizardMode(null);
+      onWizardModeChange(null);
       return;
     }
     api.wizardSubmit(fields, scope, cwd);
-  }, [api, wizardMode]);
+  }, [api, wizardMode, onWizardModeChange]);
 
   /** 项目级分组按默认优先排序 */
   const projectGroups = useMemo(() => {
@@ -383,20 +379,6 @@ export function AgentsTab({ lang, workspaces, defaultWorkspace, api, models }: A
 
   return (
     <div className="space-y-4">
-      {/* 标题行 + 创建按钮 */}
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="text-sm font-medium text-content-primary">{t(lang, 'agentsTabTitle')}</div>
-          <div className="text-xs text-content-secondary mt-0.5">{t(lang, 'agentsTabSubtitle')}</div>
-        </div>
-        <button
-          onClick={openCreate}
-          className="px-3 py-1.5 text-sm text-white bg-primary hover:bg-primary-hover rounded-lg transition-colors cursor-pointer shrink-0"
-        >
-          {t(lang, 'agentsTabCreate')}
-        </button>
-      </div>
-
       {/* 操作结果提示 */}
       {api.opResult && !api.opResult.success && api.opResult.error && (
         <div className="px-3 py-2 rounded-md bg-danger/10 border border-danger/30 text-xs text-danger">
@@ -418,7 +400,7 @@ export function AgentsTab({ lang, workspaces, defaultWorkspace, api, models }: A
       {/* 全局分组：内置 / 用户级 / 插件 */}
       {globalGroups.map((group) => (
         <div key={group.title}>
-          <div className="text-xs font-medium text-content-secondary mb-1.5">{group.title}</div>
+          <div className={labelClass}>{group.title}</div>
           <div className="space-y-1.5">
             {group.entries.map((entry) => (
               <AgentRow key={`${group.title}-${entry.name}`} lang={lang} entry={entry} models={models} api={api} onEdit={openEdit} />
@@ -432,7 +414,7 @@ export function AgentsTab({ lang, workspaces, defaultWorkspace, api, models }: A
         if (group.agents.length === 0) return null;
         return (
           <div key={group.workspace}>
-            <div className="text-xs font-medium text-content-secondary mb-1.5 flex items-center gap-1.5">
+            <div className={`${labelClass} flex items-center gap-1.5`}>
               <span>{t(lang, 'agentsTabGroupProject')}</span>
               <span className="font-mono text-content-disabled" title={group.workspace}>{group.name}</span>
               {group.is_default && (

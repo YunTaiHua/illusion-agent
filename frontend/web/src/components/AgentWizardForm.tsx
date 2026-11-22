@@ -23,6 +23,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { t, type UiLanguage } from '../i18n';
 import { GlassDropdown, type DropdownOption } from './GlassDropdown';
+import { FieldLabel } from './settingsUi';
 import type { AgentEntry, AgentModelOption, WebWorkspaceItem } from '../types/protocol';
 
 /** 工具项类型（来自 agent_wizard_init_response.tools） */
@@ -590,16 +591,15 @@ export function AgentWizardForm({
               </div>
             </div>
 
-            {/* 项目级：选择目标工作区（目录空间） */}
+            {/* 项目级：选择目标工作区（目录空间；落盘位置收进标签悬浮提示） */}
             {fields.scope === 'project' && (
               <div>
-                <div className="text-xs font-medium text-content-secondary mb-1.5">{t(lang, 'agentWizardWorkspaceLabel')}</div>
+                <FieldLabel label={t(lang, 'agentWizardWorkspaceLabel')} hint={t(lang, 'agentWizardWorkspaceHint')} />
                 <GlassDropdown
                   value={fields.workspace}
                   options={workspaceOptions}
                   onChange={(v) => updateField('workspace', v)}
                 />
-                <div className="text-[11px] text-content-disabled mt-1">{t(lang, 'agentWizardWorkspaceHint')}</div>
               </div>
             )}
           </div>

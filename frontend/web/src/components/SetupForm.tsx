@@ -1,22 +1,21 @@
 /**
- * @fileoverview 首次登录 / 设置配置表单组件
+ * @fileoverview 设置配置表单组件
  *
- * 在以下场景弹出：
- * - 首次登录：后端 ready 事件携带 first_login=true 时自动弹出，要求至少配置一个 env
- * - 修改配置：点击左栏底部 settings 齿轮图标弹出，可修改任意配置
+ * 弹出场景：
+ * - 首次登录：后端 ready 事件携带 first_login=true 时自动弹出（可随时关闭，
+ *   不强制完成配置）
+ * - 修改配置：点击左栏底部 settings 齿轮图标弹出
  *
- * 两个 Tab：
- * - 基础配置：界面语言（优先填写）、API 环境配置（env_N）、工作目录
- * - 渠道配置：飞书 / 微信 / QQ 渠道配置 + 启用开关
+ * 七个 Tab：基础配置 / 子智能体 / 目录空间 / 渠道配置 / 定时任务 / 沙箱设置 / 扩展能力
  *
- * 视觉风格与 AgentWizardForm 一致：居中简洁卡片（w-[560px]）、Tab 导航、
- * GlassDropdown 玻璃拟态下拉、输入框聚焦散光。
+ * 视觉风格：居中简洁卡片、左侧 Tab 导航、GlassDropdown 玻璃拟态下拉、
+ * 输入框聚焦散光；样式常量统一取自 settingsUi（tabTitle/label/input）。
  *
- * 数据流：
+ * 数据流（无统一保存按钮，所有设置变更即时生效）：
  * - 挂载时并行加载 settings / envs / channels（REST）
- * - 保存成功后静默重新加载三者，表单回显最新持久化配置（防误以为未保存重复点击）
- * - ui_language 改动通过 onSetUiLanguage 走 WebSocket 同步（即时生效）
- * - env 增删改 / working_directory / channels 通过 REST 提交
+ * - 开关/下拉类改动即时提交；文本类输入失焦或回车提交（避免逐键请求）
+ * - ui_language / 主题 / 扩展能力卡片即改即存（原有语义不变）
+ * - env 增删改 / 渠道 / 沙箱 / 模型参数通过 REST 即时提交
  * - copilot/codex 走 OAuth 设备码流程，token 由后端全局管理，env 创建时 api_key 留空
  *
  * @module SetupForm
@@ -30,11 +29,12 @@ import ToggleSwitch from './ToggleSwitch';
 import { CronTab } from './CronTab';
 import { AgentsTab, type AgentsSessionApi } from './AgentsTab';
 import { BrowserTab } from './BrowserTab';
-import type { AgentModelOption, PluginSnapshot, WebWorkspaceItem } from '../types/protocol';
+import { inputClass, labelClass, cardTitleClass, FieldLabel, TabHeader } from './settingsUi';
+import type { AgentEntry, AgentModelOption, PluginSnapshot, WebWorkspaceItem } from '../types/protocol';
 import {
   envApi, oauthApi, settingsApi, channelsApi,
   type EnvInfo, type ModelConfig, type SettingsResponse, type CreateEnvPayload,
-  type SandboxSettings, type PermissionRiskSettings,
+  type SandboxSettings, type PermissionRiskSettings, type UpdateSandboxPayload,
   type ChannelRuntimeStatusEntry, type ChannelsRuntimeStatus,
 } from '../api';
 
@@ -64,6 +64,23 @@ const OAUTH_FORMATS = new Set(['copilot', 'codex']);
 const OAUTH_POLL_INTERVAL = 5000;
 /** OAuth 最大轮询次数（约 5 分钟超时） */
 const OAUTH_MAX_POLLS = 60;
+
+/** 设置表单全部 Tab（左侧导航与内容区共用） */
+const SETUP_TAB_KEYS = ['settings', 'agents', 'workspaces', 'channels', 'cron', 'sandbox', 'extensions'] as const;
+type SetupTabKey = typeof SETUP_TAB_KEYS[number];
+
+/** Tab 对应的标题 i18n key（左侧导航与内容区统一大标题共用） */
+function tabLabelKey(tabKey: SetupTabKey): string {
+  switch (tabKey) {
+    case 'settings': return 'setupFormSettingsTitle';
+    case 'agents': return 'setupFormAgentsTitle';
+    case 'workspaces': return 'setupFormWorkspacesTitle';
+    case 'channels': return 'setupFormChannelsTitle';
+    case 'cron': return 'setupFormCronTitle';
+    case 'extensions': return 'extensions_tab_title';
+    default: return 'setupFormSandboxTitle';
+  }
+}
 
 /** 环境草稿（新增 / 编辑共用） */
 interface EnvDraft {
@@ -149,8 +166,6 @@ function makeEmptyChannels(): ChannelsCfg {
 interface SetupFormProps {
   /** 当前 UI 语言（由 App 通过 WebSocket state 驱动） */
   lang: UiLanguage;
-  /** 是否首次登录模式（true 时 env 必填，标题为初始配置） */
-  firstLogin: boolean;
   /** 初始打开的 Tab（目录按钮"管理目录…"直达目录空间页） */
   initialTab?: 'settings' | 'agents' | 'workspaces' | 'channels' | 'cron' | 'sandbox' | 'extensions';
   /** 注册的工作区列表（web_workspaces 驱动） */
@@ -169,8 +184,8 @@ interface SetupFormProps {
   agentsApi: AgentsSessionApi;
   /** 当前会话所在工作区（agent 创建时默认目标目录） */
   defaultWorkspace?: string;
-  /** 保存成功后回调（App 可据此刷新 / 重连） */
-  onSaved: () => void;
+  /** 模型参数等会影响运行中主机状态的设置变更后请求一次状态刷新 */
+  onRequestStatusRefresh: () => void;
   /** 关闭表单回调 */
   onClose: () => void;
   /** === 插件 Tab（App 透传会话数据）=== */
@@ -184,18 +199,13 @@ interface SetupFormProps {
   onGoalToggle?: (enabled: boolean) => void;
 }
 
-/** 输入框通用样式（聚焦散光） */
-const inputClass = 'w-full px-3 py-2 rounded-md bg-surface-card-alt border border-border-light text-content-primary text-sm focus:outline-none focus:border-primary focus:shadow-glow transition-all duration-200';
-/** 字段标签样式 */
-const labelClass = 'text-xs font-medium text-content-secondary mb-1.5';
-
 /**
  * SetupForm 首次登录 / 设置配置表单组件
  *
  * @param props - 组件属性
  * @returns 表单 JSX
  */
-export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorkspace, onRemoveWorkspace, onRequestWorkspaces, onSetDefaultWorkspace, onSetUiLanguage, agentsApi, defaultWorkspace, onSaved, onClose, plugins, onPluginToggle, sendSetting, onGoalToggle }: SetupFormProps) {
+export function SetupForm({ lang, initialTab, workspaces, onAddWorkspace, onRemoveWorkspace, onRequestWorkspaces, onSetDefaultWorkspace, onSetUiLanguage, agentsApi, defaultWorkspace, onRequestStatusRefresh, onClose, plugins, onPluginToggle, sendSetting, onGoalToggle }: SetupFormProps) {
   /** 当前 Tab */
   const [tab, setTab] = useState<'settings' | 'agents' | 'workspaces' | 'channels' | 'cron' | 'sandbox' | 'extensions'>(initialTab ?? 'settings');
   /** 加载状态 */
@@ -252,16 +262,22 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
   const [uiLang, setUiLang] = useState<'zh-CN' | 'en-US'>('zh-CN');
   /** 主题：交由 useTheme 统一管理（即改即生效并持久化），此处仅取当前值 */
   const { theme, setTheme } = useTheme();
-  /** 新增环境草稿（首次模式 + 修改模式的新增分支共用） */
+  /** 新增环境草稿（新增分支） */
   const [draft, setDraft] = useState<EnvDraft>(makeInitialDraft);
-  /** 修改模式是否展开新增环境表单 */
+  /** 是否展开新增环境表单（无任何环境时始终展开） */
   const [showAddEnv, setShowAddEnv] = useState(false);
-  /** 保存中 */
-  const [saving, setSaving] = useState(false);
-  /** 保存错误 */
-  const [saveError, setSaveError] = useState<string | null>(null);
+  /** 新增环境提交中 */
+  const [creating, setCreating] = useState(false);
+  /** 新增环境错误 */
+  const [createError, setCreateError] = useState<string | null>(null);
+  /** 渠道即时保存错误 */
+  const [channelsError, setChannelsError] = useState<string | null>(null);
+  /** 模型参数即时保存错误（正整数校验 / PATCH 失败） */
+  const [modelParamsError, setModelParamsError] = useState<string | null>(null);
   /** 操作错误（env 列表即时操作的错误） */
   const [opError, setOpError] = useState<string | null>(null);
+  /** 子智能体内嵌向导模式（null 关闭 / 'create' 创建 / AgentEntry 编辑；受控传给 AgentsTab） */
+  const [agentWizardMode, setAgentWizardMode] = useState<'create' | AgentEntry | null>(null);
 
   // 组件是否仍挂载：reload 异步完成后避免对已卸载组件 setState
   const mountedRef = useRef(true);
@@ -271,17 +287,10 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
   }, []);
 
   /**
-   * 重新加载 settings / envs / channels
-   *
-   * 挂载时与保存成功后共用。保存成功后刷新表单回读最新持久化配置
-   * （如首次配置生成的 env 出现在列表、新增草稿被清空），让用户直接
-   * 看到保存结果，避免“保存后页面无变化被误认为未保存而重复点击保存”。
-   *
-   * @param quiet 静默刷新（保存后调用）：不翻转 loading 避免页面闪烁，
-   *   刷新失败也忽略——保存已成功，保留当前表单数据即可。
+   * 挂载加载 settings / envs / channels 回显
    */
-  const reload = useCallback(async (quiet = false) => {
-    if (!quiet) setLoading(true);
+  const reload = useCallback(async () => {
+    setLoading(true);
     try {
       const [s, e, c] = await Promise.all([settingsApi.get(), envApi.list(), channelsApi.get()]);
       if (!mountedRef.current) return;
@@ -310,22 +319,18 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
       setSandbox(s.sandbox ?? null);
       // 权限风险分级配置（LOW/MEDIUM/HIGH 三层级）
       setPermission(s.permission ?? null);
-      // 后端 ui_language 为 en-US / zh-CN / 空串；空串默认 zh-CN。
-      // 仅在挂载加载时回读；保存后静默刷新（quiet）时保留本地选择——该字段
-      // 走 WebSocket 即时同步，GET 回传可能尚未落库，覆盖会引发语言瞬时回弹
-      if (!quiet) {
-        setUiLang(s.ui_language === 'en-US' ? 'en-US' : 'zh-CN');
-      }
+      // 后端 ui_language 为 en-US / zh-CN / 空串；空串默认 zh-CN
+      setUiLang(s.ui_language === 'en-US' ? 'en-US' : 'zh-CN');
       // 主题由 useTheme 独立加载并校正，无需在此赋值
       setEnvs(e.envs);
       setActiveEnvKey(e.active_env_key);
       setChannels(c as unknown as ChannelsCfg);
-      if (!quiet) setLoadError(null);
+      setLoadError(null);
     } catch (err) {
       if (!mountedRef.current) return;
-      if (!quiet) setLoadError(err instanceof Error ? err.message : String(err));
+      setLoadError(err instanceof Error ? err.message : String(err));
     } finally {
-      if (!quiet && mountedRef.current) setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   }, []);
 
@@ -334,15 +339,14 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
     reload();
   }, [reload]);
 
-  // Esc 键关闭（首次登录时禁用，强制用户完成配置）
+  // Esc 键关闭
   useEffect(() => {
-    if (firstLogin) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose(); }
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [onClose, firstLogin]);
+  }, [onClose]);
 
   /** 切换 api_format 时同步默认 base_url 和首个模型 */
   const handleFormatChange = useCallback((fmt: string) => {
@@ -449,99 +453,95 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
     return res.env_key;
   }, []);
 
-  /** 保存全部配置 */
-  const handleSave = useCallback(async () => {
-    setSaving(true);
-    setSaveError(null);
-    try {
-      // 0. 模型参数预校验（context_window / max_tokens / max_turns）：
-      //    放在任何写操作之前，避免"env 已创建但参数非法提前返回"导致新建
-      //    env 不进入列表/草稿不清空的非对称状态。字符串态自由编辑：清空/
-      //    输入不钳制，保存时统一校验为正整数（max_turns 1~512），非法输入
-      //    报错终止保存；空字段视为不改动
-      const tdCw = parseInt(contextWindow, 10);
-      const tdMt = parseInt(maxTokens, 10);
-      const tdTurns = parseInt(maxTurns, 10);
-      const cwValid = contextWindow.trim() === '' || (Number.isInteger(tdCw) && tdCw > 0);
-      const mtValid = maxTokens.trim() === '' || (Number.isInteger(tdMt) && tdMt > 0);
-      const turnsValid = maxTurns.trim() === '' || (Number.isInteger(tdTurns) && tdTurns >= 1 && tdTurns <= 512);
-      if (!cwValid || !mtValid || !turnsValid) {
-        setSaving(false);
-        setSaveError(t(lang, 'modelParamsInvalid'));
-        return;
-      }
-      // 1. ui_language 改动走 WebSocket 即时同步
-      if (settings && uiLang !== settings.ui_language) {
-        onSetUiLanguage(uiLang);
-      }
-      // 2. 首次模式或修改模式展开新增 env：创建 env
-      const createdEnv = (firstLogin || showAddEnv) && draftValid(draft);
-      if (createdEnv) {
-        await createEnvFromDraft(draft);
-      }
-      // 3. 工作目录改动
-      if (settings && (workDir.trim() || '') !== (settings.working_directory ?? '')) {
-        await settingsApi.updateWorkingDirectory(workDir.trim());
-      }
-      // 3.1 模型参数改动（已在上方预校验通过，此处仅比较差异后提交）
-      const modelParamsPayload: { context_window?: number; max_tokens?: number; max_turns?: number } = {};
-      if (contextWindow.trim() !== '' && cwValid) modelParamsPayload.context_window = tdCw;
-      if (maxTokens.trim() !== '' && mtValid) modelParamsPayload.max_tokens = tdMt;
-      if (maxTurns.trim() !== '' && turnsValid) modelParamsPayload.max_turns = tdTurns;
-      if (settings && Object.keys(modelParamsPayload).length > 0 && (
-        (modelParamsPayload.context_window !== undefined && modelParamsPayload.context_window !== settings.context_window) ||
-        (modelParamsPayload.max_tokens !== undefined && modelParamsPayload.max_tokens !== settings.max_tokens) ||
-        (modelParamsPayload.max_turns !== undefined && modelParamsPayload.max_turns !== settings.max_turns)
-      )) {
-        await settingsApi.updateModelParams(modelParamsPayload);
-      }
-      // 3.5-3.8 记忆/自动标题/权限审核/通知已迁入「扩展能力」tab，
-      // 各卡片变更即存（见 saveCapability），不再参与统一保存流程
-      // 4. 渠道配置（兼容旧配置：enabled 但无运行目录的渠道自动填充默认工作区，
-      //    避免后端启用校验（enabled 必填目录）拒绝整个保存；其余清空为 null）
-      const defaultWs = workspaces.find((w) => w.is_default)?.path;
-      const normalizeChannelWd = (ch: { enabled: boolean; working_directory?: string | null }): Record<string, unknown> => {
-        const merged = { ...ch };
-        if (merged.enabled && !merged.working_directory) {
-          merged.working_directory = defaultWs ?? null;
-        } else if (!merged.working_directory) {
-          merged.working_directory = null;
-        }
-        return merged;
-      };
-      const channelsPayload = {
-        feishu: normalizeChannelWd(channels.feishu),
-        weixin: normalizeChannelWd(channels.weixin),
-        qq: normalizeChannelWd(channels.qq),
-      };
-      await channelsApi.update(channelsPayload as unknown as Parameters<typeof channelsApi.update>[0]);
-      // 5. 沙箱配置
-      if (sandbox) {
-        try {
-          await settingsApi.updateSandbox(sandbox as Parameters<typeof settingsApi.updateSandbox>[0]);
-          setSandboxError(null);
-        } catch (err) {
-          setSandboxError(err instanceof Error ? err.message : String(err));
-        }
-      }
-      // 6. 权限风险分级为内置只读（LOW/MEDIUM/HIGH），无需保存
-      // 7. 保存成功后刷新表单：保持 saving=true 禁用保存按钮（避免刷新窗口内
-      //    重复点击造成重复保存），静默回读最新持久化配置，让用户看到保存结果
-      await reload(true);
-      // 表单可能已在刷新期间被关闭（修改模式 Esc / 遮罩点击）：不再更新本地状态、不再触发回调
-      if (!mountedRef.current) return;
-      // 新增的 env 已持久化并进入列表：清空新增草稿、收起新增表单
-      if (createdEnv) {
-        setDraft(makeInitialDraft());
-        setShowAddEnv(false);
-      }
-      setSaving(false);
-      onSaved();
-    } catch (err) {
-      setSaving(false);
-      setSaveError(err instanceof Error ? err.message : String(err));
+  /** 模型参数字符串态是否合法（空 = 不改动） */
+  const modelParamsValid = useCallback((cw: string, mt: string, turns: string): boolean => {
+    const tdCw = parseInt(cw, 10);
+    const tdMt = parseInt(mt, 10);
+    const tdTurns = parseInt(turns, 10);
+    const cwOk = cw.trim() === '' || (Number.isInteger(tdCw) && tdCw > 0);
+    const mtOk = mt.trim() === '' || (Number.isInteger(tdMt) && tdMt > 0);
+    const turnsOk = turns.trim() === '' || (Number.isInteger(tdTurns) && tdTurns >= 1 && tdTurns <= 512);
+    return cwOk && mtOk && turnsOk;
+  }, []);
+
+  /**
+   * 模型参数失焦提交：校验为正整数（max_turns 1~512）后仅提交与
+   * 持久化值有差异的字段，成功后请求一次状态刷新（热应用到运行中主机）。
+   */
+  const commitModelParams = useCallback(async () => {
+    if (!settings) return;
+    if (!modelParamsValid(contextWindow, maxTokens, maxTurns)) {
+      setModelParamsError(t(lang, 'modelParamsInvalid'));
+      return;
     }
-  }, [settings, uiLang, workDir, contextWindow, maxTokens, maxTurns, channels, workspaces, firstLogin, showAddEnv, draft, draftValid, createEnvFromDraft, onSetUiLanguage, onSaved, sandbox, lang, reload]);
+    setModelParamsError(null);
+    const payload: { context_window?: number; max_tokens?: number; max_turns?: number } = {};
+    const cw = parseInt(contextWindow, 10);
+    const mt = parseInt(maxTokens, 10);
+    const turns = parseInt(maxTurns, 10);
+    if (contextWindow.trim() !== '' && cw !== settings.context_window) payload.context_window = cw;
+    if (maxTokens.trim() !== '' && mt !== settings.max_tokens) payload.max_tokens = mt;
+    if (maxTurns.trim() !== '' && turns !== settings.max_turns) payload.max_turns = turns;
+    if (Object.keys(payload).length === 0) return;
+    try {
+      await settingsApi.updateModelParams(payload);
+      if (!mountedRef.current) return;
+      // 同步回显基线（下次失焦以此为差异基准）
+      setSettings((s) => (s ? { ...s, ...payload } : s));
+      onRequestStatusRefresh();
+    } catch (err) {
+      if (mountedRef.current) setModelParamsError(err instanceof Error ? err.message : String(err));
+    }
+  }, [settings, contextWindow, maxTokens, maxTurns, modelParamsValid, lang, onRequestStatusRefresh]);
+
+  /** 新增环境：创建成功后刷新列表、清空草稿并收起表单 */
+  const handleCreateEnv = useCallback(async () => {
+    if (!draftValid(draft)) return;
+    setCreating(true);
+    setCreateError(null);
+    try {
+      await createEnvFromDraft(draft);
+      const e = await envApi.list();
+      if (!mountedRef.current) return;
+      setEnvs(e.envs);
+      setActiveEnvKey(e.active_env_key);
+      setDraft(makeInitialDraft());
+      setShowAddEnv(false);
+    } catch (err) {
+      if (mountedRef.current) setCreateError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (mountedRef.current) setCreating(false);
+    }
+  }, [draft, draftValid, createEnvFromDraft]);
+
+  /** 沙箱配置即时保存：变更即 PATCH（整体提交，后端热重载生效） */
+  const patchSandbox = useCallback(async (next: SandboxSettings) => {
+    setSandbox(next);
+    setSandboxError(null);
+    try {
+      await settingsApi.updateSandbox(next as UpdateSandboxPayload);
+    } catch (err) {
+      if (mountedRef.current) setSandboxError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  /**
+   * 渠道配置即时保存：合并指定渠道的局部变更并 PATCH。
+   * 兼容旧校验：启用中的渠道未配置运行目录时自动填充默认工作区，
+   * 避免后端启用校验拒绝整次提交。
+   */
+  const updateChannel = useCallback((name: 'feishu' | 'weixin' | 'qq', patch: Record<string, unknown>) => {
+    const mergedRaw = { ...channels[name], ...patch };
+    const defaultWs = workspaces.find((w) => w.is_default)?.path;
+    const merged = { ...mergedRaw } as Record<string, unknown>;
+    if (merged.enabled && !merged.working_directory) merged.working_directory = defaultWs ?? null;
+    else if (!merged.working_directory) merged.working_directory = null;
+    setChannels((prev) => ({ ...prev, [name]: merged }) as ChannelsCfg);
+    setChannelsError(null);
+    channelsApi.update({ [name]: merged } as Parameters<typeof channelsApi.update>[0]).catch((err) => {
+      if (mountedRef.current) setChannelsError(err instanceof Error ? err.message : String(err));
+    });
+  }, [channels, workspaces]);
 
   /**
    * 扩展能力卡片即时保存：变更即存（与浏览器插件开关同语义，无统一保存按钮）。
@@ -626,49 +626,37 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
     setTheme(val);
   }, [setTheme]);
 
-  /** 是否可保存 */
-  const canSave = !saving && !loading && (
-    firstLogin ? draftValid(draft) : true
-  );
+  /** 打开子智能体创建向导（创建按钮位于 Tab 标题行右侧） */
+  const openAgentCreate = useCallback(() => {
+    agentsApi.clearWizardState();
+    agentsApi.wizardInit();
+    setAgentWizardMode('create');
+  }, [agentsApi]);
 
   return (
-    <div className={`fixed inset-0 ${firstLogin ? 'z-[70]' : 'z-50'} flex items-center justify-center bg-black/35 backdrop-blur-md animate-fade-in`} onClick={firstLogin ? undefined : onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 backdrop-blur-md animate-fade-in" onClick={onClose}>
       <div
         className="relative bg-surface-card rounded-2xl border border-border-light shadow-card w-[760px] h-[600px] max-w-[95vw] max-h-[90vh] flex flex-col animate-scale-in modal-origin-center"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* 标题栏 */}
+        {/* 标题栏：右上角 X 为唯一关闭入口 */}
         <div className="px-6 py-4 border-b border-border-light flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3">
-            <h3 className="text-lg font-semibold text-content-primary">
-              {firstLogin ? t(lang, 'setupFormTitle') : t(lang, 'settings')}
-            </h3>
-            {firstLogin && <span className="text-xs text-content-disabled">{t(lang, 'setupFormSubtitle')}</span>}
-          </div>
-          {!firstLogin && (
-            <button
-              onClick={onClose}
-              title={t(lang, 'setupFormClose')}
-              className="shrink-0 w-6 h-6 flex items-center justify-center rounded text-content-disabled hover:text-content-primary hover:bg-surface-hover transition-colors cursor-pointer"
-            >
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M2 2l8 8M10 2l-8 8" /></svg>
-            </button>
-          )}
+          <h3 className="text-lg font-semibold text-content-primary">{t(lang, 'settings')}</h3>
+          <button
+            onClick={onClose}
+            title={t(lang, 'window_close')}
+            className="shrink-0 w-6 h-6 flex items-center justify-center rounded text-content-disabled hover:text-content-primary hover:bg-surface-hover transition-colors cursor-pointer"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M2 2l8 8M10 2l-8 8" /></svg>
+          </button>
         </div>
 
         {/* 主体：左侧 Tab 栏 + 右侧内容区 */}
         <div className="flex flex-1 min-h-0">
           {/* 左侧 Tab 导航栏（垂直） */}
           <div className="w-fit shrink-0 border-r border-border-light px-3 py-3 flex flex-col gap-1 overflow-y-auto">
-            {(['settings', 'agents', 'workspaces', 'channels', 'cron', 'sandbox', 'extensions'] as const).map((tabKey) => {
+            {SETUP_TAB_KEYS.map((tabKey) => {
               const isActive = tab === tabKey;
-              const labelKey = tabKey === 'settings' ? 'setupFormSettingsTitle'
-                : tabKey === 'agents' ? 'setupFormAgentsTitle'
-                : tabKey === 'workspaces' ? 'setupFormWorkspacesTitle'
-                : tabKey === 'channels' ? 'setupFormChannelsTitle'
-                : tabKey === 'cron' ? 'setupFormCronTitle'
-                : tabKey === 'extensions' ? 'extensions_tab_title'
-                : 'setupFormSandboxTitle';
               return (
                 <button
                   key={tabKey}
@@ -679,7 +667,7 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
                       : 'text-content-secondary hover:bg-surface-hover'
                   }`}
                 >
-                  {t(lang, labelKey)}
+                  {t(lang, tabLabelKey(tabKey))}
                 </button>
               );
             })}
@@ -687,6 +675,19 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
 
           {/* 内容区：cron/目录空间 Tab 独立加载数据，不依赖 settings/envs/channels 主加载流程 */}
           <div className="flex-1 min-w-0 overflow-y-auto px-6 py-4 [scrollbar-gutter:stable]">
+          {/* 统一 Tab 标题：层级为「左侧导航 → 内容区大标题 → 字段标签 → 正文」；
+              子智能体 Tab 的创建按钮与标题同行 */}
+          <TabHeader
+            title={t(lang, tabLabelKey(tab))}
+            action={tab === 'agents' && !agentWizardMode ? (
+              <button
+                onClick={openAgentCreate}
+                className="px-3 py-1.5 text-sm text-white bg-primary hover:bg-primary-hover rounded-lg transition-colors cursor-pointer shrink-0"
+              >
+                {t(lang, 'agentsTabCreate')}
+              </button>
+            ) : undefined}
+          />
           {tab === 'cron' ? (
             <CronTab lang={lang} workspaces={workspaces} />
           ) : tab === 'agents' ? (
@@ -696,6 +697,8 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
               defaultWorkspace={defaultWorkspace}
               api={agentsApi}
               models={agentModelOptions}
+              wizardMode={agentWizardMode}
+              onWizardModeChange={setAgentWizardMode}
             />
           ) : tab === 'workspaces' ? (
             <WorkspacesTab
@@ -708,7 +711,7 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
             />
           ) : tab === 'extensions' ? (
             <div className="w-full flex flex-col gap-3">
-              {/* 即时保存错误提示（变更即存，无统一保存按钮） */}
+              {/* 即时保存错误提示（变更即存） */}
               {capError && (
                 <div className="text-sm text-danger py-2">{t(lang, 'setupFormSaveFailed')}: {capError}</div>
               )}
@@ -743,13 +746,6 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
                 onModelChange={(v) => { setTitleModel(v); void saveCapability(() => settingsApi.updateTitle({ model: v })); }}
                 modelOptions={modelOptions}
               />
-              <NotificationsCard
-                lang={lang}
-                toastEnabled={toastEnabled}
-                onToastEnabledChange={(v) => { setToastEnabled(v); void saveCapability(() => settingsApi.updateNotifications({ enabled: v })); }}
-                toastSound={toastSound}
-                onToastSoundChange={(v) => { setToastSound(v); void saveCapability(() => settingsApi.updateNotifications({ sound: v })); }}
-              />
               <ReviewCard
                 lang={lang}
                 autoReview={reviewAuto}
@@ -758,6 +754,13 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
                 onModelChange={(v) => { setReviewModel(v); void saveCapability(() => settingsApi.updatePermissionReview({ review_model: v })); }}
                 modelOptions={modelOptions}
               />
+              <NotificationsCard
+                lang={lang}
+                toastEnabled={toastEnabled}
+                onToastEnabledChange={(v) => { setToastEnabled(v); void saveCapability(() => settingsApi.updateNotifications({ enabled: v })); }}
+                toastSound={toastSound}
+                onToastSoundChange={(v) => { setToastSound(v); void saveCapability(() => settingsApi.updateNotifications({ sound: v })); }}
+              />
             </div>
           ) : loading ? (
             <div className="flex items-center justify-center py-12 text-sm text-content-disabled">
@@ -765,20 +768,18 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
                 <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="2" strokeOpacity="0.4" />
                 <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
               </svg>
-              {t(lang, 'setupFormSaving')}
+              {t(lang, 'loading')}
             </div>
           ) : loadError ? (
             <div className="text-sm text-danger py-4">{t(lang, 'setupFormLoadFailed')}: {loadError}</div>
           ) : tab === 'settings' ? (
             <SettingsTab
               lang={lang}
-              firstLogin={firstLogin}
               uiLang={uiLang}
               onPickUiLang={handlePickUiLang}
               theme={theme}
               onPickTheme={handlePickTheme}
               workDir={workDir}
-              onWorkDirChange={setWorkDir}
               onManageWorkspaces={() => setTab('workspaces')}
               contextWindow={contextWindow}
               onContextWindowChange={setContextWindow}
@@ -786,6 +787,8 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
               onMaxTokensChange={setMaxTokens}
               maxTurns={maxTurns}
               onMaxTurnsChange={setMaxTurns}
+              onModelParamsCommit={commitModelParams}
+              modelParamsError={modelParamsError}
               envs={envs}
               activeEnvKey={activeEnvKey}
               onDeleteEnv={handleDeleteEnv}
@@ -800,48 +803,23 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
               onUpdateModel={updateModel}
               onAddModel={addModel}
               onRemoveModel={removeModel}
+              onCreateEnv={handleCreateEnv}
+              creating={creating}
+              createError={createError}
               opError={opError}
             />
           ) : tab === 'sandbox' ? (
             <SandboxTab
               lang={lang}
               sandbox={sandbox}
-              onSandboxChange={setSandbox}
+              onSandboxPatch={patchSandbox}
               error={sandboxError}
               permission={permission}
             />
           ) : (
-            <ChannelsTab lang={lang} channels={channels} onChannelsChange={setChannels} workspaces={workspaces} />
+            <ChannelsTab lang={lang} channels={channels} onChannelChange={updateChannel} workspaces={workspaces} error={channelsError} />
           )}
           </div>
-        </div>
-
-        {/* 底部操作栏（cron Tab 操作即时生效，非首次登录时隐藏保存按钮） */}
-        <div className="px-6 py-4 border-t border-border-light flex items-center justify-between gap-2 shrink-0">
-          <div className="flex items-center gap-2">
-            <button
-              onClick={onClose}
-              className="px-4 py-2 text-sm text-content-secondary hover:bg-surface-hover rounded-lg transition-colors cursor-pointer border border-border-light"
-            >
-              {t(lang, 'setupFormClose')}
-            </button>
-            {saveError && <span className="text-xs text-danger">{t(lang, 'setupFormSaveFailed')}: {saveError}</span>}
-          </div>
-          {!(tab === 'cron' && !firstLogin) && (
-            <button
-              onClick={handleSave}
-              disabled={!canSave}
-              className="px-4 py-2 text-sm text-white bg-primary hover:bg-primary-hover rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
-            >
-              {saving && (
-                <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 16 16" fill="none">
-                  <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="2" strokeOpacity="0.4" />
-                  <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                </svg>
-              )}
-              {saving ? t(lang, 'setupFormSaving') : t(lang, 'setupFormSave')}
-            </button>
-          )}
         </div>
       </div>
     </div>
@@ -927,7 +905,7 @@ function EnvTriggerCard({ lang, env, isActive, onDelete, onAddModel, onRemoveMod
         <div className="px-3 py-2.5 border-t border-border-light space-y-2.5 bg-surface-card">
           {/* 模型列表 */}
           <div>
-            <div className="text-[11px] text-content-disabled mb-1.5">{t(lang, 'setupFieldModels')}</div>
+            <div className={labelClass}>{t(lang, 'setupFieldModels')}</div>
             {modelEntries.length === 0 ? (
               <div className="text-xs text-content-disabled italic">{t(lang, 'setupEnvModelsHint')}</div>
             ) : (
@@ -1009,25 +987,28 @@ function EnvTriggerCard({ lang, env, isActive, onDelete, onAddModel, onRemoveMod
 
 interface SettingsTabProps {
   lang: UiLanguage;
-  firstLogin: boolean;
   uiLang: 'zh-CN' | 'en-US';
   onPickUiLang: (v: 'zh-CN' | 'en-US') => void;
   /** 主题选择值（light / dark / system） */
   theme: 'light' | 'dark' | 'system';
   onPickTheme: (v: 'light' | 'dark' | 'system') => void;
+  /** 当前工作目录（只读展示，多目录空间由目录空间页管理） */
   workDir: string;
-  onWorkDirChange: (v: string) => void;
   /** 跳转到目录空间管理页 */
   onManageWorkspaces: () => void;
-  /** 上下文窗口大小（token，字符串态：保存时校验为正整数） */
+  /** 上下文窗口大小（token，字符串态：失焦提交时校验为正整数） */
   contextWindow: string;
   onContextWindowChange: (v: string) => void;
-  /** 最大输出 tokens（字符串态：保存时校验为正整数） */
+  /** 最大输出 tokens（字符串态：失焦提交时校验为正整数） */
   maxTokens: string;
   onMaxTokensChange: (v: string) => void;
-  /** 最大对话轮次（字符串态：保存时校验为 1~512） */
+  /** 最大对话轮次（字符串态：失焦提交时校验为 1~512） */
   maxTurns: string;
   onMaxTurnsChange: (v: string) => void;
+  /** 模型参数失焦提交（校验 + 即时 PATCH + 状态刷新） */
+  onModelParamsCommit: () => void;
+  /** 模型参数即时保存错误 */
+  modelParamsError: string | null;
   envs: EnvInfo[];
   activeEnvKey: string | null;
   onDeleteEnv: (k: string) => void;
@@ -1046,6 +1027,12 @@ interface SettingsTabProps {
   onUpdateModel: (i: number, patch: Partial<ModelConfig>) => void;
   onAddModel: (name: string) => void;
   onRemoveModel: (i: number) => void;
+  /** 提交新增环境（即时创建） */
+  onCreateEnv: () => void;
+  /** 新增环境提交中 */
+  creating: boolean;
+  /** 新增环境错误 */
+  createError: string | null;
   opError: string | null;
 }
 
@@ -1157,13 +1144,15 @@ function WorkspacesTab({ lang, workspaces, onAdd, onRemove, onRefresh, onSetDefa
   );
 }
 
-/** 基础配置 Tab：界面语言 + 环境配置 + 工作目录 */
+/** 基础配置 Tab：界面语言 + 环境配置 + 工作目录 + 模型参数 */
 function SettingsTab(p: SettingsTabProps) {
   const { lang } = p;
+  /** 无任何环境时始终展开新增表单（替代旧"必须配置"强制逻辑，仅做引导） */
+  const editorVisible = p.showAddEnv || p.envs.length === 0;
   return (    <div className="space-y-5">
       {/* 界面语言（优先填写） */}
       <div>
-        <div className={labelClass}>{t(lang, 'setupFieldUiLanguage')}</div>
+        <FieldLabel label={t(lang, 'setupFieldUiLanguage')} />
         <div className="flex gap-3">
           {([
             { value: 'zh-CN', label: '中文 (zh-CN)' },
@@ -1186,7 +1175,7 @@ function SettingsTab(p: SettingsTabProps) {
 
       {/* 主题（风格与界面语言一致的三选一分段按钮） */}
       <div>
-        <div className={labelClass}>{t(lang, 'setupFieldTheme')}</div>
+        <FieldLabel label={t(lang, 'setupFieldTheme')} />
         <div className="flex gap-3">
           {([
             { value: 'light', label: t(lang, 'theme_light') },
@@ -1208,8 +1197,8 @@ function SettingsTab(p: SettingsTabProps) {
         </div>
       </div>
 
-      {/* 环境选择器（修改模式）：触发器显示 base_url，点击展开下拉列表 */}
-      {!p.firstLogin && p.envs.length > 0 && (
+      {/* 环境选择器：触发器显示 base_url，点击展开配置 */}
+      {p.envs.length > 0 && (
         <EnvSelector
           lang={lang}
           envs={p.envs}
@@ -1222,8 +1211,8 @@ function SettingsTab(p: SettingsTabProps) {
         />
       )}
 
-      {/* 新增环境入口（修改模式） */}
-      {!p.firstLogin && (
+      {/* 新增环境入口（已有环境时可折叠；无环境时表单始终展开） */}
+      {p.envs.length > 0 && (
         <div>
           <button
             onClick={p.onToggleAddEnv}
@@ -1234,8 +1223,8 @@ function SettingsTab(p: SettingsTabProps) {
         </div>
       )}
 
-      {/* 环境编辑器（首次模式始终显示；修改模式展开时显示） */}
-      {(p.firstLogin || p.showAddEnv) && (
+      {/* 环境编辑器（新增环境；无环境时始终显示以引导完成首次配置） */}
+      {editorVisible && (
         <EnvEditor
           lang={lang}
           draft={p.draft}
@@ -1244,17 +1233,15 @@ function SettingsTab(p: SettingsTabProps) {
           onUpdateModel={p.onUpdateModel}
           onAddModel={p.onAddModel}
           onRemoveModel={p.onRemoveModel}
+          onSubmit={p.onCreateEnv}
+          submitting={p.creating}
+          submitError={p.createError}
         />
-      )}
-
-      {/* 首次模式未配置 env 提示 */}
-      {p.firstLogin && p.envs.length === 0 && !p.draft.models.some((m) => m.name.trim()) && (
-        <div className="text-xs text-content-disabled">{t(lang, 'setupEnvAtLeastOne')}</div>
       )}
 
       {/* 工作目录（多目录空间改造：输入框收敛到目录空间页管理，此处展示当前值 + 跳转） */}
       <div>
-        <div className={labelClass}>{t(lang, 'setupFieldWorkingDirectory')}</div>
+        <FieldLabel label={t(lang, 'setupFieldWorkingDirectory')} />
         <div className="flex gap-2">
           <div className="flex-1 flex items-center gap-2 px-3 py-2 rounded-md bg-surface-card-alt border border-border-light min-w-0">
             <svg className="w-3.5 h-3.5 text-content-disabled shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
@@ -1273,45 +1260,50 @@ function SettingsTab(p: SettingsTabProps) {
         </div>
       </div>
 
-      {/* 模型参数（context_window / max_tokens / max_turns，放工作目录下方） */}
+      {/* 模型参数（context_window / max_tokens / max_turns；失焦或回车即时提交） */}
       <div className="space-y-3">
         <div>
-          <div className={labelClass}>{t(lang, 'setupFieldContextWindow')}</div>
+          <FieldLabel label={t(lang, 'setupFieldContextWindow')} />
           <input
             type="number" min={1} step={1} value={p.contextWindow}
             onChange={(e) => p.onContextWindowChange(e.target.value)}
+            onBlur={p.onModelParamsCommit}
+            onKeyDown={(e) => { if (e.key === 'Enter') p.onModelParamsCommit(); }}
             className={`${inputClass} no-spinner`}
           />
         </div>
         <div>
-          <div className={labelClass}>{t(lang, 'setupFieldMaxTokens')}</div>
+          <FieldLabel label={t(lang, 'setupFieldMaxTokens')} />
           <input
             type="number" min={1} step={1} value={p.maxTokens}
             onChange={(e) => p.onMaxTokensChange(e.target.value)}
+            onBlur={p.onModelParamsCommit}
+            onKeyDown={(e) => { if (e.key === 'Enter') p.onModelParamsCommit(); }}
             className={`${inputClass} no-spinner`}
           />
         </div>
         <div>
-          <div className={labelClass}>{t(lang, 'setupFieldMaxTurns')}</div>
+          <FieldLabel label={t(lang, 'setupFieldMaxTurns')} />
           <input
             type="number" min={1} max={512} step={1} value={p.maxTurns}
             onChange={(e) => p.onMaxTurnsChange(e.target.value)}
+            onBlur={p.onModelParamsCommit}
+            onKeyDown={(e) => { if (e.key === 'Enter') p.onModelParamsCommit(); }}
             className={`${inputClass} no-spinner`}
           />
         </div>
+        {p.modelParamsError && <div className="text-xs text-danger">{p.modelParamsError}</div>}
       </div>
 
-      {/* 记忆/自动标题/通知/权限 LLM 审核：已迁入「扩展能力」tab
-          （SetupForm extensions 分支的 MemoryCard/TitleCard/
-          NotificationsCard/ReviewCard），变更即存 */}
+      {/* 记忆/自动标题/通知/权限 LLM 审核：见「扩展能力」tab，变更即存 */}
     </div>
   );
 }
 
 // ===== 扩展能力卡片（变更即存，无统一保存按钮；卡片壳样式与内置浏览器卡片一致） =====
 
-/** 卡片壳样式（与 BrowserTab 浏览器卡片同款） */
-const capCardClass = 'rounded-xl border border-border-light bg-surface-card-alt px-4 py-3';
+/** 卡片壳样式（与 BrowserTab 浏览器卡片同款；底色用 surface-card 与下拉框的 surface-card-alt 区分） */
+const capCardClass = 'rounded-xl border border-border-light bg-surface-card px-4 py-3';
 
 /** Goal 长任务功能卡片：启用开关（关闭后 /goal 命令与 goal 工具均拒绝） */
 function GoalCard({ lang, enabled, onToggle }: {
@@ -1323,8 +1315,7 @@ function GoalCard({ lang, enabled, onToggle }: {
     <div className={capCardClass}>
       <div className="flex items-start gap-3">
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium text-content-primary">{t(lang, 'goal_setting_title')}</div>
-          <div className="text-xs text-content-secondary mt-0.5 leading-relaxed">{t(lang, 'goal_setting_subtitle')}</div>
+          <div className={`${cardTitleClass} cursor-help w-fit`} title={t(lang, 'goal_setting_subtitle')}>{t(lang, 'goal_setting_title')}</div>
         </div>
         <ToggleSwitch checked={enabled} onChange={onToggle} label={t(lang, 'goal_setting_title')} />
       </div>
@@ -1332,7 +1323,7 @@ function GoalCard({ lang, enabled, onToggle }: {
   );
 }
 
-/** 记忆配置卡片（自「基础设置」迁入；开关/模型变更即存，目录失焦提交） */
+/** 记忆配置卡片（开关/模型变更即存，目录失焦提交） */
 function MemoryCard(p: {
   lang: UiLanguage;
   enabled: boolean;
@@ -1350,7 +1341,7 @@ function MemoryCard(p: {
 }) {
   return (
     <div className={`space-y-3 ${capCardClass}`}>
-      <div className={labelClass}>{t(p.lang, 'setupFieldMemory')}</div>
+      <div className={cardTitleClass}>{t(p.lang, 'setupFieldMemory')}</div>
       {/* 启用开关 */}
       <div className="flex items-center justify-between">
         <span className="text-sm text-content-primary">{t(p.lang, 'setupFieldMemoryEnabled')}</span>
@@ -1359,7 +1350,7 @@ function MemoryCard(p: {
       {/* 后台自动提取开关：记忆功能关闭时置灰（与后端判定链一致——
           auto_extract 仅在 memory.enabled 时才被处理） */}
       <div className={`flex items-center justify-between ${p.enabled ? '' : 'opacity-50'}`}>
-        <span className="text-sm text-content-primary">{t(p.lang, 'setupFieldMemoryAutoExtract')}</span>
+        <span className="text-sm text-content-primary cursor-help" title={t(p.lang, 'setupFieldMemoryAutoExtractHint')}>{t(p.lang, 'setupFieldMemoryAutoExtract')}</span>
         <ToggleSwitch
           checked={p.autoExtract}
           onChange={p.onAutoExtractChange}
@@ -1367,9 +1358,9 @@ function MemoryCard(p: {
           disabled={!p.enabled}
         />
       </div>
-      {/* 记忆目录输入（失焦提交） */}
+      {/* 记忆目录输入（失焦提交；留空使用默认目录——提示收进占位符） */}
       <div>
-        <div className={labelClass}>{t(p.lang, 'setupFieldMemoryDirectory')}</div>
+        <FieldLabel label={t(p.lang, 'setupFieldMemoryDirectory')} />
         <input
           type="text"
           value={p.directory}
@@ -1381,7 +1372,7 @@ function MemoryCard(p: {
       </div>
       {/* 提取模型 */}
       <div>
-        <div className={labelClass}>{t(p.lang, 'setupFieldMemoryExtractModel')}</div>
+        <FieldLabel label={t(p.lang, 'setupFieldMemoryExtractModel')} />
         <GlassDropdown
           value={p.extractModel}
           options={p.modelOptions}
@@ -1391,7 +1382,7 @@ function MemoryCard(p: {
       </div>
       {/* 整合模型 */}
       <div>
-        <div className={labelClass}>{t(p.lang, 'setupFieldMemoryDreamModel')}</div>
+        <FieldLabel label={t(p.lang, 'setupFieldMemoryDreamModel')} />
         <GlassDropdown
           value={p.dreamModel}
           options={p.modelOptions}
@@ -1403,7 +1394,7 @@ function MemoryCard(p: {
   );
 }
 
-/** 自动标题配置卡片（自「基础设置」迁入；开关/模型变更即存） */
+/** 自动标题配置卡片（开关/模型变更即存） */
 function TitleCard(p: {
   lang: UiLanguage;
   enabled: boolean;
@@ -1414,7 +1405,7 @@ function TitleCard(p: {
 }) {
   return (
     <div className={`space-y-3 ${capCardClass}`}>
-      <div className={labelClass}>{t(p.lang, 'setupFieldTitle')}</div>
+      <div className={cardTitleClass}>{t(p.lang, 'setupFieldTitle')}</div>
       {/* 启用开关 */}
       <div className="flex items-center justify-between">
         <span className="text-sm text-content-primary">{t(p.lang, 'setupFieldTitleEnabled')}</span>
@@ -1422,7 +1413,7 @@ function TitleCard(p: {
       </div>
       {/* 标题生成模型 */}
       <div>
-        <div className={labelClass}>{t(p.lang, 'setupFieldTitleModel')}</div>
+        <FieldLabel label={t(p.lang, 'setupFieldTitleModel')} />
         <GlassDropdown
           value={p.model}
           options={p.modelOptions}
@@ -1434,7 +1425,7 @@ function TitleCard(p: {
   );
 }
 
-/** 通知开关卡片（自「基础设置」迁入；toast 总开关/音效变更即存） */
+/** 通知开关卡片（toast 总开关/音效变更即存） */
 function NotificationsCard(p: {
   lang: UiLanguage;
   toastEnabled: boolean;
@@ -1444,7 +1435,7 @@ function NotificationsCard(p: {
 }) {
   return (
     <div className={`space-y-3 ${capCardClass}`}>
-      <div className={labelClass}>{t(p.lang, 'setupFieldNotifications')}</div>
+      <div className={cardTitleClass}>{t(p.lang, 'setupFieldNotifications')}</div>
       {/* Toast 总开关 */}
       <div className="flex items-center justify-between">
         <span className="text-sm text-content-primary">{t(p.lang, 'setupFieldToastEnabled')}</span>
@@ -1464,7 +1455,7 @@ function NotificationsCard(p: {
   );
 }
 
-/** 权限 LLM 自动审核卡片（自「基础设置」迁入；开关/审核模型变更即存） */
+/** 权限 LLM 自动审核卡片（开关/审核模型变更即存） */
 function ReviewCard(p: {
   lang: UiLanguage;
   autoReview: boolean;
@@ -1475,7 +1466,7 @@ function ReviewCard(p: {
 }) {
   return (
     <div className={`space-y-3 ${capCardClass}`}>
-      <div className={labelClass}>{t(p.lang, 'setupFieldPermissionReview')}</div>
+      <div className={cardTitleClass}>{t(p.lang, 'setupFieldPermissionReview')}</div>
       {/* 启用开关 */}
       <div className="flex items-center justify-between">
         <span className="text-sm text-content-primary">{t(p.lang, 'setupFieldPermissionReviewEnabled')}</span>
@@ -1483,7 +1474,7 @@ function ReviewCard(p: {
       </div>
       {/* 审核模型 */}
       <div>
-        <div className={labelClass}>{t(p.lang, 'setupFieldPermissionReviewModel')}</div>
+        <FieldLabel label={t(p.lang, 'setupFieldPermissionReviewModel')} />
         <GlassDropdown
           value={p.model}
           options={p.modelOptions}
@@ -1506,10 +1497,16 @@ interface EnvEditorProps {
   onUpdateModel: (i: number, patch: Partial<ModelConfig>) => void;
   onAddModel: (name: string) => void;
   onRemoveModel: (i: number) => void;
+  /** 提交创建环境（草稿校验通过后可点） */
+  onSubmit: () => void;
+  /** 提交中 */
+  submitting: boolean;
+  /** 提交错误 */
+  submitError: string | null;
 }
 
-/** 环境编辑器：api_format / base_url / 认证 / 模型列表 / OAuth */
-function EnvEditor({ lang, draft, onDraftChange, onFormatChange, onUpdateModel, onAddModel, onRemoveModel }: EnvEditorProps) {
+/** 环境编辑器：api_format / base_url / 认证 / 模型列表 / OAuth / 创建按钮 */
+function EnvEditor({ lang, draft, onDraftChange, onFormatChange, onUpdateModel, onAddModel, onRemoveModel, onSubmit, submitting, submitError }: EnvEditorProps) {
   const isOauth = OAUTH_FORMATS.has(draft.api_format);
   /** 追加模型输入值（与已有环境卡片的追加行同布局） */
   const [newModel, setNewModel] = useState('');
@@ -1517,6 +1514,10 @@ function EnvEditor({ lang, draft, onDraftChange, onFormatChange, onUpdateModel, 
   const [oauth, setOauth] = useState<OauthState>({ status: 'idle', user_code: '', verification_uri: '', device_code: '', error: '' });
   /** 轮询计数 ref */
   const pollCountRef = useRef(0);
+  /** 草稿是否可提交（与 SetupForm 的 draftValid 同规则） */
+  const canSubmit = draft.api_format !== ''
+    && draft.models.some((m) => m.name.trim())
+    && (isOauth ? draft.oauth_authorized : (draft.auth_type === 'api_key' ? draft.api_key.trim() !== '' : draft.auth_token.trim() !== ''));
 
   // OAuth 轮询：status=pending 时定时 poll
   useEffect(() => {
@@ -1698,6 +1699,24 @@ function EnvEditor({ lang, draft, onDraftChange, onFormatChange, onUpdateModel, 
           </div>
         </div>
       </div>
+
+      {/* 创建按钮（环境创建为显式动作；其余设置项均即时生效） */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={onSubmit}
+          disabled={!canSubmit || submitting}
+          className="px-4 py-2 text-sm text-white bg-primary hover:bg-primary-hover rounded-md transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
+        >
+          {submitting && (
+            <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 16 16" fill="none">
+              <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="2" strokeOpacity="0.4" />
+              <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+          )}
+          {t(lang, 'setupEnvCreate')}
+        </button>
+        {submitError && <span className="text-xs text-danger">{t(lang, 'setupFormSaveFailed')}: {submitError}</span>}
+      </div>
     </div>
   );
 }
@@ -1719,13 +1738,16 @@ function formatOptionsLocal(lang: UiLanguage): DropdownOption[] {
 interface ChannelsTabProps {
   lang: UiLanguage;
   channels: ChannelsCfg;
-  onChannelsChange: (c: ChannelsCfg) => void;
+  /** 单渠道局部变更（即时合并进状态并 PATCH 落盘） */
+  onChannelChange: (name: 'feishu' | 'weixin' | 'qq', patch: Record<string, unknown>) => void;
   /** 注册的工作区列表（渠道运行目录选择数据源） */
   workspaces: WebWorkspaceItem[];
+  /** 渠道配置即时保存错误 */
+  error: string | null;
 }
 
-/** 渠道配置 Tab：飞书 / 微信 / QQ */
-function ChannelsTab({ lang, channels, onChannelsChange, workspaces }: ChannelsTabProps) {
+/** 渠道配置 Tab：飞书 / 微信 / QQ（字段变更即时生效，无保存按钮） */
+function ChannelsTab({ lang, channels, onChannelChange, workspaces, error }: ChannelsTabProps) {
   /** 各渠道运行时状态（守护进程内 runner 活跃情况） */
   const [runtimeStatus, setRuntimeStatus] = useState<ChannelsRuntimeStatus>({});
   /** 状态加载中 */
@@ -1809,7 +1831,7 @@ function ChannelsTab({ lang, channels, onChannelsChange, workspaces }: ChannelsT
   /** 启用渠道时的目录缺失错误（本地即时提示，后端 PATCH 亦校验兜底） */
   const [enableError, setEnableError] = useState<string | null>(null);
 
-  /** 切换渠道 enabled 配置（即时保存到后端，不依赖保存按钮）
+  /** 切换渠道 enabled 配置（即时保存，不依赖保存按钮）
    *
    * 多目录空间：启用渠道（v=true）必须已配置运行目录（working_directory），
    * 未配置时阻止并提示——渠道 agent 需要锚定工作区。
@@ -1828,13 +1850,12 @@ function ChannelsTab({ lang, channels, onChannelsChange, workspaces }: ChannelsT
     if (!v) {
       try { await channelsApi.stop(name); } catch { /* 静默 */ }
     }
-    onChannelsChange({ ...channels, [name]: { ...channels[name], enabled: v } });
-    channelsApi.update({ [name]: { enabled: v } } as Partial<{ feishu: { enabled: boolean }; weixin: { enabled: boolean }; qq: { enabled: boolean } }>).catch(() => { /* 静默 */ });
-  }, [channels, onChannelsChange, lang]);
+    onChannelChange(name, { enabled: v });
+  }, [channels, onChannelChange, lang]);
 
   return (
     <div className="space-y-4">
-      {enableError && <div className="text-xs text-danger">{enableError}</div>}
+      {(error || enableError) && <div className="text-xs text-danger">{error || enableError}</div>}
       <ChannelSection
         lang={lang}
         channelName="feishu"
@@ -1862,18 +1883,18 @@ function ChannelsTab({ lang, channels, onChannelsChange, workspaces }: ChannelsT
           lang={lang}
           workspaces={workspaces}
           value={channels.feishu.working_directory ?? ''}
-          onChange={(v) => onChannelsChange({ ...channels, feishu: { ...channels.feishu, working_directory: v } })}
+          onChange={(v) => onChannelChange('feishu', { working_directory: v })}
         />
-        <TextField lang={lang} labelKey="setupChannelAppId" value={channels.feishu.app_id} onChange={(v) => onChannelsChange({ ...channels, feishu: { ...channels.feishu, app_id: v } })} />
-        <TextField lang={lang} labelKey="setupChannelAppSecret" value={channels.feishu.app_secret} onChange={(v) => onChannelsChange({ ...channels, feishu: { ...channels.feishu, app_secret: v } })} />
+        <TextField lang={lang} labelKey="setupChannelAppId" value={channels.feishu.app_id} onChange={(v) => onChannelChange('feishu', { app_id: v })} />
+        <TextField lang={lang} labelKey="setupChannelAppSecret" value={channels.feishu.app_secret} onChange={(v) => onChannelChange('feishu', { app_secret: v })} />
         <SelectField lang={lang} labelKey="setupChannelDomain" value={channels.feishu.domain}
           options={[{ value: 'feishu', label: t(lang, 'setupChannelDomainFeishu') }, { value: 'lark', label: t(lang, 'setupChannelDomainLark') }]}
-          onChange={(v) => onChannelsChange({ ...channels, feishu: { ...channels.feishu, domain: v } })} />
-        <BoolField lang={lang} labelKey="setupChannelRequireMention" checked={channels.feishu.require_mention} onChange={(v) => onChannelsChange({ ...channels, feishu: { ...channels.feishu, require_mention: v } })} />
-        <BoolField lang={lang} labelKey="setupChannelAllowBots" checked={channels.feishu.allow_bots} onChange={(v) => onChannelsChange({ ...channels, feishu: { ...channels.feishu, allow_bots: v } })} />
-        <BoolField lang={lang} labelKey="setupChannelGroupSessionsPerUser" checked={channels.feishu.group_sessions_per_user} onChange={(v) => onChannelsChange({ ...channels, feishu: { ...channels.feishu, group_sessions_per_user: v } })} />
-        <BoolField lang={lang} labelKey="setupChannelShowReasoning" checked={channels.feishu.show_reasoning} onChange={(v) => onChannelsChange({ ...channels, feishu: { ...channels.feishu, show_reasoning: v } })} />
-        <GroupPolicyFields lang={lang} policy={channels.feishu.group_policy} onChange={(gp) => onChannelsChange({ ...channels, feishu: { ...channels.feishu, group_policy: gp } })} />
+          onChange={(v) => onChannelChange('feishu', { domain: v })} />
+        <BoolField lang={lang} labelKey="setupChannelRequireMention" checked={channels.feishu.require_mention} onChange={(v) => onChannelChange('feishu', { require_mention: v })} />
+        <BoolField lang={lang} labelKey="setupChannelAllowBots" checked={channels.feishu.allow_bots} onChange={(v) => onChannelChange('feishu', { allow_bots: v })} />
+        <BoolField lang={lang} labelKey="setupChannelGroupSessionsPerUser" checked={channels.feishu.group_sessions_per_user} onChange={(v) => onChannelChange('feishu', { group_sessions_per_user: v })} />
+        <BoolField lang={lang} labelKey="setupChannelShowReasoning" checked={channels.feishu.show_reasoning} onChange={(v) => onChannelChange('feishu', { show_reasoning: v })} />
+        <GroupPolicyFields lang={lang} policy={channels.feishu.group_policy} onChange={(gp) => onChannelChange('feishu', { group_policy: gp })} />
       </ChannelSection>
 
       <ChannelSection
@@ -1890,15 +1911,11 @@ function ChannelsTab({ lang, channels, onChannelsChange, workspaces }: ChannelsT
         footer={
           <WeixinQrLogin
             lang={lang}
-            onLoginSuccess={(creds) => onChannelsChange({
-              ...channels,
-              weixin: {
-                ...channels.weixin,
-                account_id: creds.account_id,
-                token: creds.token,
-                base_url: creds.base_url,
-                user_id: creds.user_id,
-              },
+            onLoginSuccess={(creds) => onChannelChange('weixin', {
+              account_id: creds.account_id,
+              token: creds.token,
+              base_url: creds.base_url,
+              user_id: creds.user_id,
             })}
           />
         }
@@ -1907,14 +1924,14 @@ function ChannelsTab({ lang, channels, onChannelsChange, workspaces }: ChannelsT
           lang={lang}
           workspaces={workspaces}
           value={channels.weixin.working_directory ?? ''}
-          onChange={(v) => onChannelsChange({ ...channels, weixin: { ...channels.weixin, working_directory: v } })}
+          onChange={(v) => onChannelChange('weixin', { working_directory: v })}
         />
-        <TextField lang={lang} labelKey="setupChannelAccountId" value={channels.weixin.account_id} onChange={(v) => onChannelsChange({ ...channels, weixin: { ...channels.weixin, account_id: v } })} />
-        <TextField lang={lang} labelKey="setupChannelToken" value={channels.weixin.token} onChange={(v) => onChannelsChange({ ...channels, weixin: { ...channels.weixin, token: v } })} />
-        <TextField lang={lang} labelKey="setupChannelBaseUrl" value={channels.weixin.base_url} onChange={(v) => onChannelsChange({ ...channels, weixin: { ...channels.weixin, base_url: v } })} />
-        <TextField lang={lang} labelKey="setupChannelCdnBaseUrl" value={channels.weixin.cdn_base_url} onChange={(v) => onChannelsChange({ ...channels, weixin: { ...channels.weixin, cdn_base_url: v } })} />
-        <TextField lang={lang} labelKey="setupChannelUserId" value={channels.weixin.user_id} onChange={(v) => onChannelsChange({ ...channels, weixin: { ...channels.weixin, user_id: v } })} />
-        <BoolField lang={lang} labelKey="setupChannelAllowBots" checked={channels.weixin.allow_bots} onChange={(v) => onChannelsChange({ ...channels, weixin: { ...channels.weixin, allow_bots: v } })} />
+        <TextField lang={lang} labelKey="setupChannelAccountId" value={channels.weixin.account_id} onChange={(v) => onChannelChange('weixin', { account_id: v })} />
+        <TextField lang={lang} labelKey="setupChannelToken" value={channels.weixin.token} onChange={(v) => onChannelChange('weixin', { token: v })} />
+        <TextField lang={lang} labelKey="setupChannelBaseUrl" value={channels.weixin.base_url} onChange={(v) => onChannelChange('weixin', { base_url: v })} />
+        <TextField lang={lang} labelKey="setupChannelCdnBaseUrl" value={channels.weixin.cdn_base_url} onChange={(v) => onChannelChange('weixin', { cdn_base_url: v })} />
+        <TextField lang={lang} labelKey="setupChannelUserId" value={channels.weixin.user_id} onChange={(v) => onChannelChange('weixin', { user_id: v })} />
+        <BoolField lang={lang} labelKey="setupChannelAllowBots" checked={channels.weixin.allow_bots} onChange={(v) => onChannelChange('weixin', { allow_bots: v })} />
       </ChannelSection>
 
       <ChannelSection
@@ -1943,16 +1960,16 @@ function ChannelsTab({ lang, channels, onChannelsChange, workspaces }: ChannelsT
           lang={lang}
           workspaces={workspaces}
           value={channels.qq.working_directory ?? ''}
-          onChange={(v) => onChannelsChange({ ...channels, qq: { ...channels.qq, working_directory: v } })}
+          onChange={(v) => onChannelChange('qq', { working_directory: v })}
         />
-        <TextField lang={lang} labelKey="setupChannelAppId" value={channels.qq.app_id} onChange={(v) => onChannelsChange({ ...channels, qq: { ...channels.qq, app_id: v } })} />
-        <TextField lang={lang} labelKey="setupChannelClientSecret" value={channels.qq.client_secret} onChange={(v) => onChannelsChange({ ...channels, qq: { ...channels.qq, client_secret: v } })} />
-        <BoolField lang={lang} labelKey="setupChannelMarkdownSupport" checked={channels.qq.markdown_support} onChange={(v) => onChannelsChange({ ...channels, qq: { ...channels.qq, markdown_support: v } })} />
-        <BoolField lang={lang} labelKey="setupChannelAllowBots" checked={channels.qq.allow_bots} onChange={(v) => onChannelsChange({ ...channels, qq: { ...channels.qq, allow_bots: v } })} />
-        <BoolField lang={lang} labelKey="setupChannelGroupSessionsPerUser" checked={channels.qq.group_sessions_per_user} onChange={(v) => onChannelsChange({ ...channels, qq: { ...channels.qq, group_sessions_per_user: v } })} />
-        <BoolField lang={lang} labelKey="setupChannelRequireMention" checked={channels.qq.require_mention} onChange={(v) => onChannelsChange({ ...channels, qq: { ...channels.qq, require_mention: v } })} />
-        <BoolField lang={lang} labelKey="setupChannelShowReasoning" checked={channels.qq.show_reasoning} onChange={(v) => onChannelsChange({ ...channels, qq: { ...channels.qq, show_reasoning: v } })} />
-        <GroupPolicyFields lang={lang} policy={channels.qq.group_policy} onChange={(gp) => onChannelsChange({ ...channels, qq: { ...channels.qq, group_policy: gp } })} />
+        <TextField lang={lang} labelKey="setupChannelAppId" value={channels.qq.app_id} onChange={(v) => onChannelChange('qq', { app_id: v })} />
+        <TextField lang={lang} labelKey="setupChannelClientSecret" value={channels.qq.client_secret} onChange={(v) => onChannelChange('qq', { client_secret: v })} />
+        <BoolField lang={lang} labelKey="setupChannelMarkdownSupport" checked={channels.qq.markdown_support} onChange={(v) => onChannelChange('qq', { markdown_support: v })} />
+        <BoolField lang={lang} labelKey="setupChannelAllowBots" checked={channels.qq.allow_bots} onChange={(v) => onChannelChange('qq', { allow_bots: v })} />
+        <BoolField lang={lang} labelKey="setupChannelGroupSessionsPerUser" checked={channels.qq.group_sessions_per_user} onChange={(v) => onChannelChange('qq', { group_sessions_per_user: v })} />
+        <BoolField lang={lang} labelKey="setupChannelRequireMention" checked={channels.qq.require_mention} onChange={(v) => onChannelChange('qq', { require_mention: v })} />
+        <BoolField lang={lang} labelKey="setupChannelShowReasoning" checked={channels.qq.show_reasoning} onChange={(v) => onChannelChange('qq', { show_reasoning: v })} />
+        <GroupPolicyFields lang={lang} policy={channels.qq.group_policy} onChange={(gp) => onChannelChange('qq', { group_policy: gp })} />
       </ChannelSection>
     </div>
   );
@@ -1963,21 +1980,22 @@ function ChannelsTab({ lang, channels, onChannelsChange, workspaces }: ChannelsT
 interface SandboxTabProps {
   lang: UiLanguage;
   sandbox: SandboxSettings | null;
-  onSandboxChange: (s: SandboxSettings) => void;
+  /** 沙箱配置变更（即时 PATCH 落盘并热重载生效） */
+  onSandboxPatch: (s: SandboxSettings) => void;
   error: string | null;
   permission: PermissionRiskSettings | null;
 }
 
 /** 沙箱配置 Tab：文件系统/网络/高级选项 + 风险分级（LOW/MEDIUM/HIGH）只读展示 */
-function SandboxTab({ lang, sandbox, onSandboxChange, error, permission }: SandboxTabProps) {
+function SandboxTab({ lang, sandbox, onSandboxPatch, error, permission }: SandboxTabProps) {
   if (!sandbox) {
     return <div className="text-sm text-content-disabled py-4">{t(lang, 'setupFormLoadFailed')}</div>;
   }
-  const update = (patch: Partial<SandboxSettings>) => onSandboxChange({ ...sandbox, ...patch });
+  const update = (patch: Partial<SandboxSettings>) => onSandboxPatch({ ...sandbox, ...patch });
   const updateFs = (patch: Partial<SandboxSettings['filesystem']>) =>
-    onSandboxChange({ ...sandbox, filesystem: { ...sandbox.filesystem, ...patch } });
+    onSandboxPatch({ ...sandbox, filesystem: { ...sandbox.filesystem, ...patch } });
   const updateNet = (patch: Partial<SandboxSettings['network']>) =>
-    onSandboxChange({ ...sandbox, network: { ...sandbox.network, ...patch } });
+    onSandboxPatch({ ...sandbox, network: { ...sandbox.network, ...patch } });
 
   return (
     <div className="space-y-3">
@@ -2025,11 +2043,11 @@ function SandboxTab({ lang, sandbox, onSandboxChange, error, permission }: Sandb
 
       {/* 高级选项（默认折叠，减少视觉噪音） */}
       <SandboxSection lang={lang} titleKey="setupFieldSandboxAdvanced">
-        <BoolWithHint lang={lang} labelKey="setupFieldSandboxWeakerNetworkIsolation" checked={sandbox.enable_weaker_network_isolation} onChange={(v) => update({ enable_weaker_network_isolation: v })} />
+        <BoolWithHint lang={lang} labelKey="setupFieldSandboxWeakerNetworkIsolation" hintKey="setupFieldSandboxWeakerNetworkIsolationHint" checked={sandbox.enable_weaker_network_isolation} onChange={(v) => update({ enable_weaker_network_isolation: v })} />
         <BoolField lang={lang} labelKey="setupFieldSandboxWeakerNested" checked={sandbox.enable_weaker_nested_sandbox} onChange={(v) => update({ enable_weaker_nested_sandbox: v })} />
         <BoolField lang={lang} labelKey="setupFieldSandboxAllowGitConfig" checked={sandbox.allow_git_config} onChange={(v) => update({ allow_git_config: v })} />
         <div>
-          <div className={labelClass}>{t(lang, 'setupFieldSandboxMandatoryDepth')}</div>
+          <FieldLabel label={t(lang, 'setupFieldSandboxMandatoryDepth')} />
           <input
             type="number"
             min={1}
@@ -2155,6 +2173,7 @@ function RiskLevelCard({ lang, level, titleKey, hintKey, badgeClass, children }:
     <div className="rounded-lg border border-border-light overflow-hidden">
       <button
         onClick={() => setOpen(!open)}
+        title={t(lang, hintKey)}
         className="w-full flex items-center gap-2.5 px-3 py-2 bg-surface-card-alt hover:bg-surface-hover transition-colors cursor-pointer"
       >
         <svg className={`w-3 h-3 shrink-0 text-content-disabled transition-transform ${open ? 'rotate-90' : ''}`} viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4.5 3L7.5 6L4.5 9" /></svg>
@@ -2163,7 +2182,6 @@ function RiskLevelCard({ lang, level, titleKey, hintKey, badgeClass, children }:
       </button>
       {open && (
         <div className="px-4 py-3 space-y-3">
-          <div className="text-[11px] text-content-disabled leading-relaxed">{t(lang, hintKey)}</div>
           {children}
         </div>
       )}
@@ -2255,43 +2273,60 @@ function RiskExamples({ lang, titleKey, examples }: {
   );
 }
 
-/** 带提示的布尔开关行 */
+/** 带悬浮提示的布尔开关行（说明收敛进标签的 title 提示） */
 function BoolWithHint({ lang, labelKey, hintKey, checked, onChange }: { lang: UiLanguage; labelKey: string; hintKey?: string; checked: boolean; onChange: (v: boolean) => void; }) {
   return (
-    <div>
-      <div className="flex items-center justify-between">
-        <span className="text-sm text-content-secondary">{t(lang, labelKey)}</span>
-        <ToggleSwitch checked={checked} onChange={onChange} label={t(lang, labelKey)} />
-      </div>
-      {hintKey && <div className="text-[11px] text-content-disabled mt-1">{t(lang, hintKey)}</div>}
+    <div className="flex items-center justify-between">
+      <span className={`text-sm text-content-secondary ${hintKey ? 'cursor-help' : ''}`} title={hintKey ? t(lang, hintKey) : undefined}>
+        {t(lang, labelKey)}
+      </span>
+      <ToggleSwitch checked={checked} onChange={onChange} label={t(lang, labelKey)} />
     </div>
   );
 }
 
-/** 带提示的文本输入行 */
+/** 带悬浮提示的文本输入行（失焦或回车提交） */
 function TextFieldWithHint({ lang, labelKey, hintKey, value, onChange }: { lang: UiLanguage; labelKey: string; hintKey?: string; value: string; onChange: (v: string) => void; }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  const commit = () => {
+    if (draft !== value) onChange(draft);
+  };
   return (
     <div>
-      <div className={labelClass}>{t(lang, labelKey)}</div>
-      <input type="text" value={value} onChange={(e) => onChange(e.target.value)} className={inputClass} />
-      {hintKey && <div className="text-[11px] text-content-disabled mt-1">{t(lang, hintKey)}</div>}
+      <FieldLabel label={t(lang, labelKey)} hint={hintKey ? t(lang, hintKey) : undefined} />
+      <input
+        type="text"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+        className={inputClass}
+      />
     </div>
   );
 }
 
-/** 字符串列表编辑（多行文本，每行一个元素；readOnly 时只读展示） */
+/** 字符串列表编辑（多行文本，每行一个元素；失焦提交；readOnly 时只读展示） */
 function StringListField({ lang, labelKey, hintKey, value, onChange, readOnly }: { lang: UiLanguage; labelKey: string; hintKey?: string; value: string[]; onChange?: (v: string[]) => void; readOnly?: boolean; }) {
+  const [draft, setDraft] = useState(value.join('\n'));
+  useEffect(() => setDraft(value.join('\n')), [value]);
+  const commit = () => {
+    if (readOnly || !onChange) return;
+    const next = draft.split('\n').map((s) => s.trim()).filter(Boolean);
+    if (next.join('\n') !== value.join('\n')) onChange(next);
+  };
   return (
     <div>
-      <div className={labelClass}>{t(lang, labelKey)}</div>
+      <FieldLabel label={t(lang, labelKey)} hint={hintKey ? t(lang, hintKey) : undefined} />
       <textarea
         rows={3}
-        value={value.join('\n')}
+        value={draft}
         readOnly={readOnly}
-        onChange={(e) => onChange?.(e.target.value.split('\n').map((s) => s.trim()).filter(Boolean))}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
         className={`${inputClass} font-mono text-xs resize-y ${readOnly ? 'opacity-70 cursor-not-allowed' : ''}`}
       />
-      {hintKey && <div className="text-[11px] text-content-disabled mt-1">{t(lang, hintKey)}</div>}
     </div>
   );
 }
@@ -2405,7 +2440,8 @@ function ChannelSection({ lang, channelName, title, enabled, onToggle, runtimeSt
   );
 }
 
-/** 渠道运行目录选择行（多目录空间：渠道 agent 固定在该目录运行） */
+/** 渠道运行目录选择行（多目录空间：渠道 agent 固定在该目录运行）
+ * 说明文字收敛进标签悬浮提示（title），不再平铺小字注释 */
 function ChannelWorkDirField({ lang, workspaces, value, onChange }: {
   lang: UiLanguage;
   workspaces: WebWorkspaceItem[];
@@ -2424,23 +2460,32 @@ function ChannelWorkDirField({ lang, workspaces, value, onChange }: {
   ];
   return (
     <div>
-      <div className={labelClass}>{t(lang, 'setupChannelWorkDir')}</div>
+      <FieldLabel label={t(lang, 'setupChannelWorkDir')} hint={t(lang, 'setupChannelWorkDirHint')} />
       <GlassDropdown
         value={value}
         placeholder={t(lang, 'setupChannelWorkDirPlaceholder')}
         options={options}
         onChange={onChange}
       />
-      <div className="text-[11px] text-content-disabled mt-1">{t(lang, 'setupChannelWorkDirHint')}</div>
     </div>
   );
 }
 
-/** 文本字段行 */
-function TextField({ lang, labelKey, value, onChange }: { lang: UiLanguage; labelKey: string; value: string; onChange: (v: string) => void; }) {  return (
+/** 文本字段行（失焦或回车提交，避免逐键请求） */
+function TextField({ lang, labelKey, value, onChange }: { lang: UiLanguage; labelKey: string; value: string; onChange: (v: string) => void; })  {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  return (
     <div>
-      <div className={labelClass}>{t(lang, labelKey)}</div>
-      <input type="text" value={value} onChange={(e) => onChange(e.target.value)} className={inputClass} />
+      <FieldLabel label={t(lang, labelKey)} />
+      <input
+        type="text"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => { if (draft !== value) onChange(draft); }}
+        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+        className={inputClass}
+      />
     </div>
   );
 }

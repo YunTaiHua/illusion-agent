@@ -820,24 +820,12 @@ export default function App() {
     session.sendRequest({ type: 'web_set_setting', setting_key: 'ui_language', setting_value: uiLang });
   }, [session.sendRequest]);
 
-  /**
-   * 处理设置表单保存成功
-   *
-   * 配置已通过即时 REST API 写入 settings.json / channels.json / credentials.json，
-   * 前端 state 已同步更新，无需整页刷新。保存后表单保持打开，由用户自行关闭。
-   */
-  const handleSetupSaved = useCallback(() => {
-    session.clearFirstLogin();
-    // 设置保存后主动向后端请求一次状态刷新（context_window/max_tokens/max_turns
-    // 热应用到运行中主机并推送快照），保证右栏上下文窗口与后续请求参数立即生效
-    session.sendRequest({ type: 'web_refresh_status' });
-  }, [session.clearFirstLogin, session.sendRequest]);
-
-  /** 处理关闭设置表单（回读 goal 开关兜底，覆盖本地未同步场景） */
+  /** 处理关闭设置表单：清除 firstLogin 态（用户可自由关闭，不再强制完成配置）+ 回读 goal 开关兜底 */
   const handleCloseSetupForm = useCallback(() => {
     setShowSetupForm(false);
+    session.clearFirstLogin();
     settingsApi.get().then((s) => setGoalEnabled(s.goal?.enabled ?? true)).catch(() => undefined);
-  }, []);
+  }, [session.clearFirstLogin]);
 
   /**
    * Goal 功能开关（供 /goal 命令前置判断）
@@ -1631,12 +1619,11 @@ export default function App() {
         />
       )}
 
-      {/* 设置配置表单（首次登录自动弹出，或点击左栏 settings 齿轮触发；
+      {/* 设置配置表单（首次登录自动弹出，可自由关闭；点击左栏 settings 齿轮触发；
           agent 创建/管理/模型设置由"代理"标签页承担） */}
       {showSetupForm && (
         <SetupForm
           lang={lang}
-          firstLogin={session.firstLogin}
           initialTab={setupInitialTab}
           workspaces={session.workspaces}
           onAddWorkspace={session.addWorkspace}
@@ -1669,7 +1656,7 @@ export default function App() {
             clearWizardState: session.clearAgentWizardState,
           }}
           defaultWorkspace={session.sessions.find((s) => s.active)?.cwd}
-          onSaved={handleSetupSaved}
+          onRequestStatusRefresh={() => session.sendRequest({ type: 'web_refresh_status' })}
           onClose={handleCloseSetupForm}
           onGoalToggle={handleGoalToggle}
           plugins={session.plugins}

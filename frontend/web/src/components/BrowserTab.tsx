@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from 'react';
 import { t, type UiLanguage } from '../i18n';
 import { settingsApi, type SettingsResponse } from '../api';
 import ToggleSwitch from './ToggleSwitch';
+import { inputClass, labelClass, cardTitleClass, FieldLabel } from './settingsUi';
 import { TrashIcon } from './icons';
 import type { PluginSnapshot } from '../types/protocol';
 
@@ -34,10 +35,8 @@ interface BrowserTabProps {
   isDesktop: boolean;
 }
 
-/** 字段标签样式（与 SetupForm 同款） */
-const labelClass = 'text-xs font-medium text-content-secondary mb-1.5';
-/** 输入框样式（与 SetupForm 同款） */
-const inputClass = 'w-full px-3 py-2 rounded-md bg-surface-card-alt border border-border-light text-content-primary text-sm focus:outline-none focus:border-primary transition-all duration-200';
+/** 字段标签样式引用共享规范（settingsUi），不再本地定义 */
+// labelClass / inputClass / cardTitleClass / FieldLabel 均由 settingsUi 导入
 
 /** 内核选项 */
 const KERNEL_OPTIONS: Array<{ value: string; labelKey: string }> = [
@@ -98,11 +97,10 @@ export function BrowserTab({ lang, browserUse, onToggle, sendSetting, isDesktop 
 
   return (
     <div className="w-full">
-      <div className="rounded-xl border border-border-light bg-surface-card-alt px-4 py-3">
+      <div className="rounded-xl border border-border-light bg-surface-card px-4 py-3">
         <div className="flex items-start gap-3">
           <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium text-content-primary">{t(lang, 'browser_builtin_title')}</div>
-            <div className="text-xs text-content-secondary mt-0.5 leading-relaxed">{t(lang, 'browser_tab_subtitle')}</div>
+            <div className={cardTitleClass}>{t(lang, 'browser_builtin_title')}</div>
           </div>
           <ToggleSwitch
             checked={enabled}
@@ -134,11 +132,11 @@ export function BrowserTab({ lang, browserUse, onToggle, sendSetting, isDesktop 
               </div>
             </div>
             <label className="flex items-center justify-between gap-3 cursor-pointer">
-              <span className="text-xs text-content-secondary">{t(lang, 'plugins_headless_label')}</span>
+              <span className="text-sm text-content-secondary">{t(lang, 'plugins_headless_label')}</span>
               <ToggleSwitch checked={browser.headless} onChange={(v) => patchBrowser({ headless: v })} label="headless" />
             </label>
             <div>
-              <div className={labelClass}>{t(lang, 'plugins_proxy_label')}</div>
+              <FieldLabel label={t(lang, 'plugins_proxy_label')} hint={t(lang, 'browser_proxy_hint')} />
               <input
                 value={proxyDraft ?? browser.proxy}
                 onChange={(e) => setProxyDraft(e.target.value)}
@@ -148,20 +146,16 @@ export function BrowserTab({ lang, browserUse, onToggle, sendSetting, isDesktop 
                 spellCheck={false}
                 className={inputClass}
               />
-              <div className="text-[11px] text-content-disabled mt-1">{t(lang, 'browser_proxy_hint')}</div>
             </div>
           </div>
         )}
         {enabled && isDesktop && (
           <div className="mt-3 pt-3 border-t border-border-light flex flex-col gap-3">
             <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-xs font-medium text-content-primary">{t(lang, 'browser_data_clear')}</div>
-                <div className="text-[11px] text-content-disabled mt-0.5">{t(lang, 'browser_data_clear_hint')}</div>
-              </div>
+              <div className={cardTitleClass}>{t(lang, 'browser_data_clear')}</div>
               <button
                 onClick={() => setPendingClear('all')}
-                title={cleared === 'all' ? t(lang, 'browser_data_cleared') : t(lang, 'browser_data_clear')}
+                title={cleared === 'all' ? t(lang, 'browser_data_cleared') : `${t(lang, 'browser_data_clear')} — ${t(lang, 'browser_data_clear_hint')}`}
                 aria-label={t(lang, 'browser_data_clear')}
                 className="shrink-0 w-7 h-7 flex items-center justify-center rounded-md text-content-secondary border border-border-light glass-option-hover hover:text-content-primary transition-colors cursor-pointer"
               >
@@ -169,13 +163,10 @@ export function BrowserTab({ lang, browserUse, onToggle, sendSetting, isDesktop 
               </button>
             </div>
             <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-xs font-medium text-content-primary">{t(lang, 'browser_cache_clear')}</div>
-                <div className="text-[11px] text-content-disabled mt-0.5">{t(lang, 'browser_cache_clear_hint')}</div>
-              </div>
+              <div className={cardTitleClass}>{t(lang, 'browser_cache_clear')}</div>
               <button
                 onClick={() => setPendingClear('cache')}
-                title={cleared === 'cache' ? t(lang, 'browser_data_cleared') : t(lang, 'browser_cache_clear')}
+                title={cleared === 'cache' ? t(lang, 'browser_data_cleared') : `${t(lang, 'browser_cache_clear')} — ${t(lang, 'browser_cache_clear_hint')}`}
                 aria-label={t(lang, 'browser_cache_clear')}
                 className="shrink-0 w-7 h-7 flex items-center justify-center rounded-md text-content-secondary border border-border-light glass-option-hover hover:text-content-primary transition-colors cursor-pointer"
               >
