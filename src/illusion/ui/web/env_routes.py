@@ -132,6 +132,16 @@ class UpdateTitleRequest(BaseModel):
     model: str | None = None
 
 
+class UpdateGoalRequest(BaseModel):
+    """修改 Goal 长任务功能开关请求体。
+
+    字段可选，只更新提供的字段：
+        - enabled: 是否启用 goal 功能（关闭后 /goal 命令与 goal 工具均拒绝）
+    """
+
+    enabled: bool | None = None
+
+
 class UpdatePermissionReviewRequest(BaseModel):
     """修改权限 LLM 自动审核配置请求体。
 
@@ -476,6 +486,9 @@ def register_env_routes(app: FastAPI, host_config: Any | None = None) -> None:
                 "enabled": settings.title.enabled,
                 "model": settings.title.model,
             },
+            "goal": {
+                "enabled": settings.goal.enabled,
+            },
             "browser": {
                 "kernel": settings.browser.kernel,
                 "headless": settings.browser.headless,
@@ -656,6 +669,28 @@ def register_env_routes(app: FastAPI, host_config: Any | None = None) -> None:
             )
             save_settings(new_settings)
         return {"success": True, "title": {**updates}}
+
+    @app.patch("/api/settings/goal")
+    async def update_goal(req: UpdateGoalRequest) -> dict[str, Any]:
+        """修改 Goal 长任务功能开关。
+
+        保存后热应用到当前进程所有活跃 Web 主机：为已有会话引擎创建/
+        移除 GoalManager 并注册/注销 goal 工具（apply_goal_settings_sync），
+        新建/恢复的会话在构建引擎时按最新设置自然生效。关闭后 /goal
+        命令由 commands/goal.py 兜底返回禁用提示。
+        """
+        if req.enabled is None:
+            return {"success": True}
+        settings = load_settings()
+        new_settings = settings.model_copy(
+            update={"goal": settings.goal.model_copy(update={"enabled": req.enabled})}
+        )
+        save_settings(new_settings)
+        from illusion.ui.web.ws_host import iter_active_hosts
+
+        for host in iter_active_hosts():
+            host.apply_goal_settings_sync()
+        return {"success": True, "goal": {"enabled": req.enabled}}
 
     @app.patch("/api/settings/theme")
     async def update_theme(req: UpdateThemeRequest) -> dict[str, Any]:

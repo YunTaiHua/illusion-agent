@@ -285,3 +285,30 @@ def test_update_theme_invalid_returns_422(client):
     """PATCH /api/settings/theme 非法值返回 422。"""
     resp = client.patch("/api/settings/theme", json={"theme": "blue"})
     assert resp.status_code == 422
+
+
+def test_patch_goal_persists_and_hot_applies(client, monkeypatch):
+    """PATCH /api/settings/goal 持久化并把热应用广播到所有活跃 Web 主机。"""
+    from unittest.mock import MagicMock
+
+    import illusion.ui.web.ws_host as ws_host_mod
+
+    host = MagicMock()
+    monkeypatch.setattr(ws_host_mod, "iter_active_hosts", lambda: [host])
+
+    resp = client.patch("/api/settings/goal", json={"enabled": False})
+    assert resp.status_code == 200
+    assert resp.json() == {"success": True, "goal": {"enabled": False}}
+    assert host.apply_goal_settings_sync.call_count == 1
+
+    # 持久化：GET /api/settings 回读开关状态
+    resp = client.get("/api/settings")
+    assert resp.status_code == 200
+    assert resp.json()["goal"]["enabled"] is False
+
+
+def test_patch_goal_without_active_hosts_succeeds(client):
+    """无活跃主机时路由不应失败（iter_active_hosts 返回空）。"""
+    resp = client.patch("/api/settings/goal", json={"enabled": True})
+    assert resp.status_code == 200
+    assert resp.json()["goal"]["enabled"] is True

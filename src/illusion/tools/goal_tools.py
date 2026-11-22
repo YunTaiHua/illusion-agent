@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -277,3 +277,31 @@ class UpdateGoalTool(BaseTool[UpdateGoalToolInput]):
         return ToolResult(
             output=json.dumps(manager.goal_value(), ensure_ascii=False) + f"\n{outcome.summary}"
         )
+
+
+def apply_goal_toggle(engine: Any, registry: Any, manager: Any, enabled: bool) -> None:
+    """把 goal 工具注册/注销 + goal_manager 元数据落到一个引擎。
+
+    供 goal 功能设置热切换共用（REST /api/settings/goal → 各活跃 Web
+    host）。engine 需持有可变属性 ``_goal_manager`` 与 ``_tool_metadata``
+    （QueryEngine 均满足）。与 browser_tools.apply_browser_toggle 同构。
+
+    Args:
+        engine: 目标查询引擎（其 _goal_manager / _tool_metadata 就地更新）
+        registry: 工具注册表（可能是每会话独立实例）
+        manager: GoalManager（enabled=True 时必传；False 时忽略）
+        enabled: 启用（注册工具并注入元数据）或禁用（注销并移除）
+    """
+    goal_tools = (GetGoalTool(), CreateGoalTool(), UpdateGoalTool())
+    if enabled:
+        engine._goal_manager = manager
+        engine._tool_metadata["goal_manager"] = manager
+        existing = {t.name for t in registry.list_tools()}
+        for tool in goal_tools:
+            if tool.name not in existing:
+                registry.register(tool)
+    else:
+        engine._goal_manager = None
+        engine._tool_metadata.pop("goal_manager", None)
+        for tool in goal_tools:
+            registry.unregister(tool.name)

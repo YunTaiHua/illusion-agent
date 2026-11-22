@@ -2076,6 +2076,57 @@ class WebBackendHost:
         # 3. 推送全局状态快照，前端右栏上下文窗口立即刷新
         self._create_background_task(self._emit(self._status_snapshot()))
 
+    def apply_goal_settings_sync(self) -> None:
+        """REST 设置 /api/settings/goal 落盘后的运行时热生效（供 env_routes 调用）。
+
+        与浏览器插件热切换（ws_web_api.handle_web_plugin_toggle）同一套约束：
+        session bundle 是工作区 bundle 的浅拷贝（build_session_engine 对
+        goal_manager / tool_metadata 做了创建时快照拷贝），只更新工作区
+        原引擎会漏掉用户正在对话的会话——必须按 engine 身份去重后同时
+        覆盖工作区原引擎与全部已物化会话引擎。新建/恢复的会话在
+        build_session_engine 时按最新 settings 自然生效。系统提示词无需
+        处理：每条用户消息前由 runtime 按 current_settings() 重建，goal
+        段落随之增删。
+        """
+        if self._bundle is None:
+            return
+        try:
+            settings = (self._active_bundle() or self._bundle).current_settings()
+        except Exception:
+            log.exception("读取 goal 设置失败，跳过热切换")
+            return
+        from illusion.tools.goal_tools import apply_goal_toggle
+        from illusion.ui.runtime import _build_goal_manager
+
+        enabled = bool(getattr(getattr(settings, "goal", None), "enabled", False))
+        handled_engines: set[int] = set()
+        # 1. 工作区 bundle 原引擎（管理器生命周期归属 + 尚未物化会话的工作区）。
+        # GoalManager 是可变的有状态机（revision CAS / 轮次计数 / checkpoint
+        # 回写），与 build_session_engine 一样每个引擎必须持有独立实例——
+        # 共享实例会让并发会话的 goal 状态互相污染。
+        for bundle in self._workspace_bundles():
+            try:
+                manager = _build_goal_manager(settings) if enabled else None
+                apply_goal_toggle(bundle.engine, bundle.tool_registry, manager, enabled)
+                handled_engines.add(id(bundle.engine))
+            except Exception:
+                log.exception("热切换 goal 失败: cwd=%s", bundle.cwd)
+        # 2. 已物化会话的独立引擎（浅拷贝 bundle，逐会话补齐）
+        for sr in self._sessions.values():
+            engine = getattr(sr, "engine", None)
+            s_bundle = getattr(sr, "bundle", None)
+            if engine is None or s_bundle is None or id(engine) in handled_engines:
+                continue
+            try:
+                manager = _build_goal_manager(settings) if enabled else None
+                apply_goal_toggle(engine, s_bundle.tool_registry, manager, enabled)
+                handled_engines.add(id(engine))
+            except Exception:
+                log.exception("热切换 goal 到会话 %s 失败", sr.session_id)
+        # 3. 推送全局状态快照（goal 状态本身随会话维度推送，GoalBar 在下一次
+        # 会话级刷新/用户操作后反映启停；此处保证右栏资源快照不过期）
+        self._create_background_task(self._emit(self._status_snapshot()))
+
     async def _close_workspace_bundles(self) -> None:
         """关闭所有已构建的工作区 bundle（连接生命周期结束时调用）。"""
         bundles = self._workspace_bundles()
