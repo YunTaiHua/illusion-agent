@@ -51,8 +51,10 @@ from illusion.api.error_log import log_api_error
 from illusion.api.errors import (
     AuthenticationFailure,
     IllusionAgentApiError,
+    PayloadTooLargeFailure,
     RateLimitFailure,
     RequestFailure,
+    is_payload_too_large,
 )
 from illusion.api.usage import UsageSnapshot
 from illusion.config.capabilities import ModelCapabilities
@@ -634,6 +636,9 @@ def _translate_api_error(exc: APIError) -> IllusionAgentApiError:
         IllusionAgentApiError: 统一异常类型
     """
     name = exc.__class__.__name__
+    # 请求体过大（网关 413）：独立类型，供上层触发响应式压缩后重试
+    if is_payload_too_large(getattr(exc, "status_code", None), str(exc)):
+        return PayloadTooLargeFailure(str(exc))
     # 认证错误
     if name in {"AuthenticationError", "PermissionDeniedError"}:
         return AuthenticationFailure(str(exc))

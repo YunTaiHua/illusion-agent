@@ -350,3 +350,61 @@ def test_compact_with_tool_calls_no_orphans():
                     assert block.tool_use_id in tool_use_ids, (
                         f"Orphaned tool_result: {block.tool_use_id} not found in tool_use_ids {tool_use_ids}"
                     )
+
+
+def test_reactive_compact_strip_media_for_payload_too_large():
+    """413 路径：strip_media=True 先剥离图片字节，再走微压缩重试。
+
+    413 是网关对请求体字节大小的硬限制，仅按 token 压缩可能不减小
+    真实字节；剥离图片（base64 大头）是必要前置步骤。
+    """
+    import asyncio
+
+    from illusion.services.compact import reactive_compact
+
+    def _build():
+        messages: list[ConversationMessage] = [
+            ConversationMessage.from_user_text("please inspect the page"),
+        ]
+        # 6 个可微压缩的旧工具结果（> DEFAULT_KEEP_RECENT=5 触发释放）
+        for i in range(6):
+            messages.append(ConversationMessage(
+                role="assistant",
+                content=[ToolUseBlock(id=f"tu-{i}", name="read_file", input={})],
+            ))
+            messages.append(ConversationMessage(
+                role="user",
+                content=[
+                    ToolResultBlock(
+                        tool_use_id=f"tu-{i}",
+                        content=[
+                            MediaBlock(
+                                file_path=f"/tmp/shot-{i}.png",
+                                media_type="image/png",
+                                data="ZmFrZWJhc2U2NA==",
+                            ),
+                            TextBlock(text="file body " + "x" * 500),
+                        ],
+                        is_error=False,
+                    ),
+                ],
+            ))
+        return messages
+
+    messages = _build()
+    compacted, was_compacted = asyncio.run(reactive_compact(
+        messages,
+        api_client=None,
+        model="demo-model",
+        system_prompt="",
+        strip_media=True,
+    ))
+    assert was_compacted is True
+    # 全部消息中不再有 MediaBlock（base64 字节已被占位文本替换）
+    for msg in compacted:
+        for block in msg.content:
+            inner = block.content if isinstance(block, ToolResultBlock) else [block]
+            if not isinstance(inner, list):
+                inner = [inner]
+            for piece in inner:
+                assert not isinstance(piece, MediaBlock)

@@ -54,8 +54,10 @@ from illusion.api.error_log import log_api_error
 from illusion.api.errors import (
     AuthenticationFailure,
     IllusionAgentApiError,
+    PayloadTooLargeFailure,
     RateLimitFailure,
     RequestFailure,
+    is_payload_too_large,
 )
 from illusion.api.usage import UsageSnapshot
 from illusion.engine.messages import (
@@ -1443,6 +1445,9 @@ class OpenAICompatibleClient:
         """
         status = getattr(exc, "status_code", None)
         msg = str(exc)
+        # 请求体过大（网关 413）：独立类型，供上层触发响应式压缩后重试
+        if is_payload_too_large(status, msg):
+            return PayloadTooLargeFailure(msg)
         if status == 401 or status == 403:
             return AuthenticationFailure(msg)
         if status == 429:

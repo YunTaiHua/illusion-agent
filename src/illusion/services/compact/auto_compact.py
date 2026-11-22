@@ -15,7 +15,10 @@ from illusion.services.compact.constants import (
     DEFAULT_PRESERVE_RECENT,
     MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES,
 )
-from illusion.services.compact.microcompact import microcompact_messages
+from illusion.services.compact.microcompact import (
+    microcompact_messages,
+    strip_images_from_messages,
+)
 from illusion.services.compact.models import AutoCompactState
 from illusion.services.compact.token_utils import should_autocompact
 
@@ -29,10 +32,19 @@ async def reactive_compact(
     model: str,
     system_prompt: str = "",
     preserve_recent: int = DEFAULT_PRESERVE_RECENT,
+    strip_media: bool = False,
 ) -> tuple[list[ConversationMessage], bool]:
-    """当 API 返回 prompt-too-long 错误时，尝试压缩并重试。"""
-    log.info("Reactive compact triggered due to prompt-too-long error")
+    """当 API 返回 prompt-too-long / 请求体过大（413）错误时，尝试压缩并重试。
 
+    Args:
+        strip_media: 剥离全部图片媒体（base64 是请求体字节大头）。
+            413 是网关对请求体字节大小的硬限制（而非模型 token 上限），
+            仅按 token 估算压缩可能不减小真实字节，必须剥离媒体。
+    """
+    log.info("Reactive compact triggered (prompt-too-long or payload-too-large)")
+
+    if strip_media:
+        messages = strip_images_from_messages(messages)
     messages, tokens_freed = microcompact_messages(messages, keep_recent=DEFAULT_KEEP_RECENT)
     if tokens_freed > 0:
         log.info("Reactive microcompact freed ~%d tokens", tokens_freed)

@@ -43,7 +43,11 @@ from illusion.api.client import (
     SupportsStreamingMessages,
 )
 from illusion.api.effort import EffortLevel
-from illusion.api.errors import IllusionAgentApiError
+from illusion.api.errors import (
+    IllusionAgentApiError,
+    PayloadTooLargeFailure,
+    is_payload_too_large,
+)
 from illusion.api.usage import UsageSnapshot
 from illusion.config.capabilities import ModelCapabilities
 from illusion.engine.messages import (
@@ -873,14 +877,23 @@ async def run_query(
             error_msg = str(exc)
             error_lower = error_msg.lower()
 
-            # --- 响应式压缩：prompt-too-long 时尝试压缩重试 ---
-            if "prompt" in error_lower and "long" in error_lower:
+            # --- 响应式压缩：prompt-too-long / 请求体过大（413）时尝试压缩重试 ---
+            # 413 是网关对请求体字节大小的硬限制（如 openresty 的
+            # client_max_body_size），不是模型 token 上限；类型判定兜不住
+            # 网关 HTML 错误页文本的场景，消息文本一并匹配。
+            payload_too_large = isinstance(exc, PayloadTooLargeFailure) or is_payload_too_large(
+                message=error_msg
+            )
+            prompt_too_long = "prompt" in error_lower and "long" in error_lower
+            if prompt_too_long or payload_too_large:
                 yield StatusEvent(message=t("compact_overflow_detected")), None
                 messages, was_compacted = await reactive_compact(
                     messages,
                     api_client=context.api_client,
                     model=context.model,
                     system_prompt=context.system_prompt,
+                    # 413 只压 token 可能不减小真实字节，必须剥离图片 base64
+                    strip_media=payload_too_large,
                 )
                 if was_compacted:
                     yield StatusEvent(message=t("compact_reactive_success")), None
