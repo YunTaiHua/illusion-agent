@@ -91,6 +91,14 @@ const FULLPAGE_MAX_DIM = 16384;
 /** 拼接条带数护栏（防异常小视口把条带数放大到不可收场） */
 const MAX_STITCH_STRIPS = 64;
 
+/** 拼接条带循环的兜底预算（未传入外部 deadline 时使用） */
+const FULLPAGE_STITCH_BUDGET_MS = 60000;
+
+/** 整页截图全程总预算（单帧尝试 + 拼接 + 合成）：Python 侧桥接上限
+ *  120s，留 20s 余量；总预算内未完成即结构化报错（调用方降级为视口
+ *  截图），绝不拖满桥接超时把真实原因变成 "bridge unreachable" */
+const FULLPAGE_TOTAL_BUDGET_MS = 100000;
+
 /** 拼接用：隐藏 fixed/sticky 元素（它们随滚动驻留，逐屏捕获会每屏重复） */
 const STITCH_HIDE_SCRIPT =
   "(function () { var s = window.__illuStitch; if (!s) return 0; " +
@@ -274,7 +282,7 @@ export function startBrowserHost(options: BrowserHostOptions): BrowserHost {
     if (!entry) return;
     try {
       const title = await withTimeout(
-        wc.executeJavaScript('document.title', false) as Promise<string>,
+        execJs(wc, 'document.title', false) as Promise<string>,
         2000, 'title refresh',
       );
       entry.title = typeof title === 'string' ? title : '';
@@ -409,6 +417,23 @@ export function startBrowserHost(options: BrowserHostOptions): BrowserHost {
     });
   }
 
+  /** evaluate 超时上限（重页面脚本合法耗时 > 交互 op；仍短于 Python 30s） */
+  const EVAL_TIMEOUT_MS = 25000;
+
+  /** executeJavaScript 超时上限：guest 被挂起/节流（窗口最小化到托盘、
+   *  离屏保活配方退化）时脚本可能永不返回 → HTTP 永不响应 → Python 侧
+   *  30/35s 超时报 "bridge unreachable"。Electron 侧先超时并返回结构化
+   *  错误，让真实原因（guest not responding）暴露给工具层。必须短于
+   *  Python 侧 HTTP 超时（同 NAVIGATE_TIMEOUT_MS 的注释原则）。 */
+  const JS_EVAL_TIMEOUT_MS = 10000;
+
+  /** executeJavaScript 带超时（普通页面交互 op 共用；pickScript 自带
+   *  180s 预算、不走此包装）。返回 any 与 executeJavaScript 签名对齐：
+   *  页面脚本的返回结构由调用点各自收窄 */
+  function execJs(wc: WebContents, script: string, userGesture = false): Promise<any> {
+    return withTimeout(wc.executeJavaScript(script, userGesture), JS_EVAL_TIMEOUT_MS, 'executeJavaScript');
+  }
+
   /** 视口捕获（invalidate 促帧 + 限时）：普通截图与拼接条带共用 */
   async function captureViewport(wc: WebContents): Promise<NativeImage> {
     try { wc.invalidate(); } catch { /* 销毁竞态忽略 */ }
@@ -490,8 +515,8 @@ export function startBrowserHost(options: BrowserHostOptions): BrowserHost {
    * createImageBitmap 纯 JS 解码（无网络请求，不受页面 CSP 约束，零原生
    * 依赖），完毕无条件还原页面状态。
    */
-  async function captureFullPageByStitch(wc: WebContents): Promise<{ jpegBase64: string }> {
-    const geometryText = await wc.executeJavaScript(
+  async function captureFullPageByStitch(wc: WebContents, deadlineMs?: number): Promise<{ jpegBase64: string }> {
+    const geometryText = await execJs(wc, 
       'JSON.stringify({vw: innerWidth, vh: innerHeight, '
       + 'sh: document.documentElement.scrollHeight, y: scrollY})',
       false,
@@ -505,7 +530,7 @@ export function startBrowserHost(options: BrowserHostOptions): BrowserHost {
     const originY = Math.max(0, Math.round(Number(geo.y ?? 0)));
     if (totalH <= vh + 2) throw new Error('stitch: page fits one viewport');
 
-    await wc.executeJavaScript(
+    await execJs(wc, 
       "(function () { window.__illuStitch = { scrollBehavior: "
       + "document.documentElement.style.scrollBehavior, hidden: [] }; "
       + "document.documentElement.style.scrollBehavior = 'auto'; return 1; })()",
@@ -517,9 +542,9 @@ export function startBrowserHost(options: BrowserHostOptions): BrowserHost {
       const scrollToY = async (targetY: number): Promise<number> => {
         let actual = -1;
         for (let i = 0; i < 3; i++) {
-          await wc.executeJavaScript(`window.scrollTo(0, ${targetY})`, false);
+          await execJs(wc, `window.scrollTo(0, ${targetY})`, false);
           await new Promise((resolve) => setTimeout(resolve, 250));
-          const text = await wc.executeJavaScript('JSON.stringify({y: scrollY})', false);
+          const text = await execJs(wc, 'JSON.stringify({y: scrollY})', false);
           actual = Math.round(Number(JSON.parse(String(text ?? '{}')).y ?? -1));
           if (actual >= 0 && Math.abs(actual - targetY) <= 2) return actual;
         }
@@ -528,17 +553,19 @@ export function startBrowserHost(options: BrowserHostOptions): BrowserHost {
       };
       // 首屏（fixed/sticky 保持原位，整页只出现一次）
       strips.push({ y: await scrollToY(0), image: await captureViewport(wc) });
-      await wc.executeJavaScript(STITCH_HIDE_SCRIPT, false);
+      await execJs(wc, STITCH_HIDE_SCRIPT, false);
       let y = vh;
+      const stitchDeadline = deadlineMs ?? (Date.now() + FULLPAGE_STITCH_BUDGET_MS);
       while (y < totalH && strips.length < MAX_STITCH_STRIPS) {
+        if (Date.now() > stitchDeadline) throw new Error('stitch: total budget exceeded');
         const target = Math.min(y, totalH - vh);
         strips.push({ y: await scrollToY(target), image: await captureViewport(wc) });
         y += vh;
       }
     } finally {
       // 无条件还原页面状态（可见性 + 平滑滚动 + 滚动位置）
-      try { await wc.executeJavaScript(STITCH_RESTORE_SCRIPT, false); } catch { /* ignore */ }
-      try { await wc.executeJavaScript(`window.scrollTo(0, ${originY})`, false); } catch { /* ignore */ }
+      try { await execJs(wc, STITCH_RESTORE_SCRIPT, false); } catch { /* ignore */ }
+      try { await execJs(wc, `window.scrollTo(0, ${originY})`, false); } catch { /* ignore */ }
     }
     if (strips.length < 2) throw new Error('stitch: not enough strips');
 
@@ -568,7 +595,7 @@ export function startBrowserHost(options: BrowserHostOptions): BrowserHost {
       + " const url = canvas.toDataURL('image/jpeg', 0.8);"
       + " return url.indexOf('base64,') >= 0 ? url.slice(url.indexOf('base64,') + 7) : '';"
       + ' })()';
-    const jpegBase64 = String(await wc.executeJavaScript(composite, false) ?? '');
+    const jpegBase64 = String(await execJs(wc, composite, false) ?? '');
     if (!jpegBase64) throw new Error('stitch: canvas composite returned empty');
     return { jpegBase64 };
   }
@@ -751,7 +778,7 @@ export function startBrowserHost(options: BrowserHostOptions): BrowserHost {
       if (ref) {
         // ref → 元素中心坐标（快照 ref 契约：data-illusion-ref 属性）
         const validRef = requireRef(ref);
-        const rect = await wc.executeJavaScript(`(() => {
+        const rect = await execJs(wc, `(() => {
           const el = document.querySelector('[data-illusion-ref="${validRef}"]');
           if (!el) return null;
           el.scrollIntoView({ block: 'center', inline: 'center' });
@@ -785,7 +812,7 @@ export function startBrowserHost(options: BrowserHostOptions): BrowserHost {
         // 聚焦 + 可输入校验（防止"Typed N chars"假成功：link/button 等非
         // 可输入元素聚焦点击可能触发导航，文本静默丢失）
         const validRef = requireRef(ref);
-        const check = await wc.executeJavaScript(`(() => {
+        const check = await execJs(wc, `(() => {
           const el = document.querySelector('[data-illusion-ref="${validRef}"]');
           if (!el) return { exists: false };
           el.scrollIntoView({ block: 'center' });
@@ -811,7 +838,7 @@ export function startBrowserHost(options: BrowserHostOptions): BrowserHost {
         }
       } else {
         // 无 ref：校验当前聚焦元素可输入（追加语义）
-        const focused = await wc.executeJavaScript(`(() => {
+        const focused = await execJs(wc, `(() => {
           const el = document.activeElement;
           if (!el) return { tag: 'none', editable: false };
           const tag = el.tagName.toLowerCase();
@@ -826,7 +853,7 @@ export function startBrowserHost(options: BrowserHostOptions): BrowserHost {
       // 键入前状态（选区/既有值长度/标签）：与托管端同一 note 语义。
       // execCommand('insertText') 与受控输入兼容且原生消费选区（全选后输入=替换）；
       // 失败时回退 setRangeText（选区替换 / 末尾插入，与真实键盘一致）
-      const typeResult = await wc.executeJavaScript(`(() => {
+      const typeResult = await execJs(wc, `(() => {
         const el = document.activeElement;
         if (!el) return { ok: false, sel: false, valueLen: -1, tag: 'none' };
         const tag = el.tagName.toLowerCase();
@@ -892,7 +919,7 @@ export function startBrowserHost(options: BrowserHostOptions): BrowserHost {
       // select-all 语义键：焦点不在可编辑元素上时原生全选会静默无效——
       // 与托管端同语义，先给出可行动的错误而非假成功
       if (/^(control|meta|ctrl)\+a$/i.test(key.trim())) {
-        const editable = await wc.executeJavaScript(`(() => {
+        const editable = await execJs(wc, `(() => {
           const el = document.activeElement;
           if (!el) return false;
           const tag = el.tagName.toLowerCase();
@@ -913,7 +940,7 @@ export function startBrowserHost(options: BrowserHostOptions): BrowserHost {
       // 全选确定性兜底：修饰键事件可能被页面吞掉（选区未建立），聚焦元素
       // 可编辑时直接 execCommand selectAll，保证"全选后输入=替换"可用
       if (/^(control|meta|ctrl)\+a$/i.test(key.trim())) {
-        await wc.executeJavaScript(`(() => {
+        await execJs(wc, `(() => {
           const el = document.activeElement;
           if (!el) return false;
           if (typeof el.selectionStart === 'number') {
@@ -933,7 +960,7 @@ export function startBrowserHost(options: BrowserHostOptions): BrowserHost {
       const wc = await awaitWc(payload.tabId ? String(payload.tabId) : undefined);
       const dx = Number(payload.dx ?? 0);
       const dy = Number(payload.dy ?? 0);
-      const readPos = () => wc.executeJavaScript('(() => ({ x: window.scrollX, y: window.scrollY }))()', false);
+      const readPos = () => execJs(wc, '(() => ({ x: window.scrollX, y: window.scrollY }))()', false);
       const moved = (a: { x: number; y: number }, b: { x: number; y: number }) =>
         Math.abs(a.x - b.x) > 0.5 || Math.abs(a.y - b.y) > 0.5;
       const before = await readPos();
@@ -947,7 +974,7 @@ export function startBrowserHost(options: BrowserHostOptions): BrowserHost {
       const remX = dx - (after.x - before.x);
       const remY = dy - (after.y - before.y);
       if (Math.abs(remX) > 0.5 || Math.abs(remY) > 0.5) {
-        await wc.executeJavaScript(`window.scrollBy(${remX}, ${remY})`, false);
+        await execJs(wc, `window.scrollBy(${remX}, ${remY})`, false);
         await new Promise((r) => setTimeout(r, 100));
         after = await readPos();
       }
@@ -969,10 +996,12 @@ export function startBrowserHost(options: BrowserHostOptions): BrowserHost {
         CAPTURE_TIMEOUT_MS,
         'capture',
       ).catch(async (exc) => {
-        // 一次重试：再失效一帧后等待一小拍（合成器冷启动）
+        // 一次重试：再失效一帧后等待一小拍（合成器冷启动）。
+        // 重试捕获同样限时——guest 无合成面（最小化/离屏配方退化）时
+        // capturePage 可能永不 resolve，不限时会拖到 Python 35s 超时
         try { wc.invalidate(); } catch { /* ignore */ }
         await new Promise((resolve) => setTimeout(resolve, 150));
-        return wc.capturePage();
+        return withTimeout(wc.capturePage(), CAPTURE_TIMEOUT_MS, 'capture retry');
       });
       const jpeg = image.toJPEG(80);
       return { jpegBase64: jpeg.toString('base64') };
@@ -980,23 +1009,28 @@ export function startBrowserHost(options: BrowserHostOptions): BrowserHost {
     async screenshotFullPage(payload) {
       const wc = await awaitWc(payload.tabId ? String(payload.tabId) : undefined);
       try { wc.invalidate(); } catch { /* 销毁竞态忽略 */ }
+      // 全程总预算：单帧尝试 + 拼接 + 合成共用一个 deadline——只预算拼接
+      // 循环时，单帧尝试与合成仍可能把总时长顶穿 Python 侧 120s 桥接上限
+      const deadline = Date.now() + FULLPAGE_TOTAL_BUDGET_MS;
       // 第一优先：模拟视口整页单帧（质量最高，无拼接痕迹）。CDP
       // captureBeyondViewport 读回在 Windows 下会把"小于请求尺寸的 raster"
       // 平铺成目标尺寸（guest 离屏/节流不出整页帧时长图=页首逐块重复），
       // 故读回走原生 capturePage 并做尺寸校验。
-      const single = await captureFullPageSingleFrame(wc);
-      if (single.jpegBase64) return { jpegBase64: single.jpegBase64 };
+      if (Date.now() < deadline) {
+        const single = await captureFullPageSingleFrame(wc);
+        if (single.jpegBase64) return { jpegBase64: single.jpegBase64 };
+      }
       // 整页帧未产出 → 逐屏 capturePage + 页内画布拼接兜底；拼接也失败 →
       // 结构化 error（Python 侧降级为视口截图，绝不产出内容错误的假长图）
       try {
-        return await captureFullPageByStitch(wc);
+        return await captureFullPageByStitch(wc, deadline);
       } catch (exc) {
         return { error: exc instanceof Error ? exc.message : String(exc) };
       }
     },
     async snapshot(payload) {
       const wc = await awaitWc(payload.tabId ? String(payload.tabId) : undefined);
-      const result = await wc.executeJavaScript(SNAPSHOT_SCRIPT, false);
+      const result = await execJs(wc, SNAPSHOT_SCRIPT, false);
       return result;
     },
     async evaluate(payload) {
@@ -1033,13 +1067,15 @@ export function startBrowserHost(options: BrowserHostOptions): BrowserHost {
         " })()";
       let result: unknown;
       try {
-        result = await wc.executeJavaScript(code, false);
+        // evaluate 走更宽的 25s 预算（仍短于 Python 侧 30s）：页面脚本可能
+        // 合法地跑重活（大画布计算、慢 fetch 链），10s 交互上限会误杀
+        result = await withTimeout(wc.executeJavaScript(code, false), EVAL_TIMEOUT_MS, 'evaluate');
       } catch (exc) {
         // 整段脚本解析失败 = 语法错误：单独探测取具体 SyntaxError（探测用
         // new Function，严格 CSP 页面会拒绝——此时保留宿主通用消息）
         let syntax: string | null = null;
         try {
-          syntax = await wc.executeJavaScript(
+          syntax = await execJs(wc, 
             `(() => { try { new Function(${JSON.stringify(wrapEvalExpression(expr))}); return null; }`
             + ` catch (e) { return String((e && e.message) || e); } })()`,
             false,
@@ -1052,7 +1088,7 @@ export function startBrowserHost(options: BrowserHostOptions): BrowserHost {
         const message = exc instanceof Error ? exc.message : String(exc);
         // 克隆失败兜底：表达式可能是语句串，包成块再跑一次
         if (!message.includes('could not be cloned')) throw exc;
-        result = await wc.executeJavaScript(`(() => { ${expr} })()`, false);
+        result = await execJs(wc, `(() => { ${expr} })()`, false);
       }
       if (result && typeof result === 'object' && !Array.isArray(result)
         && typeof (result as Record<string, unknown>)['__illusion_eval_error'] === 'string') {
@@ -1081,7 +1117,8 @@ export function startBrowserHost(options: BrowserHostOptions): BrowserHost {
     },
     async pickScript(payload) {
       const wc = await awaitWc(payload.tabId ? String(payload.tabId) : undefined);
-      // 执行前端下发的拾取脚本（Promise 式：用户点击/Esc 时 resolve）
+      // 执行前端下发的拾取脚本（Promise 式：用户点击/Esc 时 resolve）。
+      // 不走 execJs 包装：拾取等待用户交互，自带 180s 预算
       const script = String(payload.script ?? '');
       const result = await withTimeout(
         wc.executeJavaScript(script, false),
@@ -1093,7 +1130,7 @@ export function startBrowserHost(options: BrowserHostOptions): BrowserHost {
     async pickCancel(payload) {
       const wc = requireWc(payload.tabId ? String(payload.tabId) : undefined);
       // 取消进行中的拾取（幂等：选择器未注入时为 no-op）
-      await wc.executeJavaScript(
+      await execJs(wc, 
         '(() => { const p = window.__illusionWebElementPicker; if (p && typeof p.cancel === "function") p.cancel(); })()',
         false,
       );

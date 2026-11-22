@@ -224,6 +224,11 @@ export function BrowserGuestSurface({
     // 直开 OS 窗口）。开启后 window.open 到达主进程的 window-open 处理器，
     // 由其转换为内置新 tab（弹层→标签页，绝不弹独立窗口）
     el.setAttribute('allowpopups', '');
+    // 禁用后台节流：窗口最小化到托盘/整列离屏保活时，guest 的 JS 与渲染
+    // 默认被 Chromium 节流（backgroundThrottling），agent 浏览器工具的
+    // 点击/键入/求值会长时间无响应直至 Python 侧超时。与 allowpopups 同理
+    // 必须在 attach 前声明（src 首挂加载前）才生效
+    el.setAttribute('webpreferences', 'backgroundThrottling=false');
     el.setAttribute('src', url || 'about:blank');
     Object.assign(el.style, {
       width: '100%', height: '100%', display: 'flex',

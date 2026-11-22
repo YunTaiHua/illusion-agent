@@ -234,13 +234,6 @@ export default function App() {
   // 幅度递进：环境呼吸 ±3.5% < 就绪鼓点 ±6% < 揭幕整层淡出
   const overlayIconPhase: IconPhase =
     overlayVisible || !overlayMounted ? 'breathe' : ascendDone ? 'rest' : 'ascend';
-  // 兜底卸载：正常由 onTransitionEnd 触发；900ms 覆盖 700ms 过渡 + 余量，
-  // 防过渡事件丢失（后台节流 / reduced-motion 场景）
-  useEffect(() => {
-    if (!overlayFading) return;
-    const timer = setTimeout(() => setOverlayMounted(false), 900);
-    return () => clearTimeout(timer);
-  }, [overlayFading]);
   const lang: UiLanguage = useMemo(
     () => normalizeLanguage(session.status?.ui_language),
     [session.status?.ui_language],
@@ -348,11 +341,15 @@ export default function App() {
    *
    * 只挂载面板并激活浏览器标签页，绝不重排用户布局：agent 每个浏览器工具的
    * 状态回推都会走到这里，任何宽度/折叠裁决都会让右栏反复展开折叠（闪烁根因）
+   *
+   * useCallback 稳定引用：本回调是浏览器自动展开 effect 的依赖，每次渲染
+   * 重建会让 effect 在 App 任意渲染后都执行（含浏览器空闲期间的无关渲染），
+   * 是 React #185（更新深度超限）的高风险链条
    */
-  const openBrowserPaneLight = (opts?: { activateNewestBrowserTab?: boolean }): void => {
+  const openBrowserPaneLight = useCallback((opts?: { activateNewestBrowserTab?: boolean }): void => {
     setBrowserPaneOpen(true);
     session.openBrowserPreview(opts);
-  };
+  }, [session.openBrowserPreview]);
 
   /**
    * 展开预览卡片（用户手动入口：区块行点击 / 地址栏回车）
@@ -360,12 +357,12 @@ export default function App() {
    * 揭开用户主动收起的那一层并最大化卡片——与文件预览的展开完全同路
    * （同一 maximizePreview），不在这里另写宽度裁决
    */
-  const expandForBrowser = (opts?: { activateNewestBrowserTab?: boolean; tabId?: string }): void => {
+  const expandForBrowser = useCallback((opts?: { activateNewestBrowserTab?: boolean; tabId?: string }): void => {
     setBrowserPaneOpen(true);
     setPreviewHidden(false);
     maximizePreview();
     session.openBrowserPreview(opts);
-  };
+  }, [maximizePreview, session.openBrowserPreview]);
   // 自动展开预览卡片（仅桌面）：agent 工具建 tab 的 create 指令需要渲染层
   // guest 挂载点，否则 attach 超时、工具全瘫。web 端是截图流、没有 guest，
   // 浏览器状态只显示在右栏区块——自动展开反而会在进入会话时误触发
@@ -397,7 +394,7 @@ export default function App() {
       setBrowserPaneOpen(true);
       openBrowserPaneLight();
     }
-  }, [isDesktopShell, session.browserState, expandForBrowser, session.previewTabs]);
+  }, [isDesktopShell, session.browserState, openBrowserPaneLight, session.previewTabs]);
   // 左栏宽度固定（不允许拖动调整宽度），仅保留折叠/展开能力
   const sidebarWidth = 280;
   const [rightPanelWidth, setRightPanelWidth] = useState(260);
