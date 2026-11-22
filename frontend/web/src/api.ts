@@ -86,6 +86,11 @@ export interface SettingsResponse {
     /** 标题生成子代理模型（env_N.model_M），未设置时为 null（继承当前） */
     model: string | null;
   };
+  /** Goal 长任务功能配置 */
+  goal: {
+    /** 是否启用 goal 功能（关闭后 /goal 命令与 goal 工具均拒绝） */
+    enabled: boolean;
+  };
   /** 内置浏览器配置（browser-use 插件） */
   browser: {
     /** 托管内核：auto / chromium / chrome / msedge */
@@ -536,6 +541,12 @@ export const settingsApi = {
   /** 修改会话自动标题配置（enabled / model，只更新提供的字段） */
   updateTitle: (payload: UpdateTitlePayload) =>
     request<{ success: boolean }>('/api/settings/title', {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  /** 修改 Goal 长任务功能开关（保存后热应用到当前所有活跃会话） */
+  updateGoal: (payload: { enabled: boolean }) =>
+    request<{ success: boolean; goal: { enabled: boolean } }>('/api/settings/goal', {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),

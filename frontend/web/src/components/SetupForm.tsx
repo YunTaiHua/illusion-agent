@@ -180,6 +180,8 @@ interface SetupFormProps {
   onPluginToggle?: (name: string, enabled: boolean) => void;
   /** 全局设置写入（WS web_set_setting；浏览器配置等） */
   sendSetting?: (key: string, value: string | number | boolean) => void;
+  /** Goal 开关切换回调（App 同步其本地 goalEnabled，供 /goal 命令前置判断） */
+  onGoalToggle?: (enabled: boolean) => void;
 }
 
 /** 输入框通用样式（聚焦散光） */
@@ -193,7 +195,7 @@ const labelClass = 'text-xs font-medium text-content-secondary mb-1.5';
  * @param props - 组件属性
  * @returns 表单 JSX
  */
-export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorkspace, onRemoveWorkspace, onRequestWorkspaces, onSetDefaultWorkspace, onSetUiLanguage, agentsApi, defaultWorkspace, onSaved, onClose, plugins, onPluginToggle, sendSetting }: SetupFormProps) {
+export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorkspace, onRemoveWorkspace, onRequestWorkspaces, onSetDefaultWorkspace, onSetUiLanguage, agentsApi, defaultWorkspace, onSaved, onClose, plugins, onPluginToggle, sendSetting, onGoalToggle }: SetupFormProps) {
   /** 当前 Tab */
   const [tab, setTab] = useState<'settings' | 'agents' | 'workspaces' | 'channels' | 'cron' | 'sandbox' | 'extensions'>(initialTab ?? 'settings');
   /** 加载状态 */
@@ -236,6 +238,10 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
   const [reviewAuto, setReviewAuto] = useState(false);
   /** 审核模型（空 = 继承当前会话模型） */
   const [reviewModel, setReviewModel] = useState('');
+  /** Goal 长任务功能开关（关闭后 /goal 命令与 goal 工具均拒绝） */
+  const [goalEnabled, setGoalEnabled] = useState(true);
+  /** 扩展能力卡片即时保存错误（变更即存，无统一保存按钮） */
+  const [capError, setCapError] = useState<string | null>(null);
   /** 沙箱配置（可删改） */
   const [sandbox, setSandbox] = useState<SandboxSettings | null>(null);
   /** 沙箱保存错误 */
@@ -288,6 +294,8 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
       setMemDir(s.memory?.directory ?? '');
       setTitleEnabled(s.title?.enabled ?? false);
       setTitleModel(s.title?.model ?? '');
+      // Goal 长任务功能开关（旧后端响应缺省时按启用兜底）
+      setGoalEnabled(s.goal?.enabled ?? true);
       // 通知开关（旧后端响应缺省时按全开兜底）
       setToastEnabled(s.notifications?.enabled ?? true);
       setToastSound(s.notifications?.sound ?? true);
@@ -487,53 +495,8 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
       )) {
         await settingsApi.updateModelParams(modelParamsPayload);
       }
-      // 3.5 记忆配置改动（任一字段变化即提交）
-      if (settings && (
-        memEnabled !== settings.memory?.enabled ||
-        memAutoExtract !== settings.memory?.auto_extract ||
-        (memExtractModel.trim() || '') !== (settings.memory?.extract_model ?? '') ||
-        (memDreamModel.trim() || '') !== (settings.memory?.dream_model ?? '') ||
-        (memDir.trim() || '') !== (settings.memory?.directory ?? '')
-      )) {
-        await settingsApi.updateMemory({
-          enabled: memEnabled,
-          auto_extract: memAutoExtract,
-          extract_model: memExtractModel.trim(),
-          dream_model: memDreamModel.trim(),
-          directory: memDir.trim(),
-        });
-      }
-      // 3.6 自动标题配置改动（启用开关 / 标题模型任一变化即提交）
-      if (settings && (
-        titleEnabled !== settings.title?.enabled ||
-        (titleModel.trim() || '') !== (settings.title?.model ?? '')
-      )) {
-        await settingsApi.updateTitle({
-          enabled: titleEnabled,
-          model: titleModel.trim(),
-        });
-      }
-      // 3.7 权限 LLM 自动审核配置改动（开关 / 审核模型任一变化即提交）
-      if (settings && (
-        reviewAuto !== settings.permission_review?.auto_review ||
-        (reviewModel.trim() || '') !== (settings.permission_review?.review_model ?? '')
-      )) {
-        await settingsApi.updatePermissionReview({
-          auto_review: reviewAuto,
-          review_model: reviewModel.trim(),
-        });
-      }
-      // 3.8 通知开关改动（toast 总开关 / 音效任一变化即提交；后端按
-      //     enabled && sound 计算实际发声）
-      if (settings && (
-        toastEnabled !== settings.notifications?.enabled ||
-        toastSound !== settings.notifications?.sound
-      )) {
-        await settingsApi.updateNotifications({
-          enabled: toastEnabled,
-          sound: toastSound,
-        });
-      }
+      // 3.5-3.8 记忆/自动标题/权限审核/通知已迁入「扩展能力」tab，
+      // 各卡片变更即存（见 saveCapability），不再参与统一保存流程
       // 4. 渠道配置（兼容旧配置：enabled 但无运行目录的渠道自动填充默认工作区，
       //    避免后端启用校验（enabled 必填目录）拒绝整个保存；其余清空为 null）
       const defaultWs = workspaces.find((w) => w.is_default)?.path;
@@ -578,7 +541,27 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
       setSaving(false);
       setSaveError(err instanceof Error ? err.message : String(err));
     }
-  }, [settings, uiLang, workDir, contextWindow, maxTokens, maxTurns, memEnabled, memAutoExtract, memExtractModel, memDreamModel, memDir, titleEnabled, titleModel, toastEnabled, toastSound, reviewAuto, reviewModel, channels, workspaces, firstLogin, showAddEnv, draft, draftValid, createEnvFromDraft, onSetUiLanguage, onSaved, sandbox, lang, reload]);
+  }, [settings, uiLang, workDir, contextWindow, maxTokens, maxTurns, channels, workspaces, firstLogin, showAddEnv, draft, draftValid, createEnvFromDraft, onSetUiLanguage, onSaved, sandbox, lang, reload]);
+
+  /**
+   * 扩展能力卡片即时保存：变更即存（与浏览器插件开关同语义，无统一保存按钮）。
+   * 仅提交变更字段（PATCH 语义），失败在扩展页顶部提示，不打断编辑。
+   */
+  const saveCapability = useCallback(async (save: () => Promise<unknown>) => {
+    try {
+      await save();
+      if (mountedRef.current) setCapError(null);
+    } catch (err) {
+      if (mountedRef.current) setCapError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  /** Goal 开关切换：即时 PATCH（后端热应用到活跃会话）+ 通知 App 同步 */
+  const handleGoalToggle = useCallback((enabled: boolean) => {
+    setGoalEnabled(enabled);
+    onGoalToggle?.(enabled);
+    void saveCapability(() => settingsApi.updateGoal({ enabled }));
+  }, [onGoalToggle, saveCapability]);
 
   /** 删除环境（即时 API） */
   const handleDeleteEnv = useCallback(async (envKey: string) => {
@@ -724,13 +707,58 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
               onSetDefault={onSetDefaultWorkspace}
             />
           ) : tab === 'extensions' ? (
-            <BrowserTab
-              lang={lang}
-              browserUse={(plugins ?? []).find((p) => p.name === 'browser-use')}
-              onToggle={(enabled) => onPluginToggle?.('browser-use', enabled)}
-              sendSetting={(key, value) => sendSetting?.(key, value)}
-              isDesktop={Boolean(window.illusionDesktop)}
-            />
+            <div className="w-full flex flex-col gap-3">
+              {/* 即时保存错误提示（变更即存，无统一保存按钮） */}
+              {capError && (
+                <div className="text-sm text-danger py-2">{t(lang, 'setupFormSaveFailed')}: {capError}</div>
+              )}
+              <GoalCard lang={lang} enabled={goalEnabled} onToggle={handleGoalToggle} />
+              <BrowserTab
+                lang={lang}
+                browserUse={(plugins ?? []).find((p) => p.name === 'browser-use')}
+                onToggle={(enabled) => onPluginToggle?.('browser-use', enabled)}
+                sendSetting={(key, value) => sendSetting?.(key, value)}
+                isDesktop={Boolean(window.illusionDesktop)}
+              />
+              <MemoryCard
+                lang={lang}
+                enabled={memEnabled}
+                onEnabledChange={(v) => { setMemEnabled(v); void saveCapability(() => settingsApi.updateMemory({ enabled: v })); }}
+                autoExtract={memAutoExtract}
+                onAutoExtractChange={(v) => { setMemAutoExtract(v); void saveCapability(() => settingsApi.updateMemory({ auto_extract: v })); }}
+                directory={memDir}
+                onDirectoryChange={setMemDir}
+                onDirectoryCommit={() => void saveCapability(() => settingsApi.updateMemory({ directory: memDir.trim() }))}
+                extractModel={memExtractModel}
+                onExtractModelChange={(v) => { setMemExtractModel(v); void saveCapability(() => settingsApi.updateMemory({ extract_model: v })); }}
+                dreamModel={memDreamModel}
+                onDreamModelChange={(v) => { setMemDreamModel(v); void saveCapability(() => settingsApi.updateMemory({ dream_model: v })); }}
+                modelOptions={modelOptions}
+              />
+              <TitleCard
+                lang={lang}
+                enabled={titleEnabled}
+                onEnabledChange={(v) => { setTitleEnabled(v); void saveCapability(() => settingsApi.updateTitle({ enabled: v })); }}
+                model={titleModel}
+                onModelChange={(v) => { setTitleModel(v); void saveCapability(() => settingsApi.updateTitle({ model: v })); }}
+                modelOptions={modelOptions}
+              />
+              <NotificationsCard
+                lang={lang}
+                toastEnabled={toastEnabled}
+                onToastEnabledChange={(v) => { setToastEnabled(v); void saveCapability(() => settingsApi.updateNotifications({ enabled: v })); }}
+                toastSound={toastSound}
+                onToastSoundChange={(v) => { setToastSound(v); void saveCapability(() => settingsApi.updateNotifications({ sound: v })); }}
+              />
+              <ReviewCard
+                lang={lang}
+                autoReview={reviewAuto}
+                onAutoReviewChange={(v) => { setReviewAuto(v); void saveCapability(() => settingsApi.updatePermissionReview({ auto_review: v })); }}
+                model={reviewModel}
+                onModelChange={(v) => { setReviewModel(v); void saveCapability(() => settingsApi.updatePermissionReview({ review_model: v })); }}
+                modelOptions={modelOptions}
+              />
+            </div>
           ) : loading ? (
             <div className="flex items-center justify-center py-12 text-sm text-content-disabled">
               <svg className="w-4 h-4 animate-spin mr-2" viewBox="0 0 16 16" fill="none">
@@ -752,35 +780,12 @@ export function SetupForm({ lang, firstLogin, initialTab, workspaces, onAddWorks
               workDir={workDir}
               onWorkDirChange={setWorkDir}
               onManageWorkspaces={() => setTab('workspaces')}
-              memEnabled={memEnabled}
-              onMemEnabledChange={setMemEnabled}
-              memAutoExtract={memAutoExtract}
-              onMemAutoExtractChange={setMemAutoExtract}
-              memExtractModel={memExtractModel}
-              onMemExtractModelChange={setMemExtractModel}
-              memDreamModel={memDreamModel}
-              onMemDreamModelChange={setMemDreamModel}
-              memDir={memDir}
-              onMemDirChange={setMemDir}
-              titleEnabled={titleEnabled}
-              onTitleEnabledChange={setTitleEnabled}
-              titleModel={titleModel}
-              onTitleModelChange={setTitleModel}
-              toastEnabled={toastEnabled}
-              onToastEnabledChange={setToastEnabled}
-              toastSound={toastSound}
-              onToastSoundChange={setToastSound}
               contextWindow={contextWindow}
               onContextWindowChange={setContextWindow}
               maxTokens={maxTokens}
               onMaxTokensChange={setMaxTokens}
               maxTurns={maxTurns}
               onMaxTurnsChange={setMaxTurns}
-              reviewAuto={reviewAuto}
-              onReviewAutoChange={setReviewAuto}
-              reviewModel={reviewModel}
-              onReviewModelChange={setReviewModel}
-              modelOptions={modelOptions}
               envs={envs}
               activeEnvKey={activeEnvKey}
               onDeleteEnv={handleDeleteEnv}
@@ -1014,33 +1019,6 @@ interface SettingsTabProps {
   onWorkDirChange: (v: string) => void;
   /** 跳转到目录空间管理页 */
   onManageWorkspaces: () => void;
-  /** 记忆功能启用开关 */
-  memEnabled: boolean;
-  onMemEnabledChange: (v: boolean) => void;
-  /** 后台 LLM 自动提取/整合开关（false = 仅手动记录） */
-  memAutoExtract: boolean;
-  onMemAutoExtractChange: (v: boolean) => void;
-  /** 提取子代理模型（空 = 继承当前） */
-  memExtractModel: string;
-  onMemExtractModelChange: (v: string) => void;
-  /** 整合子代理模型（空 = 继承当前） */
-  memDreamModel: string;
-  onMemDreamModelChange: (v: string) => void;
-  /** 自定义记忆目录输入值（空 = 使用默认目录） */
-  memDir: string;
-  onMemDirChange: (v: string) => void;
-  /** 自动标题启用开关 */
-  titleEnabled: boolean;
-  onTitleEnabledChange: (v: boolean) => void;
-  /** 标题生成模型（空 = 继承当前） */
-  titleModel: string;
-  onTitleModelChange: (v: string) => void;
-  /** Toast 通知总开关 */
-  toastEnabled: boolean;
-  onToastEnabledChange: (v: boolean) => void;
-  /** 提示音效开关（toast 关闭时置灰不可操作） */
-  toastSound: boolean;
-  onToastSoundChange: (v: boolean) => void;
   /** 上下文窗口大小（token，字符串态：保存时校验为正整数） */
   contextWindow: string;
   onContextWindowChange: (v: string) => void;
@@ -1050,14 +1028,6 @@ interface SettingsTabProps {
   /** 最大对话轮次（字符串态：保存时校验为 1~512） */
   maxTurns: string;
   onMaxTurnsChange: (v: string) => void;
-  /** 权限 LLM 自动审核开关（auto 模式高危操作与沙箱拦截由 LLM 审核放行） */
-  reviewAuto: boolean;
-  onReviewAutoChange: (v: boolean) => void;
-  /** 审核模型（空 = 继承当前会话模型） */
-  reviewModel: string;
-  onReviewModelChange: (v: string) => void;
-  /** 模型下拉选项（env_N.model_N 引用） */
-  modelOptions: DropdownOption[];
   envs: EnvInfo[];
   activeEnvKey: string | null;
   onDeleteEnv: (k: string) => void;
@@ -1331,116 +1301,195 @@ function SettingsTab(p: SettingsTabProps) {
         </div>
       </div>
 
-      {/* 记忆配置 */}
-      <div className="space-y-3 rounded-lg border border-border-light p-4 bg-surface-card-alt/50">
-        <div className={labelClass}>{t(lang, 'setupFieldMemory')}</div>
-        {/* 启用开关 */}
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-content-primary">{t(lang, 'setupFieldMemoryEnabled')}</span>
-          <ToggleSwitch checked={p.memEnabled} onChange={p.onMemEnabledChange} label={t(lang, 'setupFieldMemoryEnabled')} />
-        </div>
-        {/* 后台自动提取开关：记忆功能关闭时置灰（与后端判定链一致——
-            auto_extract 仅在 memory.enabled 时才被处理） */}
-        <div className={`flex items-center justify-between ${p.memEnabled ? '' : 'opacity-50'}`}>
-          <span className="text-sm text-content-primary">{t(lang, 'setupFieldMemoryAutoExtract')}</span>
-          <ToggleSwitch
-            checked={p.memAutoExtract}
-            onChange={p.onMemAutoExtractChange}
-            label={t(lang, 'setupFieldMemoryAutoExtract')}
-            disabled={!p.memEnabled}
-          />
-        </div>
-        {/* 记忆目录输入 */}
-        <div>
-          <div className={labelClass}>{t(lang, 'setupFieldMemoryDirectory')}</div>
-          <input
-            type="text"
-            value={p.memDir}
-            onChange={(e) => p.onMemDirChange(e.target.value)}
-            className={inputClass}
-            placeholder={t(lang, 'setupFieldMemoryDirectoryHint')}
-          />
-        </div>
-        {/* 提取模型 */}
-        <div>
-          <div className={labelClass}>{t(lang, 'setupFieldMemoryExtractModel')}</div>
-          <GlassDropdown
-            value={p.memExtractModel}
-            options={p.modelOptions}
-            onChange={p.onMemExtractModelChange}
-            placeholder={t(lang, 'setupFieldMemoryModelHint')}
-          />
-        </div>
-        {/* 整合模型 */}
-        <div>
-          <div className={labelClass}>{t(lang, 'setupFieldMemoryDreamModel')}</div>
-          <GlassDropdown
-            value={p.memDreamModel}
-            options={p.modelOptions}
-            onChange={p.onMemDreamModelChange}
-            placeholder={t(lang, 'setupFieldMemoryModelHint')}
-          />
-        </div>
-      </div>
+      {/* 记忆/自动标题/通知/权限 LLM 审核：已迁入「扩展能力」tab
+          （SetupForm extensions 分支的 MemoryCard/TitleCard/
+          NotificationsCard/ReviewCard），变更即存 */}
+    </div>
+  );
+}
 
-      {/* 自动标题配置 */}
-      <div className="space-y-3 rounded-lg border border-border-light p-4 bg-surface-card-alt/50">
-        <div className={labelClass}>{t(lang, 'setupFieldTitle')}</div>
-        {/* 启用开关 */}
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-content-primary">{t(lang, 'setupFieldTitleEnabled')}</span>
-          <ToggleSwitch checked={p.titleEnabled} onChange={p.onTitleEnabledChange} label={t(lang, 'setupFieldTitleEnabled')} />
-        </div>
-        {/* 标题生成模型 */}
-        <div>
-          <div className={labelClass}>{t(lang, 'setupFieldTitleModel')}</div>
-          <GlassDropdown
-            value={p.titleModel}
-            options={p.modelOptions}
-            onChange={p.onTitleModelChange}
-            placeholder={t(lang, 'setupFieldTitleModelHint')}
-          />
-        </div>
-      </div>
+// ===== 扩展能力卡片（变更即存，无统一保存按钮；卡片壳样式与内置浏览器卡片一致） =====
 
-      {/* 通知开关（Toast 与音效，settings.json notifications 节） */}
-      <div className="space-y-3 rounded-lg border border-border-light p-4 bg-surface-card-alt/50">
-        <div className={labelClass}>{t(lang, 'setupFieldNotifications')}</div>
-        {/* Toast 总开关 */}
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-content-primary">{t(lang, 'setupFieldToastEnabled')}</span>
-          <ToggleSwitch checked={p.toastEnabled} onChange={p.onToastEnabledChange} label={t(lang, 'setupFieldToastEnabled')} />
-        </div>
-        {/* 音效开关：toast 关闭时置灰（联动规则——音效只在 toast 开启时生效） */}
-        <div className={`flex items-center justify-between ${p.toastEnabled ? '' : 'opacity-50'}`}>
-          <span className="text-sm text-content-primary">{t(lang, 'setupFieldSoundEnabled')}</span>
-          <ToggleSwitch
-            checked={p.toastSound}
-            onChange={p.onToastSoundChange}
-            label={t(lang, 'setupFieldSoundEnabled')}
-            disabled={!p.toastEnabled}
-          />
-        </div>
-      </div>
+/** 卡片壳样式（与 BrowserTab 浏览器卡片同款） */
+const capCardClass = 'rounded-xl border border-border-light bg-surface-card-alt px-4 py-3';
 
-      {/* 权限 LLM 自动审核配置（auto 模式高危操作与沙箱拦截由 LLM 审核放行） */}
-      <div className="space-y-3 rounded-lg border border-border-light p-4 bg-surface-card-alt/50">
-        <div className={labelClass}>{t(lang, 'setupFieldPermissionReview')}</div>
-        {/* 启用开关 */}
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-content-primary">{t(lang, 'setupFieldPermissionReviewEnabled')}</span>
-          <ToggleSwitch checked={p.reviewAuto} onChange={p.onReviewAutoChange} label={t(lang, 'setupFieldPermissionReviewEnabled')} />
+/** Goal 长任务功能卡片：启用开关（关闭后 /goal 命令与 goal 工具均拒绝） */
+function GoalCard({ lang, enabled, onToggle }: {
+  lang: UiLanguage;
+  enabled: boolean;
+  onToggle: (enabled: boolean) => void;
+}) {
+  return (
+    <div className={capCardClass}>
+      <div className="flex items-start gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-medium text-content-primary">{t(lang, 'goal_setting_title')}</div>
+          <div className="text-xs text-content-secondary mt-0.5 leading-relaxed">{t(lang, 'goal_setting_subtitle')}</div>
         </div>
-        {/* 审核模型 */}
-        <div>
-          <div className={labelClass}>{t(lang, 'setupFieldPermissionReviewModel')}</div>
-          <GlassDropdown
-            value={p.reviewModel}
-            options={p.modelOptions}
-            onChange={p.onReviewModelChange}
-            placeholder={t(lang, 'setupFieldPermissionReviewModelHint')}
-          />
-        </div>
+        <ToggleSwitch checked={enabled} onChange={onToggle} label={t(lang, 'goal_setting_title')} />
+      </div>
+    </div>
+  );
+}
+
+/** 记忆配置卡片（自「基础设置」迁入；开关/模型变更即存，目录失焦提交） */
+function MemoryCard(p: {
+  lang: UiLanguage;
+  enabled: boolean;
+  onEnabledChange: (v: boolean) => void;
+  autoExtract: boolean;
+  onAutoExtractChange: (v: boolean) => void;
+  directory: string;
+  onDirectoryChange: (v: string) => void;
+  onDirectoryCommit: () => void;
+  extractModel: string;
+  onExtractModelChange: (v: string) => void;
+  dreamModel: string;
+  onDreamModelChange: (v: string) => void;
+  modelOptions: DropdownOption[];
+}) {
+  return (
+    <div className={`space-y-3 ${capCardClass}`}>
+      <div className={labelClass}>{t(p.lang, 'setupFieldMemory')}</div>
+      {/* 启用开关 */}
+      <div className="flex items-center justify-between">
+        <span className="text-sm text-content-primary">{t(p.lang, 'setupFieldMemoryEnabled')}</span>
+        <ToggleSwitch checked={p.enabled} onChange={p.onEnabledChange} label={t(p.lang, 'setupFieldMemoryEnabled')} />
+      </div>
+      {/* 后台自动提取开关：记忆功能关闭时置灰（与后端判定链一致——
+          auto_extract 仅在 memory.enabled 时才被处理） */}
+      <div className={`flex items-center justify-between ${p.enabled ? '' : 'opacity-50'}`}>
+        <span className="text-sm text-content-primary">{t(p.lang, 'setupFieldMemoryAutoExtract')}</span>
+        <ToggleSwitch
+          checked={p.autoExtract}
+          onChange={p.onAutoExtractChange}
+          label={t(p.lang, 'setupFieldMemoryAutoExtract')}
+          disabled={!p.enabled}
+        />
+      </div>
+      {/* 记忆目录输入（失焦提交） */}
+      <div>
+        <div className={labelClass}>{t(p.lang, 'setupFieldMemoryDirectory')}</div>
+        <input
+          type="text"
+          value={p.directory}
+          onChange={(e) => p.onDirectoryChange(e.target.value)}
+          onBlur={p.onDirectoryCommit}
+          className={inputClass}
+          placeholder={t(p.lang, 'setupFieldMemoryDirectoryHint')}
+        />
+      </div>
+      {/* 提取模型 */}
+      <div>
+        <div className={labelClass}>{t(p.lang, 'setupFieldMemoryExtractModel')}</div>
+        <GlassDropdown
+          value={p.extractModel}
+          options={p.modelOptions}
+          onChange={p.onExtractModelChange}
+          placeholder={t(p.lang, 'setupFieldMemoryModelHint')}
+        />
+      </div>
+      {/* 整合模型 */}
+      <div>
+        <div className={labelClass}>{t(p.lang, 'setupFieldMemoryDreamModel')}</div>
+        <GlassDropdown
+          value={p.dreamModel}
+          options={p.modelOptions}
+          onChange={p.onDreamModelChange}
+          placeholder={t(p.lang, 'setupFieldMemoryModelHint')}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** 自动标题配置卡片（自「基础设置」迁入；开关/模型变更即存） */
+function TitleCard(p: {
+  lang: UiLanguage;
+  enabled: boolean;
+  onEnabledChange: (v: boolean) => void;
+  model: string;
+  onModelChange: (v: string) => void;
+  modelOptions: DropdownOption[];
+}) {
+  return (
+    <div className={`space-y-3 ${capCardClass}`}>
+      <div className={labelClass}>{t(p.lang, 'setupFieldTitle')}</div>
+      {/* 启用开关 */}
+      <div className="flex items-center justify-between">
+        <span className="text-sm text-content-primary">{t(p.lang, 'setupFieldTitleEnabled')}</span>
+        <ToggleSwitch checked={p.enabled} onChange={p.onEnabledChange} label={t(p.lang, 'setupFieldTitleEnabled')} />
+      </div>
+      {/* 标题生成模型 */}
+      <div>
+        <div className={labelClass}>{t(p.lang, 'setupFieldTitleModel')}</div>
+        <GlassDropdown
+          value={p.model}
+          options={p.modelOptions}
+          onChange={p.onModelChange}
+          placeholder={t(p.lang, 'setupFieldTitleModelHint')}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** 通知开关卡片（自「基础设置」迁入；toast 总开关/音效变更即存） */
+function NotificationsCard(p: {
+  lang: UiLanguage;
+  toastEnabled: boolean;
+  onToastEnabledChange: (v: boolean) => void;
+  toastSound: boolean;
+  onToastSoundChange: (v: boolean) => void;
+}) {
+  return (
+    <div className={`space-y-3 ${capCardClass}`}>
+      <div className={labelClass}>{t(p.lang, 'setupFieldNotifications')}</div>
+      {/* Toast 总开关 */}
+      <div className="flex items-center justify-between">
+        <span className="text-sm text-content-primary">{t(p.lang, 'setupFieldToastEnabled')}</span>
+        <ToggleSwitch checked={p.toastEnabled} onChange={p.onToastEnabledChange} label={t(p.lang, 'setupFieldToastEnabled')} />
+      </div>
+      {/* 音效开关：toast 关闭时置灰（联动规则——音效只在 toast 开启时生效） */}
+      <div className={`flex items-center justify-between ${p.toastEnabled ? '' : 'opacity-50'}`}>
+        <span className="text-sm text-content-primary">{t(p.lang, 'setupFieldSoundEnabled')}</span>
+        <ToggleSwitch
+          checked={p.toastSound}
+          onChange={p.onToastSoundChange}
+          label={t(p.lang, 'setupFieldSoundEnabled')}
+          disabled={!p.toastEnabled}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** 权限 LLM 自动审核卡片（自「基础设置」迁入；开关/审核模型变更即存） */
+function ReviewCard(p: {
+  lang: UiLanguage;
+  autoReview: boolean;
+  onAutoReviewChange: (v: boolean) => void;
+  model: string;
+  onModelChange: (v: string) => void;
+  modelOptions: DropdownOption[];
+}) {
+  return (
+    <div className={`space-y-3 ${capCardClass}`}>
+      <div className={labelClass}>{t(p.lang, 'setupFieldPermissionReview')}</div>
+      {/* 启用开关 */}
+      <div className="flex items-center justify-between">
+        <span className="text-sm text-content-primary">{t(p.lang, 'setupFieldPermissionReviewEnabled')}</span>
+        <ToggleSwitch checked={p.autoReview} onChange={p.onAutoReviewChange} label={t(p.lang, 'setupFieldPermissionReviewEnabled')} />
+      </div>
+      {/* 审核模型 */}
+      <div>
+        <div className={labelClass}>{t(p.lang, 'setupFieldPermissionReviewModel')}</div>
+        <GlassDropdown
+          value={p.model}
+          options={p.modelOptions}
+          onChange={p.onModelChange}
+          placeholder={t(p.lang, 'setupFieldPermissionReviewModelHint')}
+        />
       </div>
     </div>
   );

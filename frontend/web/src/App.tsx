@@ -671,6 +671,13 @@ export default function App() {
         // 与该行为一致，否则两端 busy 判定漂移
         const goalHead = goalArgs.split(/\s+/)[0] || '';
         const drivesRounds = goalArgs !== '' && !GOAL_INSTANT_SUBCOMMANDS.has(goalHead);
+        // Goal 功能关闭时前端直接拦截「驱动轮次」的 /goal：不进 busy，
+        // toast 提示去设置开启（瞬时子命令放行——后端 goal_handler 对
+        // 关闭态统一返回禁用提示，clear/pause 等本地操作无害）
+        if (drivesRounds && goalEnabled === false) {
+          showToast(t(lang, 'goal_disabled_hint'), 'info');
+          return;
+        }
         if (drivesRounds) session.setBusyTrue();
         session.sendRequest({ type: 'submit_line', line: trimmed });
         return;
@@ -826,9 +833,25 @@ export default function App() {
     session.sendRequest({ type: 'web_refresh_status' });
   }, [session.clearFirstLogin, session.sendRequest]);
 
-  /** 处理关闭设置表单 */
+  /** 处理关闭设置表单（回读 goal 开关兜底，覆盖本地未同步场景） */
   const handleCloseSetupForm = useCallback(() => {
     setShowSetupForm(false);
+    settingsApi.get().then((s) => setGoalEnabled(s.goal?.enabled ?? true)).catch(() => undefined);
+  }, []);
+
+  /**
+   * Goal 功能开关（供 /goal 命令前置判断）
+   *
+   * 挂载时读一次设置回显；Goal 卡片切换即时回调同步（onGoalToggle），
+   * 表单关闭时再回读一次兜底（覆盖卡片保存失败等本地未同步场景）。
+   * null = 尚未拉取，/goal 不做前端拦截（后端 goal_handler 兜底返回禁用提示）。
+   */
+  const [goalEnabled, setGoalEnabled] = useState<boolean | null>(null);
+  useEffect(() => {
+    settingsApi.get().then((s) => setGoalEnabled(s.goal?.enabled ?? true)).catch(() => undefined);
+  }, []);
+  const handleGoalToggle = useCallback((enabled: boolean) => {
+    setGoalEnabled(enabled);
   }, []);
 
   /** 处理停止当前任务（stopping 状态由 hook 管理：line_complete 清除 + 超时兜底） */
@@ -1648,6 +1671,7 @@ export default function App() {
           defaultWorkspace={session.sessions.find((s) => s.active)?.cwd}
           onSaved={handleSetupSaved}
           onClose={handleCloseSetupForm}
+          onGoalToggle={handleGoalToggle}
           plugins={session.plugins}
           onPluginToggle={(name, enabled) =>
             session.sendRequest({ type: 'web_plugin_toggle', setting_key: name, setting_value: enabled })}
