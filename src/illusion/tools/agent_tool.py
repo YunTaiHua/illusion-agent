@@ -279,6 +279,16 @@ class AgentTool(BaseTool[AgentToolInput]):
                     if hasattr(query_engine, "_resolve_capabilities")
                     else None
                 ),
+                # 工具元数据：继承父引擎的活字典引用（browser_manager 等）。
+                # 不传会导致子 agent 调 browser_* 工具时拿到空 metadata，
+                # 报"浏览器插件未启用"；传活字典引用则插件热切换就地写入
+                # 后，子 agent 下一次工具调用立即 fail-closed。
+                # getattr 防御测试桩（SimpleNamespace 惯例，同 capabilities）。
+                tool_metadata=(
+                    query_engine.tool_metadata
+                    if hasattr(query_engine, "tool_metadata")
+                    else getattr(query_engine, "_tool_metadata", None)
+                ),
             )
         else:
             query_context = None

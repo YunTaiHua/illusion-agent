@@ -714,6 +714,12 @@ async def run_agent_in_process(
         # messages 属性表达式，惰性求值），子代理作为父任务的一部分，
         # 审核时参考父任务上下文是正确语义
         task_context_provider=query_context.task_context_provider,
+        # 工具元数据：继承父级上下文的活字典引用（browser_manager 等）。
+        # 不传会导致子 agent 调 browser_* 工具时拿到空 metadata，报
+        # "浏览器插件未启用"；query_engine._build_query_context 传入的
+        # 就是引擎 _tool_metadata 本体，插件热切换就地写入后，子 agent
+        # 下一次工具调用立即 fail-closed。
+        tool_metadata=query_context.tool_metadata,
     )
 
     # 初始化消息列表

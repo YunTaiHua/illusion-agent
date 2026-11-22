@@ -183,3 +183,53 @@ async def test_agent_tool_subagent_gets_independent_file_state_cache(tmp_path: P
     assert isinstance(child_cache, FileStateCache)
     assert child_cache is not parent_cache
     assert child_cache.size == 0
+
+
+@pytest.mark.asyncio
+async def test_agent_tool_inherits_parent_tool_metadata(tmp_path: Path, monkeypatch):
+    """子 agent 的 QueryContext 必须继承父引擎 tool_metadata（browser_manager 等）。
+
+    回归：子 agent QueryContext 构造漏传 tool_metadata，导致子 agent 调
+    browser_* 工具时 ToolExecutionContext.metadata 缺 browser_manager，
+    报"浏览器插件未启用"（插件实际已开启）。继承的应是父引擎的活字典
+    引用：插件热切换就地写入后，子 agent 下一次工具调用立即 fail-closed。
+    """
+    store = AppStateStore(AppState(model="demo-model", permission_mode="default"))
+    engine = _query_engine(tmp_path)
+    engine._tool_metadata = {"browser_manager": object()}
+    context = ToolExecutionContext(
+        cwd=tmp_path,
+        metadata={
+            "tool_registry": ToolRegistry(),
+            "query_engine": engine,
+            "app_state_store": store,
+            "session_id": "session-test",
+        },
+    )
+    captured: dict[str, object] = {}
+
+    async def _fake_run_agent_in_process(config, query_context, parent_registry, **kwargs):
+        del config, parent_registry, kwargs
+        captured["tool_metadata"] = query_context.tool_metadata
+        return AgentResult(agent_id="agent-test", success=True, result_text="agent done")
+
+    monkeypatch.setattr(
+        "illusion.swarm.agent_executor.run_agent_in_process",
+        _fake_run_agent_in_process,
+    )
+
+    result = await AgentTool().execute(
+        AgentToolInput(
+            description="run background task",
+            prompt="Do a short task and return.",
+            run_in_background=True,
+        ),
+        context,
+    )
+    assert result.is_error is False
+
+    await asyncio.sleep(0)
+    inherited = captured["tool_metadata"]
+    # 活字典引用（非拷贝）：热切换写入同一字典后子 agent 立即可见
+    assert inherited is engine._tool_metadata
+    assert "browser_manager" in inherited
