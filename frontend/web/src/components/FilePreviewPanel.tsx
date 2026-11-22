@@ -46,6 +46,8 @@ interface FilePreviewPanelProps {
   onCloseTab: (key: string) => void;
   /** 关闭除指定 tab 外的全部标签页 */
   onCloseOtherTabs: (key: string) => void;
+  /** 关闭全部标签页（文件/Diff/摘要/浏览器一次性关闭；浏览器整体关闭） */
+  onCloseAllTabs: () => void;
   /** 按路径打开新标签页（工作区内相对路径或任意绝对路径） */
   onOpenPath: (path: string) => void;
   /** 切换激活 tab 到内容视图（原地切换；内容 tab 已存在时直接激活它） */
@@ -89,7 +91,7 @@ interface FilePreviewPanelProps {
  */
 export default function FilePreviewPanel({
   lang, tabs, activeTab, width, hasDiff, rootDirLabel,
-  onActivateTab, onCloseTab, onCloseOtherTabs, onOpenPath,
+  onActivateTab, onCloseTab, onCloseOtherTabs, onCloseAllTabs, onOpenPath,
   onOpenContent, onOpenDiff, onPopOut, onHideColumn,
   browserState, browserFrame, browserOpActive, browserStarting, isDesktop, sendRequest, onPickResult,
   onOpenBrowser, pickMode, onTogglePickMode, onGuestTabOpened,
@@ -208,10 +210,12 @@ export default function FilePreviewPanel({
         >
           <MinusIcon className="w-3.5 h-3.5" />
         </button>
+        {/* 关闭标签页（叉）：关闭全部标签页（文件/Diff/摘要 + 浏览器整体关闭）。
+            单个 tab 的关闭走各 tab 悬浮 X / 中键，"关闭其他"走垃圾桶 */}
         <button
-          onClick={() => onCloseTab(activePreview.key)}
-          title={t(lang, 'close_tab')}
-          aria-label={t(lang, 'close_tab')}
+          onClick={() => onCloseAllTabs()}
+          title={t(lang, 'close_all_tabs')}
+          aria-label={t(lang, 'close_all_tabs')}
           className="w-6 h-6 flex items-center justify-center rounded-md text-content-secondary glass-option-hover hover:text-content-primary transition-colors cursor-pointer shrink-0"
         >
           <CloseIcon className="w-3.5 h-3.5" />

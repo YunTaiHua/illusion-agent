@@ -374,6 +374,8 @@ export interface WebSocketSessionState {
   closePreviewTab: (key: string) => void;
   /** 关闭除指定 tab 外的全部标签页 */
   closeOtherPreviewTabs: (key: string) => void;
+  /** 关闭全部标签页（含浏览器整体关闭；顶栏右端关闭按钮） */
+  closeAllPreviewTabs: () => void;
   /** 原地切换指定 tab 的视图类型（content ↔ diff；目标视图 tab 已存在时直接激活它） */
   switchPreviewTabKind: (key: string, kind: 'content' | 'diff') => void;
   /** 关闭全部标签页 */
@@ -1264,6 +1266,37 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     applyPreviewTabs(kept);
     if (!kept.some((tb) => tb.synthetic)) agentViewRef.current = null;
     setActivePreviewKey(key);
+  }, [applyPreviewTabs, sendRequest]);
+
+  /**
+   * 关闭全部标签页（顶栏右端关闭按钮）
+   *
+   * 清空文件/Diff/摘要/浏览器全部标签页；浏览器一次性整体关闭（后端
+   * purge 全部 tab），避免逐 tab 关闭请求与状态回推竞态。在途关闭登记
+   * 必须覆盖后端当前状态中的所有 tab——而不仅是顶栏已对账的 tab——
+   * 否则旧 browser_state 回推会把遗漏的 tab 按"补回缺失标签页"重新添加。
+   */
+  const closeAllPreviewTabs = useCallback((): void => {
+    const tabs = previewTabsRef.current;
+    // 登记在途关闭：顶栏已对账的浏览器 tab + 后端当前状态中的全部 tab
+    for (const tb of tabs) {
+      if (tb.kind === 'browser' && tb.browserTabId) {
+        closingBrowserTabsRef.current.add(tb.browserTabId);
+      }
+    }
+    for (const backendTab of browserStateRef.current?.tabs ?? []) {
+      closingBrowserTabsRef.current.add(backendTab.id);
+    }
+    // 整体关闭浏览器（后端 purge 全部 tab）；浏览器未运行时不发（避免无谓启停）
+    if (browserStateRef.current?.open || tabs.some((tb) => tb.kind === 'browser')) {
+      sendRequest({ type: 'web_browser_close' });
+    }
+    // 清空新建 tab 激活基准：本次关闭后的状态回推不得迁移焦点/补回标签页
+    activateNewestBrowserTabRef.current = false;
+    knownBrowserTabIdsRef.current = new Set();
+    applyPreviewTabs([]);
+    agentViewRef.current = null;
+    setActivePreviewKey(null);
   }, [applyPreviewTabs, sendRequest]);
 
   /**
@@ -2481,7 +2514,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       previewTabs,
       activePreviewKey,
       activePreviewTab: previewTabs.find((tb) => tb.key === activePreviewKey) ?? null,
-      activatePreviewTab, closePreviewTab, closeOtherPreviewTabs, switchPreviewTabKind,
+      activatePreviewTab, closePreviewTab, closeOtherPreviewTabs, closeAllPreviewTabs, switchPreviewTabKind,
       requestFileTree, requestGitStatus, openFilePreview, openFileDiff, openBrowserPreview, closeFilePreview,
       requestAgentTasks, viewAgentSummary, requestSessionFiles, openSessionFile,
       ready, firstLogin, showThinking,
@@ -2542,7 +2575,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     requestHistory, forkSession,
     subscribeFileMentions, requestFileMentions,
     previewTabs, activePreviewKey,
-    activatePreviewTab, closePreviewTab, closeOtherPreviewTabs, switchPreviewTabKind,
+    activatePreviewTab, closePreviewTab, closeOtherPreviewTabs, closeAllPreviewTabs, switchPreviewTabKind,
     requestFileTree, requestGitStatus, openFilePreview, openFileDiff, openBrowserPreview, closeFilePreview,
     requestAgentTasks, viewAgentSummary, requestSessionFiles, openSessionFile,
     ready, firstLogin, showThinking, swarmTeammates, swarmNotifications,

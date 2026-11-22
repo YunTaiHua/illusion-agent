@@ -1462,6 +1462,7 @@ export default function App() {
             onActivateTab={session.activatePreviewTab}
             onCloseTab={session.closePreviewTab}
             onCloseOtherTabs={session.closeOtherPreviewTabs}
+            onCloseAllTabs={session.closeAllPreviewTabs}
             onOpenPath={(path) => session.openFilePreview(path)}
             onOpenContent={(key) => session.switchPreviewTabKind(key, 'content')}
             onOpenDiff={(key) => session.switchPreviewTabKind(key, 'diff')}

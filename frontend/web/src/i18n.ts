@@ -420,6 +420,7 @@ const ZH: Record<string, string> = {
   // ---- 预览标签页（多文件同时查看）----
   close_tab: '关闭标签页',
   close_other_tabs: '关闭其他标签页',
+  close_all_tabs: '关闭所有标签页',
   tab_actions: '标签页操作',
   open_file_path: '按路径打开文件（支持工作区外的绝对路径）',
   open_file_path_placeholder: '输入文件路径（绝对路径或工作区内相对路径）',
@@ -1046,6 +1047,7 @@ const EN: Record<string, string> = {
   // ---- preview tabs (multiple files at once) ----
   close_tab: 'Close tab',
   close_other_tabs: 'Close other tabs',
+  close_all_tabs: 'Close all tabs',
   tab_actions: 'Tab actions',
   open_file_path: 'Open file by path (absolute paths outside workspace supported)',
   open_file_path_placeholder: 'File path (absolute or workspace-relative)',
