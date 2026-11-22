@@ -33,14 +33,18 @@ interface GitSectionProps {
   topBorder?: boolean;
 }
 
-/** 变更状态 → 展示字母与配色 */
+/** 变更状态 → 展示字母与文字配色（底色统一为中性 --badge-bg-subtle，
+ *  与 write/edit / 技能 P / 插件 OFF 徽标同一底色；A/M/D/R/U/! 状态
+ *  语义保留在文字颜色上，直接取主题协调色：A 用 write/edit 徽标同款
+ *  的青绿主色（不再用薄荷绿 success——两种绿打架），M/D/! 用主题自带
+ *  的琥珀黄/柔和红，不做透明度修饰） */
 const STATUS_META: Record<string, { letter: string; cls: string }> = {
-  added: { letter: 'A', cls: 'text-success bg-success/15' },
-  modified: { letter: 'M', cls: 'text-warning bg-warning/15' },
-  deleted: { letter: 'D', cls: 'text-danger bg-danger/15' },
-  renamed: { letter: 'R', cls: 'text-info bg-info/15' },
-  untracked: { letter: 'U', cls: 'text-content-secondary bg-[var(--badge-bg-subtle)]' },
-  unmerged: { letter: '!', cls: 'text-danger bg-danger/15' },
+  added: { letter: 'A', cls: 'text-primary/80' },
+  modified: { letter: 'M', cls: 'text-warning' },
+  deleted: { letter: 'D', cls: 'text-danger' },
+  renamed: { letter: 'R', cls: 'text-info' },
+  untracked: { letter: 'U', cls: 'text-content-secondary' },
+  unmerged: { letter: '!', cls: 'text-danger' },
 };
 
 /**
@@ -133,11 +137,16 @@ function GitFileRow({ file, onOpenDiff }: { file: GitFileStatus; onOpenDiff: (pa
           )}
         </span>
       )}
+      {/* 状态字母徽标：与其他子区块徽标（write/edit、技能 P、插件 OFF）
+          完全同款——中性 --badge-bg-subtle 底色、宽度随内容（px-1.5）、
+          rounded-full、font-medium；A/M/D/R/U/! 状态语义保留在文字颜色上。
+          未暂存的区分只降字母透明度：整枚徽标降透明会让中性底色比其他
+          徽标明显偏浅（底色不一致的来源） */}
       <span
-        className={`shrink-0 w-4 h-4 flex items-center justify-center rounded text-[10px] font-bold font-mono ${meta.cls} ${file.staged ? '' : 'opacity-70'}`}
+        className={`shrink-0 text-[10px] bg-[var(--badge-bg-subtle)] px-1.5 py-0.5 rounded-full font-medium ${meta.cls}`}
         title={file.staged ? 'staged' : 'unstaged'}
       >
-        {meta.letter}
+        <span className={file.staged ? '' : 'opacity-70'}>{meta.letter}</span>
       </span>
     </button>
   );

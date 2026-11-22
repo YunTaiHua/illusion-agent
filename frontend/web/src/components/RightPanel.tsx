@@ -621,12 +621,16 @@ function PluginRow({ plugin, lang, onToggle }: {
 
 // ---- 智能体与任务行 ----
 
-/** 状态 → 英文徽标文案与配色（与会话文件 write/edit 徽标同款语言） */
+/** 状态 → 英文徽标文案与文字配色（底色统一为中性 --badge-bg-subtle，
+ *  与会话文件 write/edit / 技能 P / 插件 OFF 徽标同一底色；状态语义
+ *  保留在文字颜色上，直接取主题协调色：done 用 write/edit 徽标同款的
+ *  青绿主色（不再用薄荷绿 success——两种绿打架），failed/running 用
+ *  主题自带的柔和红/琥珀黄，不做透明度修饰） */
 function taskStatusInfo(status: string): { label: string; cls: string } {
-  if (status === 'completed') return { label: 'done', cls: 'text-success bg-success/10' };
-  if (status === 'failed') return { label: 'failed', cls: 'text-danger bg-danger/10' };
-  if (status === 'running') return { label: 'running', cls: 'text-warning bg-warning/10' };
-  return { label: status, cls: 'text-content-secondary bg-[var(--badge-bg-subtle)]' };
+  if (status === 'completed') return { label: 'done', cls: 'text-primary/80' };
+  if (status === 'failed') return { label: 'failed', cls: 'text-danger' };
+  if (status === 'running') return { label: 'running', cls: 'text-warning' };
+  return { label: status, cls: 'text-content-secondary' };
 }
 
 /**
@@ -648,8 +652,9 @@ function AgentTaskRow({ task, onView }: { task: AgentTaskItem; onView: (id: stri
       <AutoScrollText trigger="parent" className="text-content-primary font-medium flex-1 min-w-0 text-left">
         {task.title}
       </AutoScrollText>
-      {/* 状态徽标：done / failed / running（英文，着色药丸；固定最小宽度对齐） */}
-      <span className={`shrink-0 min-w-[38px] text-center text-[10px] px-1.5 py-0.5 rounded-full font-medium ${status.cls}`}>
+      {/* 状态徽标：done / failed / running（英文；底色与 write/edit 徽标
+          统一为中性 --badge-bg-subtle，文字色保留状态语义；固定最小宽度对齐） */}
+      <span className={`shrink-0 min-w-[38px] text-center text-[10px] bg-[var(--badge-bg-subtle)] px-1.5 py-0.5 rounded-full font-medium ${status.cls}`}>
         {status.label}
       </span>
     </button>
