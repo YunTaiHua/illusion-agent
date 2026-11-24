@@ -9,7 +9,7 @@
  * @module useResponsiveDrag
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type React from 'react';
 
 export type ResizeDir = { widthDirection: -1 | 0 | 1; heightDirection: -1 | 0 | 1 };
@@ -191,44 +191,60 @@ export function useResponsiveDrag(
 }
 
 /**
- * Fit 画布测量（useLayoutEffect：首绘前完成测量，frame 不会以未缩放尺寸闪现）
+ * Fit 画布测量
  *
- * inactive tab 的 display:none 会让 ResizeObserver 回报 0×0：非正尺寸不采纳、
- * 保留上一次有效画布，切回时 Fit 不会先回退为 1 再缩小。
+ * 测量纪律（React #185 崩溃根因修复）：
+ * - ResizeObserver 是唯一测量源：observe() 本身会立即回调当前尺寸，
+ *   不需要额外的 getBoundingClientRect 首测。两者口径不同——BCR 含
+ *   滚动条、contentRect 不含——混用时滚动条一出现/消失，两种测量
+ *   恒差一个滚动条宽度，setCanvasSize 会在同一次同步提交里无限循环
+ *   （嵌套更新计数过 50 → #185，堆栈：Gd → zd effect → commitHookEffectListMount）。
+ * - 回调 ref 精确挂观察器：节点挂载/替换时 React 精确调用一次，
+ *   不再用"无依赖 useLayoutEffect + cleanup 置空 + 每轮重扫"的模式
+ *   （那会让每次提交都重新测量）。
+ * - 等值抑制：尺寸未变不调度更新。
+ *
+ * inactive tab 的 display:none 会让 ResizeObserver 回报 0×0：非正尺寸
+ * 不采纳、保留上一次有效画布，切回时 Fit 不会先回退为 1 再缩小。
  */
 export function useFitCanvasMeasure(
-  canvasRef: React.RefObject<HTMLDivElement | null>,
   enabled: boolean,
-): ResponsiveSize | null {
+): {
+  canvasSize: ResponsiveSize | null;
+  /** 挂到画布 div 的回调 ref（挂载/替换时精确挂/摘观察器） */
+  canvasRef: (el: HTMLDivElement | null) => void;
+} {
   const [canvasSize, setCanvasSize] = useState<ResponsiveSize | null>(null);
-  // 已建立观察的画布节点。画布在条件渲染分支里（浏览器面板未打开时不在 DOM），
-  // 节点晚于 effect 首次执行才挂载——固定依赖数组捕获不到它的出现，观察器
-  // 永远建立不起来 → canvasSize 恒 null → fit 回退 scale=1（网页以原始
-  // 1280×720 渲染，横向溢出卡片）。因此每次渲染后重查 ref：节点首次出现
-  // （或被替换）的渲染随即补建 ResizeObserver。
-  const observedRef = useRef<HTMLDivElement | null>(null);
-  useLayoutEffect(() => {
-    if (!enabled) return;
-    const canvas = canvasRef.current;
-    if (!canvas || observedRef.current === canvas) return;
-    observedRef.current = canvas;
-    const update = (w: number, h: number) => {
-      if (w <= 0 || h <= 0) return;
-      setCanvasSize((prev) => (prev && prev.width === w && prev.height === h ? prev : { width: w, height: h }));
-    };
-    const rect = canvas.getBoundingClientRect();
-    update(rect.width, rect.height);
-    const observer = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (entry) update(entry.contentRect.width, entry.contentRect.height);
-    });
-    observer.observe(canvas);
-    return () => {
-      observer.disconnect();
-      if (observedRef.current === canvas) observedRef.current = null;
-    };
-  });
-  return canvasSize;
+  const sizeRef = useRef<ResponsiveSize | null>(null);
+  const observerRef = useRef<ResizeObserver | null>(null);
+
+  // 等值抑制：尺寸未变直接返回 prev 引用，不调度任何更新
+  const update = useCallback((w: number, h: number) => {
+    if (w <= 0 || h <= 0) return;
+    const prev = sizeRef.current;
+    if (prev && prev.width === w && prev.height === h) return;
+    sizeRef.current = { width: w, height: h };
+    setCanvasSize(sizeRef.current);
+  }, []);
+
+  const canvasRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      if (observerRef.current) {
+        observerRef.current.disconnect();
+        observerRef.current = null;
+      }
+      if (!el || !enabled) return;
+      const observer = new ResizeObserver((entries) => {
+        const entry = entries[0];
+        if (entry) update(entry.contentRect.width, entry.contentRect.height);
+      });
+      observer.observe(el);
+      observerRef.current = observer;
+    },
+    [enabled, update],
+  );
+
+  return { canvasSize, canvasRef };
 }
 
 

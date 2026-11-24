@@ -19,9 +19,10 @@ import { fileIconColor } from '../utils/fileIcon';
 import AutoScrollText from './AutoScrollText';
 import BrowserPreviewBody from './BrowserPreviewBody';
 import { normalizeBrowserInput } from '../lib/browserUrl';
+import type { BrowserFrameStore } from '../lib/browserFrameStore';
 import { CopyButton, FilePreviewBody, splitFilePath } from './FileViewerModal';
 import { CloseIcon, FileIcon, GlobeIcon, MinusIcon, PlusIcon, PopOutIcon, TrashIcon } from './icons';
-import type { BrowserFrame, BrowserState, PreviewTab } from '../types/protocol';
+import type { BrowserState, PreviewTab } from '../types/protocol';
 
 /**
  * FilePreviewPanel 组件属性接口
@@ -61,8 +62,8 @@ interface FilePreviewPanelProps {
   /** === 内置浏览器 Tab（activeTab.kind === 'browser' 时使用）=== */
   /** 浏览器状态（browser_state） */
   browserState?: BrowserState | null;
-  /** 浏览器最新画面帧（browser_frame） */
-  browserFrame?: BrowserFrame | null;
+  /** 浏览器画面帧外部 store（高频帧只由 BrowserPreviewBody 叶子订阅） */
+  browserFrameStore: BrowserFrameStore;
   /** agent 操作中呼吸指示 */
   browserOpActive?: boolean;
   /** 浏览器启动中（冷启空窗期显示启动指示） */
@@ -93,7 +94,7 @@ export default function FilePreviewPanel({
   lang, tabs, activeTab, width, hasDiff, rootDirLabel,
   onActivateTab, onCloseTab, onCloseOtherTabs, onCloseAllTabs, onOpenPath,
   onOpenContent, onOpenDiff, onPopOut, onHideColumn,
-  browserState, browserFrame, browserOpActive, browserStarting, isDesktop, sendRequest, onPickResult,
+  browserState, browserFrameStore, browserOpActive, browserStarting, isDesktop, sendRequest, onPickResult,
   onOpenBrowser, pickMode, onTogglePickMode, onGuestTabOpened,
 }: FilePreviewPanelProps) {
   // 浏览器 Tab：主体由 BrowserPreviewBody 全权渲染（工具栏 + 画面区），
@@ -282,7 +283,7 @@ export default function FilePreviewPanel({
             <BrowserPreviewBody
               lang={lang}
               browserState={browserState ?? null}
-              browserFrame={browserFrame ?? null}
+              browserFrameStore={browserFrameStore}
               browserOpActive={browserOpActive ?? false}
               starting={browserStarting ?? false}
               isDesktop={isDesktop ?? false}

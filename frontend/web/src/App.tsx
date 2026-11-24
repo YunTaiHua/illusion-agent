@@ -1476,7 +1476,7 @@ export default function App() {
             onOpenDiff={(key) => session.switchPreviewTabKind(key, 'diff')}
             onPopOut={() => setPreviewPopOut(true)}
             browserState={session.browserState}
-            browserFrame={session.browserFrame}
+            browserFrameStore={session.browserFrameStore}
             browserOpActive={session.browserOpActive}
             browserStarting={session.browserStarting}
             isDesktop={isDesktopShell}

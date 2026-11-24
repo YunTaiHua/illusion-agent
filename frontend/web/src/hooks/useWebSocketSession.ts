@@ -19,6 +19,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { createBrowserFrameStore, type BrowserFrameStore } from '../lib/browserFrameStore';
+
 import { attachAuthHeaders } from '../utils/launchToken';
 
 import type {
@@ -333,8 +335,8 @@ export interface WebSocketSessionState {
   sessionFilesLoading: boolean;
   /** 内置浏览器状态（browser_state；右栏浏览器区块数据源） */
   browserState: BrowserState | null;
-  /** 浏览器最新画面帧（browser_frame；截图流数据源） */
-  browserFrame: BrowserFrame | null;
+  /** 浏览器画面帧外部 store。高频帧不进入会话 Hook 的 React state。 */
+  browserFrameStore: BrowserFrameStore;
   /** agent 是否正在操作浏览器（呼吸指示，工具启动后亮 5s） */
   browserOpActive: boolean;
   /** 浏览器启动中（openBrowserPreview 发出后到首个 open 状态间；启动指示器依据） */
@@ -591,10 +593,16 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   const [gitLoading, setGitLoading] = useState(false);
   // === 内置浏览器（右栏浏览器区块数据源）===
   const [browserState, setBrowserState] = useState<BrowserState | null>(null);
+  // 浏览器截图帧是高频数据。保持 store 身份稳定，让帧只通知
+  // BrowserPreviewBody 这个叶子订阅者，不把整棵 App 树拖进同步重渲染。
+  const browserFrameStoreRef = useRef<BrowserFrameStore | null>(null);
+  if (browserFrameStoreRef.current === null) {
+    browserFrameStoreRef.current = createBrowserFrameStore();
+  }
+  const browserFrameStore = browserFrameStoreRef.current;
   // 最新浏览器状态 ref：事件回调内做顶栏标签页对账/切换判定（不经渲染闭包）
   const browserStateRef = useRef<BrowserState | null>(null);
   browserStateRef.current = browserState;
-  const [browserFrame, setBrowserFrame] = useState<BrowserFrame | null>(null);
   /** 元素拾取结果（选择器模式；seq 递增供消费方去重） */
   const [browserPick, setBrowserPick] = useState<{ seq: number; pick: BrowserPickResult | null; error: string } | null>(null);
   const browserPickSeqRef = useRef(0);
@@ -2188,9 +2196,10 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
         return;
       }
       if (evt.type === 'browser_frame') {
-        // 浏览器画面帧（截图流数据源）
+        // 浏览器画面帧只写入稳定的外部 store，不触发会话 Hook / App 整树重渲染。
+        // 预览叶子组件通过 useSyncExternalStore 订阅，按帧更新自己的 img。
         const frame = (evt.frame as BrowserFrame) ?? null;
-        setBrowserFrame(frame);
+        browserFrameStore.set(frame);
         // 自动跟随：帧属于哪个后端 tab，就把预览卡片切到哪个标签页——
         // agent 截图/操作的目标 tab 即用户应看到的内容（仅本地切换，
         // 不回发 select，agent 的后端激活 tab 不被打扰）
@@ -2563,7 +2572,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       // GoalBar（活跃视图）
       goalActionError, sendGoalAction, clearGoalActionError,
       // 内置浏览器（右栏浏览器区块）
-      browserState, browserFrame, browserOpActive, browserStarting, browserPick,
+      browserState, browserFrameStore, browserOpActive, browserStarting, browserPick,
       setOnSelectRequest, setOnCommandResult, setOnUpdateAvailable, setOnRewindRestored,
       setOnToast,
     };
@@ -2571,7 +2580,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     status, tasks, commands, mcpServers, skills, plugins, rules, modelOptions,
     agentTasks, fileTree, fileTreeLoadingPaths, gitStatus, gitLoading,
     sessionFiles, sessionFilesLoading,
-    browserState, browserFrame, browserOpActive, browserStarting, markBrowserOpActive,
+    browserState, browserFrameStore, browserOpActive, browserStarting, markBrowserOpActive,
     requestHistory, forkSession,
     subscribeFileMentions, requestFileMentions,
     previewTabs, activePreviewKey,

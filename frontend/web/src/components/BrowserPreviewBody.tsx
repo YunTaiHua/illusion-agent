@@ -26,6 +26,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { t, type UiLanguage } from '../i18n';
 import { normalizeBrowserInput } from '../lib/browserUrl';
+import { useBrowserFrame, type BrowserFrameStore } from '../lib/browserFrameStore';
 import { BugIcon, ChevronDownIcon, ChevronLeftThinIcon, ChevronRightThinIcon, EllipsisIcon, ExternalLinkIcon, GlobeIcon, GripHorizontalIcon, GripVerticalIcon, MonitorSmartphoneIcon, MousePointerIcon, RefreshCwIcon, TriangleAlertIcon } from './icons';
 import type { BrowserFrame, BrowserState } from '../types/protocol';
 import { BrowserGuestSurface, type BrowserGuestHandle } from './BrowserGuestSurface';
@@ -54,8 +55,8 @@ interface BrowserPreviewBodyProps {
   lang: UiLanguage;
   /** 浏览器状态（browser_state） */
   browserState: BrowserState | null;
-  /** 最新画面帧（browser_frame） */
-  browserFrame: BrowserFrame | null;
+  /** 浏览器画面帧外部 store（高频帧仅在本叶子组件内订阅） */
+  browserFrameStore: BrowserFrameStore;
   /** agent 操作中呼吸指示 */
   browserOpActive: boolean;
   /** 是否运行在 Electron 桌面壳内 */
@@ -87,9 +88,10 @@ const SPECIAL_KEYS: Record<string, string> = {
 };
 
 export default function BrowserPreviewBody({
-  lang, browserState, browserFrame, isDesktop, sendRequest, browserOpActive,
+  lang, browserState, browserFrameStore, isDesktop, sendRequest, browserOpActive,
   onPickResult, autoFocusUrl, pickMode, onTogglePickMode, onGuestTabOpened, browserTabId, starting,
 }: BrowserPreviewBodyProps) {
+  const frameSnapshot = useBrowserFrame(browserFrameStore);
   const open = browserState?.open === true;
   const mode = browserState?.mode ?? (isDesktop ? 'desktop' : 'managed');
   const tabs = browserState?.tabs ?? [];
@@ -139,8 +141,8 @@ export default function BrowserPreviewBody({
   // 新画面帧到达 = 页面已加载完成（reload 同 URL 时 URL 不变，靠帧清 spinner，
   // 否则刷新按钮旋转至 20s 超时才停）
   useEffect(() => {
-    if (browserFrame?.jpeg_base64) setIsLoading(false);
-  }, [browserFrame?.jpeg_base64]);
+    if (frameSnapshot?.jpeg_base64) setIsLoading(false);
+  }, [frameSnapshot?.jpeg_base64]);
 
   useEffect(() => {
     if (autoFocusUrl) urlInputRef.current?.focus();
@@ -216,9 +218,10 @@ export default function BrowserPreviewBody({
   };
 
   // 自由尺寸画布测量 + 拖拽（同一
-  // webview 节点只换外层 frame 尺寸，禁止重建 guest）
-  const canvasRef = useRef<HTMLDivElement | null>(null);
-  const canvasSize = useFitCanvasMeasure(canvasRef, responsiveMode);
+  // webview 节点只换外层 frame 尺寸，禁止重建 guest）。
+  // canvasRef 是回调 ref：RO 唯一测量源，杜绝 BCR/contentRect 口径混用的
+  // 同步提交循环（#185 根因，见 useFitCanvasMeasure 注释）
+  const { canvasSize, canvasRef } = useFitCanvasMeasure(responsiveMode);
   const visualScale = resolveVisualScale(canvasSize, zoom, responsiveSize);
   const rendererScaleRef = useRef(visualScale > 0 ? visualScale : 1);
   rendererScaleRef.current = visualScale > 0 ? visualScale : 1;
@@ -283,8 +286,8 @@ export default function BrowserPreviewBody({
   }, [sendRequest, onGuestTabOpened]);
 
   // 画面帧过滤：帧属于本卡片的 tab 才渲染（多 tab 并存时避免串帧）
-  const frame = browserFrame && (!browserFrame.tab_id || !activeTab?.id || browserFrame.tab_id === activeTab.id)
-    ? browserFrame
+  const frame = frameSnapshot && (!frameSnapshot.tab_id || !activeTab?.id || frameSnapshot.tab_id === activeTab.id)
+    ? frameSnapshot
     : null;
   const vw = browserState?.viewport_width ?? 1280;
   const vh = browserState?.viewport_height ?? 720;
@@ -407,7 +410,7 @@ export default function BrowserPreviewBody({
       <div
         ref={canvasRef}
         className={responsiveMode
-          ? 'h-full min-h-0 w-full min-w-0 overflow-auto'
+          ? 'h-full min-h-0 w-full min-w-0 overflow-auto [scrollbar-gutter:stable]'
           : 'absolute inset-0 overflow-hidden'}
         style={responsiveMode ? { background: 'var(--bg-card-alt, #f3f4f6)' } : undefined}
       >
@@ -422,6 +425,9 @@ export default function BrowserPreviewBody({
                   width: `${responsiveSize.width * visualScale}px`,
                   height: `${responsiveSize.height * visualScale}px`,
                   boxShadow: '0 1px 2px rgba(0,0,0,0.06), 0 0 0 1px var(--border-light, #e8ebf0)',
+                  // RO 首次回调落在绘制后（默认车道）：canvasSize 未就绪前隐藏 frame，
+                  // 避免重开预览时以 scale=1 闪现一帧未缩放画面（web 分支同款守卫）
+                  visibility: canvasSize ? undefined : 'hidden',
                 }
               : undefined}
           >
@@ -835,7 +841,10 @@ function ResponsiveCanvas({ lang, size, zoom, handles, children }: {
     : 1;
   const resolvedScale = zoom !== 'fit' ? Number(zoom) / 100 : fitScale;
 
-  // Fit 画布尺寸测量（挂载时量一次 + ResizeObserver 跟随；0 尺寸不采纳）
+  // Fit 画布尺寸测量（RO 唯一测量源：observe 立即回调当前尺寸，contentRect
+  // 不含滚动条；不混用 getBoundingClientRect——口径差会让 setCanvasSize
+  // 随滚动条出现/消失交替循环（同 useFitCanvasMeasure 的 #185 根因）；
+  // 0 尺寸不采纳；等值抑制不调度更新）
   useEffect(() => {
     if (zoom !== 'fit') return;
     const canvas = canvasRef.current;
@@ -844,8 +853,6 @@ function ResponsiveCanvas({ lang, size, zoom, handles, children }: {
       if (w <= 0 || h <= 0) return;
       setCanvasSize((prev) => (prev && prev.w === w && prev.h === h ? prev : { w, h }));
     };
-    const rect = canvas.getBoundingClientRect();
-    update(rect.width, rect.height);
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0];
       if (entry) update(entry.contentRect.width, entry.contentRect.height);
@@ -864,7 +871,7 @@ function ResponsiveCanvas({ lang, size, zoom, handles, children }: {
   return (
     <div
       ref={canvasRef}
-      className="h-full min-h-0 w-full min-w-0 overflow-auto"
+      className="h-full min-h-0 w-full min-w-0 overflow-auto [scrollbar-gutter:stable]"
       style={{ background: 'var(--bg-card-alt, #f3f4f6)' }}
     >
       <div className="flex min-h-full w-max min-w-full items-center justify-center p-4">
