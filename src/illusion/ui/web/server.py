@@ -87,7 +87,7 @@ async def _send_exchange(
     """首页 token 交换：签发签名 cookie 并清理地址栏中的 token。
 
     - 非 dev：303 重定向到不带 token 的干净 ``/``，浏览器随后凭 cookie 加载
-      首页及静态资源（deepseek-harness 同款流程）；
+      首页及静态资源；
     - dev：无静态资源挂载，返回 200 提示文本，开发者拿到 cookie 后回到
       Vite 开发地址（localhost 域 cookie 跨端口共享）即可通过认证。
     """

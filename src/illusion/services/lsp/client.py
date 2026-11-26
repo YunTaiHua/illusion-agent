@@ -2,7 +2,7 @@
 LSP 客户端
 ==========
 
-参考 vscode-jsonrpc 的双向通信模式。
+使用 JSON-RPC 双向通信模式。
 使用 subprocess.Popen[Any]（同步）+ 线程读写，避免 Windows 上 asyncio 子进程的问题。
 """
 

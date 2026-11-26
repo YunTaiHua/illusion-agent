@@ -19,7 +19,7 @@ import json
 
 
 def goal_guidance(blocked_after: int) -> str:
-    """dsh tool-goal/src/index.ts:113-123 guidance() 原文（blockedAfter 插值）。"""
+    """返回 goal guidance 系统提示词，并插入 blockedAfter 阈值。"""
     return (
         "Use goal tools for one long-running completion objective in the current session. "
         "create_goal may infer goal intent from a direct human request in any language; do not "

@@ -43,7 +43,7 @@ class FeishuSessionStore(BaseChannelSessionStore):
     def build_session_key(self, msg: InboundMessage) -> str:
         """根据入站消息构造会话隔离键
 
-        移植自 hermes 的 build_session_key 逻辑：
+        会话键按以下规则构造：
         - 私聊：每用户独立
         - 群组：默认每用户每群独立，可配置为群共享
 

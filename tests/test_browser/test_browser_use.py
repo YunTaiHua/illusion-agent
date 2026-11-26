@@ -1,4 +1,4 @@
-"""内置浏览器（browser-use 复刻）单元测试。"""
+"""内置浏览器（browser-use）单元测试。"""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from illusion.browser.seeding import seed_builtin_browser_plugin
 from illusion.tools.browser_tools import create_browser_tools
 
 # ---------------------------------------------------------------------------
-# URL 白名单（对标 ZCode page-command.ts）
+# URL 白名单与协议和本地地址限制
 # ---------------------------------------------------------------------------
 
 class TestValidateUrl:
@@ -45,7 +45,7 @@ class TestClampViewport:
 
 
 # ---------------------------------------------------------------------------
-# 内置插件 seed（对标 ZCode seedBundledOfficialPlugins）
+# 内置插件 seed
 # ---------------------------------------------------------------------------
 
 class TestSeeding:
@@ -98,7 +98,7 @@ class TestPluginDiscoverable:
         browser_plugin = next(p for p in plugins if p.manifest.name == "browser-use")
         # 默认禁用（用户可经设置/插件列表开关或 /plugin enable browser-use 启用）
         assert browser_plugin.enabled is False
-        # 技能被插件装载（带插件命名空间，与 ZCode 的 browser-use:control-browser 一致）
+        # 技能被插件装载（带插件命名空间）
         skill_names = [s.name for s in browser_plugin.skills]
         assert "browser-use:control-browser" in skill_names
         assert "browser-use:web-gui-tester" in skill_names
@@ -133,7 +133,7 @@ class TestBrowserTools:
         class _Empty(BaseModel):
             pass
 
-        # evaluate 为非只读（任意 JS 执行，权限门控）；其余与 ZCode 体验一致不加审批
+        # evaluate 为非只读（任意 JS 执行，权限门控）；其余操作不加审批
         assert tools["browser_evaluate"].is_read_only(_Empty()) is False
         assert tools["browser_click"].is_read_only(_Empty()) is True
         assert tools["browser_navigate"].is_read_only(_Empty()) is True

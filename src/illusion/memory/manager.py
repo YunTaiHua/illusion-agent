@@ -119,7 +119,7 @@ def add_memory_entry(
     # 索引使用相对记忆目录的路径（含类型子目录前缀）
     index_ref = str(path.relative_to(get_memory_dir_for_cwd(cwd))).replace("\\", "/")
     if index_ref not in existing:  # 如果不存在
-        # 索引条目格式对齐 Claude Code: - [Title](file.md) — one-line hook
+        # 索引条目格式：- [Title](file.md) — one-line hook
         existing = existing.rstrip() + f"\n- [{title}]({index_ref}) — {title}\n"  # 添加索引条目
         atomic_write_text(entrypoint, existing)  # 写入索引
     return path  # 返回创建的文件路径

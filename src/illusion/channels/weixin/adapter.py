@@ -939,7 +939,7 @@ class WeixinChannel(Channel):
     async def _ensure_typing_ticket(self, user_id: str) -> str:
         """获取打字 ticket（TTL 600s，过期自动刷新）
 
-        移植 hermes issue #38085 修复：ticket 过期后 stop_typing 静默失效，
+        ticket 过期后需刷新，否则 stop_typing 可能静默失效，
         导致用户端永远卡在「正在输入」。
 
         Args:

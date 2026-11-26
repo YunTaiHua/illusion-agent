@@ -89,7 +89,6 @@ async def auto_compact_if_needed(
     messages, tokens_freed = microcompact_messages(messages)
     if tokens_freed > 0:
         # microcompact 已释放 token：从 context_tokens 中减去释放量再判断
-        # （对齐 Claude Code autoCompact.ts: tokenCountWithEstimation - snipTokensFreed）
         adjusted = (
             None if context_tokens is None else max(0, context_tokens - tokens_freed)
         )

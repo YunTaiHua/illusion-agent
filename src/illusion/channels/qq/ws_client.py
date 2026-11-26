@@ -147,8 +147,7 @@ class QQWSClient:
     async def close(self) -> None:
         """关闭连接
 
-        参照 hermes-agent Feishu adapter disconnect() 模式：
-        cancel task 后 await 等待 task 退出（带 timeout），避免旧 task
+        取消 task 后 await 等待 task 退出（带 timeout），避免旧 task
         在 _supervise 重启时仍在运行。与 Feishu adapter 的 await ws_future
         保持一致的"等待线程退出"语义。
         """
@@ -210,7 +209,6 @@ class QQWSClient:
     async def _listen_loop(self) -> None:
         """读取 WS 帧并分发，断线后自动重连
 
-        参照 hermes-agent qqbot/adapter.py _listen_loop 模式：
         - 永远循环，不退出（除非 CancelledError 或 _running=False）
         - 快速断连次数过多：sleep 长时间后重置计数器继续循环（不放弃）
         - 致命错误码：sleep 长时间后继续循环（网络恢复后可能就好了）
@@ -244,7 +242,7 @@ class QQWSClient:
                 if duration < QUICK_DISCONNECT_THRESHOLD and connect_time > 0:
                     quick_disconnects += 1
                     if quick_disconnects >= MAX_QUICK_DISCONNECTS:
-                        # 不退出，sleep 长时间后重置继续（hermes-agent 模式）
+                        # 不退出，sleep 长时间后重置继续
                         logger.warning(
                             "QQ 快速断连 %d 次，等待 %ds 后重置计数继续重连",
                             quick_disconnects, LONG_BACKOFF_SECONDS,
@@ -257,13 +255,9 @@ class QQWSClient:
                     quick_disconnects = 0
 
                 # 致命错误码：sleep 长时间后继续（不放弃，网络恢复后可能就好了）
-                # 偏离 hermes-agent：hermes-agent 对致命错误码（bot banned 4915、
-                # offline 4914、intent not authorized 4014 等）return 退出循环并
-                # _set_fatal_error(retryable=False) 标记不可恢复。illusion-agent
-                # 无 _set_fatal_error 机制，return 会让 _listen_task 静默退出，
+                # 当前没有独立的不可恢复错误通知机制。直接退出会让 _listen_task 静默退出，
                 # _EventWatchdog 300s 后才触发 supervisor 重启，重启后又命中相同
-                # fatal code → supervisor 级 thrashing（每 300s 重启一次）比当前
-                # 60s sleep 更浪费。当前 sleep+retry 是折中方案，长期应引入
+                # fatal code，造成周期性重启。当前 sleep+retry 是折中方案，长期可引入
                 # fatal error 通知机制（如 adapter 标记 disabled + 通知用户）。
                 if exc.code in FATAL_CLOSE_CODES:
                     logger.error(
@@ -295,7 +289,7 @@ class QQWSClient:
                     quick_disconnects = 0
                 else:
                     backoff_idx = min(backoff_idx + 1, len(RECONNECT_BACKOFF) - 1)
-                    # 重连失败达上限，sleep 长时间后重置（hermes-agent 模式）
+                    # 重连失败达上限，sleep 长时间后重置退避继续
                     if backoff_idx >= len(RECONNECT_BACKOFF) - 1:
                         logger.warning(
                             "QQ WS 重连失败达上限，等待 %ds 后重置退避继续",
@@ -316,8 +310,7 @@ class QQWSClient:
     async def _reconnect(self, backoff_idx: int) -> bool:
         """指数退避重连（仅替换 ws，不重建监听任务）
 
-        参照 hermes-agent qqbot/adapter.py _reconnect 模式：返回 bool。
-        成功 True（重置 backoff），失败 False（递增 backoff）。
+        成功返回 True（重置 backoff），失败返回 False（递增 backoff）。
 
         关键：重连在 _listen_loop 内部调用，listen_loop 自己会接着循环
         调 _read_events。这里只负责关旧 ws、建新 ws，绝不能创建新的
@@ -360,7 +353,7 @@ class QQWSClient:
         触发 _listen_loop 重连，避免 daemon 僵死。
 
         循环条件检查 self._ws.closed：重连后旧 ws 已关闭，循环自然退出，
-        避免对已关闭的旧 ws 继续调用 receive（参考 hermes qqbot 实现）。
+        避免对已关闭的旧 ws 继续调用 receive。
 
         注意：self._ws 为 None 时必须抛 QQCloseError 而非直接 return。
         若直接 return，_listen_loop 会认为读取正常完成 → 重置 backoff_idx →

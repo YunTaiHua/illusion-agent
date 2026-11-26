@@ -3,7 +3,7 @@
 
 封装飞书消息的发送、编辑、文件上传等操作，基于 lark-oapi SDK。
 
-渲染策略（参考 hermes-agent 的 _build_outbound_payload）：
+渲染策略：
     - 含 markdown 表格 → 纯 text（飞书 post 的 md tag 无法渲染表格）
     - 含 markdown 特征 → post 富文本，内含 {tag:md} 元素让飞书客户端渲染
     - 无 markdown 特征 → 纯 text
@@ -91,7 +91,7 @@ _DOMAINS = {
     "lark": "https://open.larksuite.com",
 }
 
-# ─── Markdown 探测正则（移植自 hermes feishu.py:153-165）──────────────────
+# ─── Markdown 探测正则 ───────────────────────────────────────────────
 # markdown 特征：标题/列表/有序列表/分隔线/代码块/行内代码/粗体/删除线/下划线/斜体/链接/引用
 _MARKDOWN_HINT_RE = re.compile(
     r"(^#{1,6}\s)|(^\s*[-*]\s)|(^\s*\d+\.\s)|(^\s*---+\s*$)|"
@@ -138,7 +138,7 @@ def build_lark_client(cfg: FeishuChannelConfig) -> Any:
 def resolve_receive_id(chat_id: str) -> tuple[str, str]:
     """解析 chat_id 到 (receive_id, receive_id_type)
 
-    路由规则（与 hermes 一致）：
+    路由规则：
     - ou_ 前缀 → open_id 类型
     - 其他 → chat_id 类型
 
@@ -156,7 +156,7 @@ def resolve_receive_id(chat_id: str) -> tuple[str, str]:
 def build_outbound_payload(text: str) -> tuple[str, str]:
     """渲染决策：根据内容选择 text 或 post 消息类型
 
-    参考自 hermes 的 _build_outbound_payload，三分支决策：
+    根据内容选择 text 或 post 消息类型：
     1. 含 markdown 表格 → 强制 text（飞书 post md tag 无法渲染表格）
     2. 含 markdown 特征 → post 富文本（用 md magic tag 让飞书渲染）
     3. 无 markdown 特征 → 纯 text
@@ -267,7 +267,7 @@ async def send_text(client: Any, cfg: FeishuChannelConfig, chat_id: str,
                     text: str, *, reply_to: str = "") -> str:
     """发送文本消息，返回新消息 ID
 
-    根据内容自动选择 text 或 post 格式（参考 hermes 渲染策略）。
+    根据内容自动选择 text 或 post 格式。
     post 发送失败（内容格式错误）时自动降级为纯文本。
 
     Args:
@@ -828,8 +828,7 @@ async def set_card_streaming_mode(
     否则飞书客户端仍处于流式态（loading 动画不停止、streaming_content element
     仍等待增量），会导致终态卡片渲染异常（如循环显示思考过程）。
 
-    参考 openclaw-lark 的 setCardStreamingMode：通过 PATCH /cards/:card_id/settings
-    发送 {"streaming_mode": false} + sequence。
+    通过 PATCH /cards/:card_id/settings 发送 {"streaming_mode": false} + sequence。
 
     Args:
         client: lark 客户端

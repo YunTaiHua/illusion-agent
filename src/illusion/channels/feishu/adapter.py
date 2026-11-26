@@ -79,7 +79,7 @@ class FeishuChannel(Channel):
     async def connect(self) -> None:
         """建立 WS 长连接
 
-        参照 hermes-agent _connect_with_retry 模式：
+        连接前先清理旧资源，失败时调用 shutdown 清理已创建的资源：
         - 先清理旧资源（_supervise 重启时复用 adapter 实例）
         - 失败时调用 shutdown 清理已创建的资源，避免 lark_loop 泄漏
         """
@@ -127,8 +127,8 @@ class FeishuChannel(Channel):
     async def _cleanup_resources(self) -> None:
         """清理旧 WS 客户端资源（connect 重启或 shutdown 时调用）
 
-        参照 hermes-agent disconnect() 模式：调用 ws.stop() 跨线程中断 lark_loop，
-        等待 future 退出，避免多个 lark_loop 并存导致 "attached to a different loop" 错误。
+        停止 ws.stop() 跨线程中断 lark_loop，等待 future 退出，避免多个
+        lark_loop 并存导致 "attached to a different loop" 错误。
 
         资源清理放在最外层 finally：即使等待 ws_future 被外层 task 取消
         （CancelledError 上抛），executor 与 _ws 也会被释放，避免状态残留
@@ -677,8 +677,8 @@ class FeishuChannel(Channel):
     async def shutdown(self) -> None:
         """关闭渠道
 
-        参照 hermes-agent disconnect() 模式：复用 _cleanup_resources 统一清理。
-        先关闭入站队列唤醒 listen 协程，再清理 WS 资源。
+        复用 _cleanup_resources 统一清理。先关闭入站队列唤醒 listen 协程，
+        再清理 WS 资源。
         """
         self._stop_event.set()
         self._queue.shutdown()  # 投递哨兵唤醒 listen 协程

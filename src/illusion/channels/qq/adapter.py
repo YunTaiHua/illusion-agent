@@ -459,8 +459,8 @@ class QQChannel(Channel):
     async def listen(self) -> AsyncIterator[InboundMessage]:
         """异步迭代器，不断 yield 入站消息
 
-        参照 hermes-agent 模式：_listen_loop 自己永远循环处理重连，
-        不依赖外部 _supervise 重启。listen() 只负责从队列取消息 yield。
+        _listen_loop 自己永远循环处理重连，不依赖外部 _supervise 重启。
+        listen() 只负责从队列取消息 yield。
 
         阻塞在 queue.get() 等待消息，shutdown() 调用 queue.shutdown() 投递哨兵
         唤醒 getter 并抛 QueueShutDown，本方法捕获后退出循环。

@@ -38,7 +38,6 @@ _WS_HTTP_TIMEOUT: tuple[float, float] = (3.0, 10.0)
 class _DuplicateLogFilter(logging.Filter):
     """重复日志抑制 filter
 
-    参照 hermes-agent _write_runtime_status_safe 的日志降级思路：
     相同消息在 THROTTLE_SECONDS 内只放行一次，之后直接丢弃（return False）。
     避免 lark SDK 循环错误（attached to a different loop / Event loop is closed）
     爆炸式填充 log 文件造成资源浪费。
@@ -116,7 +115,7 @@ class FeishuWSClient:
         _client: 官方客户端实例（start 后赋值）
         _lark_loop: lark SDK 独立事件循环（start 创建，stop 用它跨线程中断）
 
-    参照 hermes-agent 的 _run_official_feishu_ws_client + disconnect 模式：
+    客户端使用独立事件循环运行，并由 stop() 通过线程安全调用中断运行：
     - start() 创建独立 loop，替换 lark SDK 模块级 loop，保存到 self._lark_loop；
       finally 块清理 pending tasks + stop + close loop
     - stop() 通过 call_soon_threadsafe 取消 tasks + loop.stop() 让阻塞的 start() 返回
@@ -151,7 +150,7 @@ class FeishuWSClient:
         守护进程主事件循环已 running，lark SDK 若复用主 loop 会抛
         RuntimeError: This event loop is already running。
 
-        参照 hermes-agent _run_official_feishu_ws_client 模式：
+        使用独立 loop 运行 lark SDK，并在 stop() 时跨线程中断：
         - 创建独立 loop 并替换 lark SDK 模块级 loop 变量（WsClient.__init__ 需要）
         - 保存 loop 到 self._lark_loop 供 stop() 跨线程中断
         - start() 阻塞运行，由 stop() 通过 loop.stop() 中断
@@ -193,8 +192,7 @@ class FeishuWSClient:
         # 给 lark SDK 的阻塞 requests.post 注入超时：lark 的 _get_conn_url 用
         # requests.post(...) 同步获取 WS 端点 URL，且**未设 timeout**。断网时
         # 该同步请求可无限卡死（DNS/connect 挂起），令 WS 线程长期滞留、断网期
-        # 线程累积。参照 hermes-agent 在 WS 线程内 monkeypatch 的模式，仅在本
-        # 连接期间生效，finally 恢复。requests timeout 元组为 (connect, read)。
+        # 线程累积。仅在本连接期间生效，finally 恢复。requests timeout 元组为 (connect, read)。
         original_post = lark_ws_module.requests.post
 
         def _post_with_timeout(*args: Any, **kwargs: Any) -> Any:
@@ -212,7 +210,7 @@ class FeishuWSClient:
             logger.debug("飞书 WS start() 异常退出", exc_info=True)
         finally:
             lark_ws_module.requests.post = original_post
-            # 清理 pending tasks + stop + close loop（参照 hermes-agent）
+            # 清理 pending tasks + stop + close loop
             self._running = False
             self._cleanup_loop(lark_loop)
             self._lark_loop = None
@@ -252,7 +250,6 @@ class FeishuWSClient:
     def stop(self) -> None:
         """停止 WS 客户端（线程安全，非阻塞）
 
-        参照 hermes-agent disconnect() 模式：
         先禁用 lark SDK 的自动重连，再通过 call_soon_threadsafe 在 lark_loop
         上调度 _shutdown_loop，取消所有 pending tasks 并停止 loop，让阻塞的
         run_until_complete(_select()) 返回。

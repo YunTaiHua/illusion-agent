@@ -405,7 +405,7 @@ async def _generate_title(engine: Any, source: str) -> str:
             title = (getattr(event.message, "text", "") or "").strip()
         elif isinstance(event, ErrorEvent):
             logger.warning("Auto title subagent error: %s", event.message)
-    # 清洗：剥离思考包裹、取首个非空行（对齐 opencode 标题清洗）
+    # 清洗：剥离思考包裹、取首个非空行
     title = _clean_title(title)
     return title
 

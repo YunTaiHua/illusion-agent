@@ -44,7 +44,7 @@ from illusion.tools.grep_tool import GrepTool
 
 logger = logging.getLogger(__name__)
 
-# 对齐 Claude Code extractMemories 的限制
+# 记忆提取限制
 MAX_EXTRACT_TURNS = 20  # 最大轮次：记忆持续增长，需要更多轮次完成读取+写入
 MAX_EXTRACT_MESSAGES = 20  # 最多分析最近 N 条消息
 
@@ -415,7 +415,7 @@ async def _run_extract_task(
         activity.exception("Memory extraction failed")
     finally:
         if success:
-            # 成功才推进游标（对齐 Claude Code：失败时游标保留，下次重试）
+            # 成功才推进游标：失败时游标保留，下次重试
             state.last_extracted_index = len(messages_snapshot)
         state.snapshot = _snapshot_memory_dir(memory_dir)
         state.running = False

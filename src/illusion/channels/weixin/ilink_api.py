@@ -414,7 +414,7 @@ async def _api_post(
     """通用 iLink API POST 调用
 
     所有 POST 请求自动注入 base_info 字段，手动序列化 JSON 并设置 Content-Length，
-    与 hermes-agent 的 iLink 客户端保持一致。
+    满足 iLink API 的请求要求。
 
     Args:
         session: aiohttp.ClientSession
@@ -871,7 +871,7 @@ async def qr_login_with_browser() -> WeixinCredentials | None:
         server_info = _serve_qr_in_browser(qr_content)
         print(t("weixin_qr_waiting"))
 
-        # 3. 轮询扫码状态（参照 hermes-agent，使用 status 字段判断）
+        # 3. 轮询扫码状态（使用 status 字段判断）
         deadline = _time.monotonic() + 480  # 总超时 8 分钟
         refresh_count = 0
         max_refreshes = 3

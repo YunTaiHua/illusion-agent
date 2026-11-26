@@ -44,7 +44,7 @@ MEDIA_TYPE_VOICE = 3
 MEDIA_TYPE_FILE = 4
 
 # ── 流式消息（C2C stream_messages API） ──────────────────────
-# 参考openclaw-main: /v2/users/{openid}/stream_messages
+# C2C stream_messages API：/v2/users/{openid}/stream_messages
 # 通过 stream_msg_id 标识同一条流式消息，多次 PATCH 实现打字机效果
 
 STREAM_INPUT_MODE_REPLACE = "replace"  # 每个 chunk 全量替换消息内容
@@ -365,7 +365,7 @@ async def send_c2c_stream_message(
         msg_seq: 消息序列号（同一流式会话内所有分片共享）
         index: 分片序号（同一会话内递增）
         stream_msg_id: 流式消息 ID（首次不传，后续复用服务器返回的 id）
-        event_id: 事件 ID（必填，参考 openclaw-main 直接用入站 msg_id 同值）
+        event_id: 事件 ID（必填，通常使用入站 msg_id 同值）
 
     Returns:
         dict[str, Any]: API 响应，首次包含 id 字段（流式消息 ID）
@@ -384,7 +384,7 @@ async def send_c2c_stream_message(
         "msg_id": msg_id,
         "msg_seq": msg_seq,
         "index": index,
-        # event_id 必填：参考 openclaw-main outbound-dispatch.ts:403 直接用入站 messageId
+        # event_id 必填：默认直接使用入站 messageId
         "event_id": event_id or msg_id,
     }
     if stream_msg_id:
