@@ -19,22 +19,25 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from illusion.plugins.loader import get_user_plugins_dir
+from illusion.plugins.loader import _find_manifest, _load_manifest, get_user_plugins_dir
 
 
 def install_plugin_from_path(source: str | Path) -> Path:
-    """安装插件目录到用户插件目录
-    
-    将源插件目录复制到用户插件目录。
-    
-    Args:
-        source: 插件源目录路径
-    
-    Returns:
-        Path: 安装后的插件目录路径
-    """
-    src = Path(source).resolve()
-    dest = get_user_plugins_dir() / src.name
+    """验证并安装一个插件目录到用户插件目录。"""
+    src = Path(source).expanduser().resolve()
+    if not src.is_dir():
+        raise ValueError(f"Plugin source must be a directory: {source}")
+    manifest_path = _find_manifest(src)
+    if manifest_path is None:
+        raise ValueError(f"Plugin manifest not found: {src}")
+    if _load_manifest(src) is None:
+        raise ValueError(f"Invalid plugin manifest: {manifest_path}")
+
+    destination_root = get_user_plugins_dir().resolve()
+    destination_root.mkdir(parents=True, exist_ok=True)
+    dest = destination_root / src.name
+    if src == dest.resolve():
+        return dest
     if dest.exists():
         shutil.rmtree(dest)
     shutil.copytree(src, dest)
@@ -42,18 +45,16 @@ def install_plugin_from_path(source: str | Path) -> Path:
 
 
 def uninstall_plugin(name: str) -> bool:
-    """卸载用户插件
-    
-    根据目录名称删除用户插件。
-    
-    Args:
-        name: 插件名称（目录名）
-    
-    Returns:
-        bool: 是否成功卸载
-    """
-    path = get_user_plugins_dir() / name
-    if not path.exists():
+    """按用户插件目录中的直接子目录名称卸载插件。"""
+    if not name or Path(name).name != name or name in {".", ".."}:
+        return False
+    root = get_user_plugins_dir().resolve()
+    path = (root / name).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    if not path.is_dir():
         return False
     shutil.rmtree(path)
     return True

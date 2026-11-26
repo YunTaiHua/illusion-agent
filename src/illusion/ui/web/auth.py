@@ -108,6 +108,7 @@ def _write_secret_file(path: Path, content: bytes) -> None:
     """
     tmp_path: str | None = None
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_path = tempfile.mkstemp(
             dir=str(path.parent), prefix=".web-auth-", suffix=".tmp"
         )

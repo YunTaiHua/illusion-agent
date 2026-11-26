@@ -69,7 +69,7 @@ def mcp_add(
     from pydantic import TypeAdapter, ValidationError
 
     from illusion.config import load_settings, save_settings
-    from illusion.mcp.types import McpServerConfig
+    from illusion.mcp.types import McpServerConfig, _normalize_server_config_type
 
     settings = load_settings()
     try:
@@ -78,7 +78,9 @@ def mcp_add(
         print(_t("mcp_invalid_json", exc=exc), file=sys.stderr)
         raise typer.Exit(1)
     try:
-        cfg: McpServerConfig = TypeAdapter(McpServerConfig).validate_python(raw)
+        cfg: McpServerConfig = TypeAdapter(McpServerConfig).validate_python(
+            _normalize_server_config_type(raw)
+        )
     except ValidationError as exc:
         print(_t("mcp_invalid_config", exc=exc), file=sys.stderr)
         raise typer.Exit(1)

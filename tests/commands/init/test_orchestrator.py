@@ -63,6 +63,26 @@ async def test_run_init_creates_all_files(tmp_path: Path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_init_reports_external_user_memory_path(tmp_path: Path, monkeypatch):
+    """外置用户配置根下的 MEMORY.md 也不应阻断 init 报告。"""
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "pyproject.toml").write_text('[project]\nname = "test"\n')
+    user_config = tmp_path / "user-config"
+    monkeypatch.setenv("ILLUSION_CONFIG_DIR", str(user_config))
+    monkeypatch.setenv("ILLUSION_DATA_DIR", str(tmp_path / "data"))
+
+    result = await run_init(_make_context(project))
+
+    from illusion.memory.paths import get_memory_entrypoint
+
+    memory_path = get_memory_entrypoint(project)
+    assert memory_path.exists()
+    assert str(memory_path) in result.message
+    assert (project / ".illusion" / "rules" / "project-structure.md").exists()
+
+
+@pytest.mark.asyncio
 async def test_run_init_idempotent(tmp_path: Path, monkeypatch):
     """测试幂等性：第二次运行不会重复创建文件"""
     monkeypatch.setenv("ILLUSION_CONFIG_DIR", str(tmp_path / "config"))

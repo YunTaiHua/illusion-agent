@@ -27,6 +27,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from illusion.config.paths import get_config_dir_override
+
 
 @dataclass
 class EnvironmentInfo:
@@ -61,6 +63,7 @@ class EnvironmentInfo:
     git_branch: str | None = None  # Git 分支名称
     hostname: str = ""  # 主机名
     extra: dict[str, str] = field(default_factory=dict[str, Any])  # 额外信息
+    user_config_dir: str | None = None  # 显式覆盖的 Illusion 用户配置根
 
 
 def detect_os() -> tuple[str, str]:
@@ -137,7 +140,7 @@ def detect_git_info(cwd: str) -> tuple[bool, str | None]:
             **run_kwargs,
         )
         is_git = result.returncode == 0 and result.stdout.strip() == "true"
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except (FileNotFoundError, NotADirectoryError, OSError, subprocess.TimeoutExpired):
         return False, None
 
     if not is_git:
@@ -155,7 +158,7 @@ def detect_git_info(cwd: str) -> tuple[bool, str | None]:
             **run_kwargs,
         )
         branch = result.stdout.strip() if result.returncode == 0 else None
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except (FileNotFoundError, NotADirectoryError, OSError, subprocess.TimeoutExpired):
         branch = None
 
     return True, branch
@@ -176,6 +179,7 @@ def get_environment_info(cwd: str | None = None) -> EnvironmentInfo:
     os_name, os_version = detect_os()
     shell = detect_shell()
     is_git, branch = detect_git_info(cwd)
+    config_override = get_config_dir_override()
 
     return EnvironmentInfo(
         os_name=os_name,
@@ -184,6 +188,7 @@ def get_environment_info(cwd: str | None = None) -> EnvironmentInfo:
         shell=shell,
         cwd=cwd,
         home_dir=str(Path.home()),
+        user_config_dir=str(config_override.absolute()) if config_override is not None else None,
         date=datetime.now(tz=UTC).strftime("%Y-%m-%d"),
         python_version=platform.python_version(),
         is_git_repo=is_git,

@@ -113,9 +113,13 @@ def _format_environment_section(env: EnvironmentInfo) -> str:
         f" - Shell: {env.shell}",
         f" - Working directory: {env.cwd}",
         f" - Home directory: {env.home_dir}",
+    ]
+    if env.user_config_dir is not None:
+        lines.append(f" - Illusion user config directory: {env.user_config_dir}")
+    lines.extend((
         f" - Date: {env.date}",
         f" - Python version: {env.python_version}",
-    ]
+    ))
 
     if env.is_git_repo:
         git_line = " - Git: yes"

@@ -44,7 +44,7 @@ def test_load_memory_prompt_includes_entrypoint(tmp_path: Path, monkeypatch):
 
 
 def test_memory_prompt_full_structure(tmp_path: Path, monkeypatch):
-    """对齐 Claude Code 的提示词结构完整性检查。"""
+    """记忆提示词结构完整性检查。"""
     monkeypatch.setenv("ILLUSION_DATA_DIR", str(tmp_path / "data"))
     project_dir = tmp_path / "repo"
     project_dir.mkdir()

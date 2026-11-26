@@ -17,9 +17,51 @@ os.replace 在 POSIX 和 Windows 上均为原子操作（同文件系统）。
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+
+
+def file_revision(path: Path) -> tuple[int, int, int, int, int] | None:
+    """记录文件版本，供读改写时检查外部编辑和原子替换。"""
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return None
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+
+@contextmanager
+def config_write_lock(path: Path) -> Iterator[None]:
+    """显式写入时锁定同目录的稳定文件，数据文件本身会被原子替换。"""
+    lock_path = path.with_name(f".{path.name}.lock")
+    if lock_path.is_symlink():
+        raise OSError(f"Config lock must be a regular file: {lock_path}")
+    # 保留锁文件，以便等候者与后来者始终锁住同一 inode。
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(lock_path, flags, 0o600)
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 # os.replace 重试参数：Windows 上目标文件可能被其他进程短暂占用
 # （杀毒软件实时扫描、编辑器索引、并发的原子写入竞争），导致 WinError 5。

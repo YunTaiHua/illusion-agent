@@ -15,6 +15,8 @@ IllusionAgent 配置和数据目录路径解析模块
     - get_sessions_dir: 获取会话存储目录
     - get_tasks_dir: 获取后台任务输出目录
     - get_project_config_dir: 获取项目级配置目录
+    - get_mcp_config_file_path: 获取用户级 MCP 配置文件路径
+    - get_project_mcp_config_file_path: 获取项目级 MCP 配置文件路径
     - get_cron_dir: 获取 cron 数据目录
     - get_cron_registry_path: 获取 cron 注册表文件路径
     - get_mcp_log_path: 获取 MCP 服务器日志文件路径
@@ -90,28 +92,34 @@ def resolve_relative_path(base: Path, candidate: str) -> Path:
     return (base / safe_path).resolve()
 
 
+def get_config_dir_override() -> Path | None:
+    """返回用户显式指定的配置根目录。"""
+    value = os.environ.get("ILLUSION_CONFIG_DIR")
+    return Path(value) if value else None
+
+
 def get_config_dir() -> Path:
-    """返回配置目录，必要时创建
+    """返回用户配置根目录。
 
     解析顺序：
-    1. ILLUSION_CONFIG_DIR 环境变量（优先）
-    2. ~/.illusion/（默认）
+    1. ``ILLUSION_CONFIG_DIR`` 环境变量（优先）
+    2. ``~/.illusion/``（默认）
+
+    该函数只计算路径，不创建目录。读取配置或扫描资源时可以安全调用，
+    需要写入配置前由具体写入操作显式创建父目录。
 
     Returns:
-        Path: 配置目录路径
+        Path: 用户配置根目录路径，目录可能尚不存在
     """
-    env_dir = os.environ.get("ILLUSION_CONFIG_DIR")
-    if env_dir:
-        config_dir = Path(env_dir)
-    else:
-        config_dir = Path.home() / _DEFAULT_BASE_DIR
-    config_dir.mkdir(parents=True, exist_ok=True)
-    return config_dir
+    return get_config_dir_override() or Path.home() / _DEFAULT_BASE_DIR
 
 
 def get_config_file_path() -> Path:
-    """返回主设置文件路径（~/.illusion/settings.json）
-    
+    """返回主设置文件路径（用户根下的 ``settings.json``）。
+
+    该 getter 只计算路径，不创建用户配置根。``save_settings`` 在明确写入
+    时负责创建父目录。
+
     Returns:
         Path: 配置文件路径
     """
@@ -230,45 +238,67 @@ def get_cron_registry_path() -> Path:
 
 
 def get_project_config_dir(cwd: str | Path) -> Path:
-    """返回项目级 .illusion 目录
+    """返回项目级 ``.illusion`` 配置目录。
 
-    在当前工作目录下创建 .illusion 子目录，用于存储项目级配置。
+    ``cwd`` 无效（如守护进程启动目录被删除）时回退到用户级配置目录，
+    避免 ``WinError 267`` 阻断运行时构建。该函数只计算路径，不创建
+    ``.illusion`` 或其父目录。调用方在明确写入前必须显式创建目标父目录。
 
-    cwd 无效（如守护进程启动目录被删除）时回退到用户级配置目录，
-    避免 WinError 267 阻断 build_runtime。
-
-    加固：cwd 若非真实路径类型（如测试误传 MagicMock），直接回退到
+    加固：``cwd`` 若非真实路径类型（如测试误传 ``MagicMock``），直接回退到
     用户级配置目录，避免在 cwd 下创建 ``MagicMock/.../.illusion`` 目录。
 
     Args:
         cwd: 当前工作目录
 
     Returns:
-        Path: 项目配置目录路径
+        Path: 项目配置目录路径，目录可能尚不存在
     """
     if not isinstance(cwd, (str, PurePath)):
         return get_config_dir()
     try:
-        project_dir = Path(cwd).resolve() / ".illusion"
-        project_dir.mkdir(parents=True, exist_ok=True)
-        return project_dir
+        return Path(cwd).resolve() / ".illusion"
     except (OSError, FileNotFoundError):
         # cwd 失效，回退到用户级配置目录
         return get_config_dir()
 
 
-def get_project_mcp_dir(cwd: str | Path) -> Path:
-    """返回项目级 MCP 配置目录（.illusion/mcp/）
+def get_mcp_config_file_path() -> Path:
+    """返回用户级 MCP 配置文件路径。
 
-    Args:
-        cwd: 当前工作目录
-
-    Returns:
-        Path: 项目 MCP 配置目录路径
+    位置固定为 ``ILLUSION_CONFIG_DIR/mcp.json``，此 getter 不创建目录。
     """
-    path = get_project_config_dir(cwd) / "mcp"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    return get_config_dir() / "mcp.json"
+
+
+def get_project_mcp_config_file_path(cwd: str | Path) -> Path:
+    """返回项目级 MCP 标准配置文件路径。
+
+    主文件为 ``<cwd>/.illusion/mcp.json``，此 getter 不创建目录。
+    """
+    return get_project_config_dir(cwd) / "mcp.json"
+
+
+def get_project_dot_mcp_config_file_path(cwd: str | Path) -> Path:
+    """返回项目级点文件 MCP 兼容入口（``.illusion/.mcp.json``）。"""
+    return get_project_config_dir(cwd) / ".mcp.json"
+
+
+def get_user_hooks_dir() -> Path:
+    """返回用户级 Hook 资源目录，不创建目录。
+
+    Hook 配置读取时可以安全调用。明确写入 Hook 文件的调用方负责创建
+    ``hooks`` 目录。
+    """
+    return get_config_dir() / "hooks"
+
+
+def get_project_hooks_dir(cwd: str | Path) -> Path:
+    """返回项目级 ``.illusion/hooks`` 目录，不创建目录。
+
+    Hook 配置读取时可以安全调用。明确写入 Hook 文件的调用方负责创建
+    项目配置目录及其 ``hooks`` 子目录。
+    """
+    return get_project_config_dir(cwd) / "hooks"
 
 
 def get_channels_file_path() -> Path:

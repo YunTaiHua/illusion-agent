@@ -63,16 +63,24 @@ async def run_init(context: CommandContext) -> CommandResult:
         path.parent.mkdir(parents=True, exist_ok=True)
         if action == "update":
             _atomic_write(path, content)
-            updated.append(str(path.relative_to(root)))
+            updated.append(_display_path(path, root))
         elif action == "create":
             _atomic_write(path, content)
-            created.append(str(path.relative_to(root)))
+            created.append(_display_path(path, root))
 
     # Phase 5: Report
     if not created and not updated:
         return CommandResult(message="Project already initialized for IllusionAgent.")
 
     return _build_report(created, updated, analysis, data)
+
+
+def _display_path(path: Path, root: Path) -> str:
+    """尽量返回项目相对路径，否则返回绝对路径。"""
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
 
 
 def _run_extraction(root: Path) -> ProjectData:

@@ -1,7 +1,6 @@
 """记忆目录权限 carve-out 边界测试。
 
-验证主对话 LLM 直接写记忆文件时的权限行为（对齐 Claude Code
-isAutoMemPath carve-out）：
+验证主对话 LLM 直接写记忆文件时的权限行为：
     - 记忆目录内 write_file/edit_file 默认模式免确认
     - 记忆目录外写工具仍需确认
     - plan 模式仍拦截记忆写入

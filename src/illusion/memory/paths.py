@@ -45,9 +45,58 @@ def get_project_memory_dir(cwd: str | Path) -> Path:
     Returns:
         Path: 记忆目录的Path对象
     """
+    memory_dir = get_project_memory_dir_no_create(cwd)
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    return memory_dir
+
+
+def get_project_memory_dir_no_create(cwd: str | Path) -> Path:
+    """返回项目默认记忆目录路径，但不创建目录。
+
+    读取/扫描路径必须使用此 getter，避免启动时仅为构建提示词而留下空的
+    用户记忆目录。明确写入记忆时继续使用 :func:`get_project_memory_dir`。
+
+    Args:
+        cwd: 当前工作目录
+
+    Returns:
+        Path: 记忆目录路径，目录可能尚不存在
+    """
     path = Path(cwd).resolve()
     digest = sha1(str(path).encode("utf-8")).hexdigest()[:12]
-    memory_dir = get_memory_dir() / f"{path.name}-{digest}"
+    return get_memory_dir() / f"{path.name}-{digest}"
+
+
+def get_memory_dir_for_cwd_no_create(cwd: str | Path) -> Path:
+    """返回当前项目的记忆目录路径，但不创建目录。
+
+    自定义记忆目录与默认用户级目录都只计算路径。该入口供提示词构建、
+    记忆搜索等只读调用使用。
+    """
+    from illusion.config.settings import load_settings
+
+    settings = load_settings()
+    if settings.memory.directory:
+        custom = resolve_custom_memory_dir(settings.memory.directory)
+        if custom is not None:
+            return custom
+    return get_project_memory_dir_no_create(cwd)
+
+
+def get_memory_dir_for_cwd(cwd: str | Path) -> Path:
+    """获取当前项目使用的记忆目录（自定义优先，默认回退 user 级）
+
+    解析优先级：
+        1. settings.json 的 memory.directory（自定义目录，仅全局配置）
+        2. 默认：~/.illusion/memory/{项目名}-{sha1哈希前12位}/
+
+    Args:
+        cwd: 当前工作目录
+
+    Returns:
+        Path: 记忆目录的Path对象（目录已创建）
+    """
+    memory_dir = get_memory_dir_for_cwd_no_create(cwd)
     memory_dir.mkdir(parents=True, exist_ok=True)
     return memory_dir
 
@@ -74,7 +123,7 @@ def resolve_custom_memory_dir(raw: str) -> Path | None:
     if candidate.startswith(("~/", "~\\")):
         rest = candidate[2:]
         # 规范化后拒绝展开到 $HOME 或其祖先的歧义路径
-        # （对齐 Claude Code validateMemoryPath：~/foo/.. → "." → 拒绝）
+        # （规范化后 ~/foo/.. → "." → 拒绝）
         if os.path.normpath(rest) in ("", ".", ".."):
             return None
         candidate = str(Path.home() / rest)
@@ -99,30 +148,6 @@ def resolve_custom_memory_dir(raw: str) -> Path | None:
     if path == home or path in home.parents:
         return None
     return path
-
-
-def get_memory_dir_for_cwd(cwd: str | Path) -> Path:
-    """获取当前项目使用的记忆目录（自定义优先，默认回退 user 级）
-
-    解析优先级：
-        1. settings.json 的 memory.directory（自定义目录，仅全局配置）
-        2. 默认：~/.illusion/memory/{项目名}-{sha1哈希前12位}/
-
-    Args:
-        cwd: 当前工作目录
-
-    Returns:
-        Path: 记忆目录的Path对象（目录已创建）
-    """
-    from illusion.config.settings import load_settings
-
-    settings = load_settings()
-    if settings.memory.directory:
-        custom = resolve_custom_memory_dir(settings.memory.directory)
-        if custom is not None:
-            custom.mkdir(parents=True, exist_ok=True)
-            return custom
-    return get_project_memory_dir(cwd)
 
 
 def get_memory_entrypoint(cwd: str | Path) -> Path:

@@ -29,6 +29,7 @@ if TYPE_CHECKING:  # pragma: no cover
         get_project_plugins_dir,
         get_user_plugins_dir,
         load_plugins,
+        set_plugin_enabled,
     )
     from illusion.plugins.schemas import PluginManifest
     from illusion.plugins.types import LoadedPlugin
@@ -41,17 +42,19 @@ __all__ = [
     "get_user_plugins_dir",
     "install_plugin_from_path",
     "load_plugins",
+    "set_plugin_enabled",
     "uninstall_plugin",
 ]
 
 
 def __getattr__(name: str) -> object:
-    if name in {"discover_plugin_paths", "get_project_plugins_dir", "get_user_plugins_dir", "load_plugins"}:
+    if name in {"discover_plugin_paths", "get_project_plugins_dir", "get_user_plugins_dir", "load_plugins", "set_plugin_enabled"}:
         from illusion.plugins.loader import (
             discover_plugin_paths,
             get_project_plugins_dir,
             get_user_plugins_dir,
             load_plugins,
+            set_plugin_enabled,
         )
 
         return {
@@ -59,6 +62,7 @@ def __getattr__(name: str) -> object:
             "get_project_plugins_dir": get_project_plugins_dir,
             "get_user_plugins_dir": get_user_plugins_dir,
             "load_plugins": load_plugins,
+            "set_plugin_enabled": set_plugin_enabled,
         }[name]
     if name in {"install_plugin_from_path", "uninstall_plugin"}:
         from illusion.plugins.installer import install_plugin_from_path, uninstall_plugin

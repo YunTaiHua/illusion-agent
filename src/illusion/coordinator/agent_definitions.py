@@ -754,10 +754,10 @@ def load_agents_dir(directory: Path) -> list[AgentDefinition]:
 
 
 def _get_user_agents_dir() -> Path:
-    """获取用户代理定义目录
-    
-    Returns:
-        Path: 用户代理目录路径 (~/.illusion/agents/)
+    """获取用户代理定义目录，不创建目录。
+
+    目录位于 ``ILLUSION_CONFIG_DIR/agents``。代理发现时目录可以不存在，
+    明确写入代理定义的调用方负责显式创建它。
     """
     return get_config_dir() / "agents"
 
@@ -810,8 +810,8 @@ def get_all_agent_definitions(cwd: str | None = None) -> list[AgentDefinition]:
         from illusion.plugins.loader import load_plugins
 
         settings = load_settings()  # 加载设置
-        cwd = os.getcwd()  # 当前目录
-        for plugin in load_plugins(settings, cwd):  # 加载插件
+        plugin_cwd = cwd or os.getcwd()
+        for plugin in load_plugins(settings, plugin_cwd):  # 加载插件
             if not plugin.enabled:  # 未启用
                 continue
             for agent_def in getattr(plugin, "agents", []):  # 遍历代理定义
@@ -823,17 +823,13 @@ def get_all_agent_definitions(cwd: str | None = None) -> list[AgentDefinition]:
     return list(agent_map.values())
 
 
-def get_agent_definition(name: str) -> AgentDefinition | None:
-    """获取指定名称的代理定义
-    
-    Args:
-        name: 代理名称
-    
-    Returns:
-        AgentDefinition | None: 代理定义，若不存在返回None
+def get_agent_definition(name: str, cwd: str | None = None) -> AgentDefinition | None:
+    """获取指定名称的代理定义。
+
+    ``cwd`` 会同时决定项目级代理和项目插件代理的发现根。
     """
-    for agent in get_all_agent_definitions():  # 遍历所有代理
-        if agent.name == name:  # 匹配
+    for agent in get_all_agent_definitions(cwd=cwd):
+        if agent.name == name:
             return agent
     return None
 

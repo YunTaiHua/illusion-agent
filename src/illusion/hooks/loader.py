@@ -8,16 +8,22 @@
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from illusion.config.paths import get_project_hooks_dir, get_user_hooks_dir
 from illusion.hooks.events import HookEvent
 from illusion.hooks.schemas import (
     HookDefinition,
     HookMatcherDefinition,
     parse_hook_definition,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class HookRegistry:
@@ -62,36 +68,101 @@ class HookRegistry:
 
 
 def _normalize_hooks_value(value: Any) -> list[HookMatcherDefinition]:
-    """将 hooks 值规范化为 HookMatcherDefinition 列表。
-
-    格式：list[{ matcher?: string, hooks: HookCommand[] }]
-    """
+    """将事件对应的值规范化为 HookMatcherDefinition 列表。"""
     if not isinstance(value, list):
         return []
     result: list[HookMatcherDefinition] = []
     for item in value:
-        if not isinstance(item, dict) or "hooks" not in item:
+        if not isinstance(item, dict) or item.get("enabled", True) is False:
+            continue
+        if "hooks" not in item or not isinstance(item.get("hooks"), list):
+            continue
+        matcher = item.get("matcher", "")
+        if matcher is None:
+            matcher = ""
+        if not isinstance(matcher, str):
             continue
         hooks: list[HookDefinition] = []
-        for h in item.get("hooks", []):
-            if isinstance(h, dict):
-                try:
-                    hooks.append(parse_hook_definition(h))
-                except ValueError:
-                    continue
-        result.append(HookMatcherDefinition(
-            matcher=item.get("matcher", ""),
-            hooks=hooks,
-        ))
+        for raw_hook in item["hooks"]:
+            if not isinstance(raw_hook, dict) or raw_hook.get("enabled", True) is False:
+                continue
+            try:
+                hooks.append(parse_hook_definition(raw_hook))
+            except (TypeError, ValueError):
+                continue
+        if hooks:
+            result.append(HookMatcherDefinition(matcher=matcher, hooks=hooks))
     return result
 
 
-def load_hook_registry(settings: Any, plugins: Any = None, cwd: str | Path | None = None) -> HookRegistry:
-    """从设置对象加载钩子注册表。
+def _normalize_hook_config(value: Any) -> dict[str, list[HookMatcherDefinition]]:
+    """解析事件映射或带 hooks 根节点的本地声明。"""
+    if not isinstance(value, dict) or value.get("enabled", True) is False:
+        return {}
+    events = value.get("hooks", value)
+    if not isinstance(events, dict):
+        return {}
+    result: dict[str, list[HookMatcherDefinition]] = {}
+    for raw_event, hooks_value in events.items():
+        if not isinstance(raw_event, str):
+            continue
+        matchers = _normalize_hooks_value(hooks_value)
+        if matchers:
+            result[raw_event] = matchers
+    return result
 
-    事件名必须是 PascalCase（如 PreToolUse）。
-    格式必须是 matcher 结构：[{ "matcher": "...", "hooks": [...] }]
+
+def _local_hook_config_paths(root: Path) -> list[Path]:
+    """返回一个配置根目录下的本地 Hook JSON 候选路径。
+
+    只计算候选路径并读取现有文件，不创建 ``hooks`` 或配置根目录。
     """
+    hooks_dir = root / "hooks"
+    paths = [root / "hooks.json", hooks_dir / "hooks.json"]
+    try:
+        paths.extend(sorted(path for path in hooks_dir.glob("*.json") if path.name != "hooks.json"))
+    except OSError as exc:
+        logger.warning("Failed to scan Hook config directory %s: %s", hooks_dir, exc)
+    return paths
+
+
+def _load_local_hook_configs(cwd: str | Path | None) -> list[dict[str, list[HookMatcherDefinition]]]:
+    """从用户配置根和目标项目根读取本地 Hook 声明，不创建目录。"""
+    roots = [get_user_hooks_dir().parent]
+    if cwd is not None:
+        roots.append(get_project_hooks_dir(cwd).parent)
+
+    configs: list[dict[str, list[HookMatcherDefinition]]] = []
+    seen_paths: set[str] = set()
+    for root in roots:
+        for path in _local_hook_config_paths(root):
+            try:
+                key = os.path.normcase(str(path.resolve()))
+            except OSError:
+                key = os.path.normcase(str(path.absolute()))
+            if key in seen_paths:
+                continue
+            try:
+                is_file = path.is_file()
+            except OSError as exc:
+                logger.warning("Failed to inspect Hook config %s: %s", path, exc)
+                continue
+            if not is_file:
+                continue
+            seen_paths.add(key)
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError) as exc:
+                logger.warning("Failed to load Hook config %s: %s", path, exc)
+                continue
+            parsed = _normalize_hook_config(raw)
+            if parsed:
+                configs.append(parsed)
+    return configs
+
+
+def load_hook_registry(settings: Any, plugins: Any = None, cwd: str | Path | None = None) -> HookRegistry:
+    """从设置、本地 JSON 声明和已启用插件加载钩子注册表。"""
     registry = HookRegistry()
 
     # 加载项目级权限配置
@@ -102,23 +173,33 @@ def load_hook_registry(settings: Any, plugins: Any = None, cwd: str | Path | Non
     if project_permissions and "*" in project_permissions.denied_hooks:
         return registry
 
-    for raw_event, hooks_value in settings.hooks.items():
+    settings_hooks = _normalize_hook_config(getattr(settings, "hooks", {}))
+    for raw_event, matchers in settings_hooks.items():
         try:
             event = HookEvent(str(raw_event))
         except ValueError:
             continue
-
-        # 检查是否禁用特定事件的 hooks
         if project_permissions and event.value in project_permissions.denied_hooks:
             continue
-
-        for matcher_def in _normalize_hooks_value(hooks_value):
+        for matcher_def in matchers:
             registry.register(event, matcher_def)
 
+    for local_config in _load_local_hook_configs(cwd):
+        for raw_event, matchers in local_config.items():
+            try:
+                event = HookEvent(str(raw_event))
+            except ValueError:
+                continue
+            if project_permissions and event.value in project_permissions.denied_hooks:
+                continue
+            for matcher_def in matchers:
+                registry.register(event, matcher_def)
+
     for plugin in plugins or []:
-        if not plugin.enabled:
+        if not getattr(plugin, "enabled", True):
             continue
-        for raw_event, hooks_value in plugin.hooks.items():
+        plugin_hooks = _normalize_hook_config(getattr(plugin, "hooks", {}))
+        for raw_event, matchers in plugin_hooks.items():
             try:
                 event = HookEvent(str(raw_event))
             except ValueError:
@@ -128,7 +209,7 @@ def load_hook_registry(settings: Any, plugins: Any = None, cwd: str | Path | Non
             if project_permissions and event.value in project_permissions.denied_hooks:
                 continue
 
-            for matcher_def in _normalize_hooks_value(hooks_value):
+            for matcher_def in matchers:
                 registry.register(event, matcher_def)
 
     return registry

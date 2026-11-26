@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from illusion.memory.paths import get_memory_dir_for_cwd
+from illusion.memory.paths import get_memory_dir_for_cwd_no_create
 from illusion.memory.types import MemoryHeader
 
 
@@ -41,7 +41,7 @@ def scan_memory_files(cwd: str | Path, *, max_files: int = 50) -> list[MemoryHea
     """
     from illusion.memory.paths import MEMORY_TYPE_DIRS
 
-    memory_dir = get_memory_dir_for_cwd(cwd)  # 获取记忆目录
+    memory_dir = get_memory_dir_for_cwd_no_create(cwd)  # 获取记忆目录
     headers: list[MemoryHeader] = []  # 初始化头列表
     for path in memory_dir.glob("*.md"):  # 遍历根目录所有md文件
         if path.name == "MEMORY.md":  # 跳过索引文件
