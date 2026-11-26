@@ -20,6 +20,7 @@ import illusion.api.error_log as error_log_module
 from illusion.api.client import (
     ApiMessageCompleteEvent,
     ApiMessageRequest,
+    ApiToolCallStartedEvent,
     repair_thinking_passback,
 )
 from illusion.api.compat import (
@@ -572,6 +573,85 @@ def _make_openai_client(monkeypatch, behaviors):
     monkeypatch.setattr(OpenAICompatibleClient, "__init__", _fake_init)
     client = OpenAICompatibleClient(api_key="sk-test")
     return client, fake
+
+
+def _tool_chunk(index, *, call_id=None, name=None, arguments=None):
+    function = _NS(name=name, arguments=arguments) if name or arguments else None
+    call = _NS(index=index, id=call_id, function=function)
+    delta = _NS(content=None, tool_calls=[call])
+    return _NS(choices=[_NS(delta=delta, finish_reason=None)], usage=None)
+
+
+@pytest.mark.asyncio
+async def test_chat_tool_start_waits_for_both_name_and_id(monkeypatch):
+    chunks = [
+        _tool_chunk(0, name="read_file"),
+        _tool_chunk(1, call_id="Call-B"),
+        _tool_chunk(2, call_id="Call-C", name="read_file"),
+        _tool_chunk(0, call_id="Call-A"),  # 后到的 ID 可以单独成块
+        _tool_chunk(1, name="read_file"),
+        _tool_chunk(0, call_id="Call-A", name="read_file", arguments="{}"),
+    ]
+    client, _ = _make_openai_client(monkeypatch, [chunks])
+    request = ApiMessageRequest(model="test-model", messages=[ConversationMessage.from_user_text("read")])
+    events = [event async for event in client.stream_message(request)]
+
+    *starts, complete = events
+    assert all(isinstance(e, ApiToolCallStartedEvent) for e in starts)
+    assert [(e.tool_name, e.tool_use_id) for e in starts] == [
+        ("read_file", "Call-C"), ("read_file", "Call-A"), ("read_file", "Call-B"),
+    ]
+    assert isinstance(complete, ApiMessageCompleteEvent)
+    assert [call.id for call in complete.message.tool_uses] == ["Call-A", "Call-B", "Call-C"]
+
+
+@pytest.mark.asyncio
+async def test_chat_idless_parallel_tools_keep_ids_through_results(monkeypatch, tmp_path):
+    import asyncio
+
+    from illusion.tools.base import ToolRegistry, ToolResult
+    from illusion.tools.file_read_tool import FileReadTool
+    from illusion.config.settings import PermissionSettings
+    from illusion.engine.query import QueryContext, run_query
+    from illusion.engine.stream_events import ToolExecutionCompleted, ToolExecutionStarted
+    from illusion.permissions import PermissionChecker
+
+    chunks = [
+        _tool_chunk(0, name="read_file", arguments='{"file_path":"slow"}'),
+        _tool_chunk(1, call_id="", name="read_file", arguments='{"file_path":"fast"}'),
+    ]
+    client, sdk = _make_openai_client(monkeypatch, [chunks, _ok_chunks()])
+    release_slow = asyncio.Event()
+
+    async def read(args, context):
+        if args.file_path == "slow":
+            await asyncio.wait_for(release_slow.wait(), timeout=3)
+        return ToolResult(output=args.file_path)
+
+    tool = FileReadTool()
+    monkeypatch.setattr(tool, "execute", read)
+    registry = ToolRegistry()
+    registry.register(tool)
+    context = QueryContext(api_client=client, tool_registry=registry,
+                           permission_checker=PermissionChecker(PermissionSettings()),
+                           cwd=tmp_path, model="test-model", system_prompt="", max_tokens=64)
+    messages = [ConversationMessage.from_user_text("read")]
+    starts, results = [], []
+    async for event, _ in run_query(context, messages):
+        if isinstance(event, ToolExecutionStarted):
+            starts.append(event.tool_use_id)
+        elif isinstance(event, ToolExecutionCompleted):
+            results.append((event.tool_use_id, event.output))
+            release_slow.set()
+
+    slow, fast = messages[1].tool_uses
+    assert slow.id and fast.id and slow.id != fast.id
+    assert starts == [slow.id, fast.id]
+    assert results == [(fast.id, "fast"), (slow.id, "slow")]
+    sent = sdk.captured_params[1]["messages"]
+    assert [(m["tool_call_id"], m["content"]) for m in sent if m["role"] == "tool"] == [
+        (slow.id, "slow"), (fast.id, "fast"),
+    ]
 
 
 @pytest.mark.asyncio

@@ -545,7 +545,7 @@ def _convert_assistant_message(
     "思考了但为空"，同样必须存在（官方 kimi-cli 语义），缺失字段才被拒绝。
 
     工具轮空文本的 ``content`` 线格式因供应商而异（官方实现互不相同）：
-    DeepSeek 官方示例回放 ``""``（deepseek-harness：null 会被部分网关拒绝）；
+    DeepSeek 官方示例回放 ``""``（部分网关会拒绝 null）；
     Kimi 官方 kimi-cli 省略整个 content 键（"always accepted"，Kimi-for-Coding
     兼容层拒绝空文本 part）；其余保持既有行为（null）。
 
@@ -1016,13 +1016,14 @@ class OpenAICompatibleClient:
                     idx = tc_delta.index
                     if idx not in collected_tool_calls:
                         collected_tool_calls[idx] = {
-                            "id": tc_delta.id or "",
+                            "id": "",
                             "name": "",
                             "arguments": "",
                             "extra_content": None,
+                            "started": False,
                         }
                     entry = collected_tool_calls[idx]
-                    if tc_delta.id:
+                    if tc_delta.id and not entry["id"]:
                         entry["id"] = tc_delta.id
                     # 捕获 Gemini thought_signature（通过 extra_content 字段返回）
                     extra = _extract_extra_content(tc_delta)
@@ -1030,15 +1031,15 @@ class OpenAICompatibleClient:
                         entry["extra_content"] = extra
                     if tc_delta.function:
                         if tc_delta.function.name:
-                            # 工具调用开始：模型刚开始生成工具调用时立即通知
-                            if not entry["name"]:
-                                yield ApiToolCallStartedEvent(
-                                    tool_name=tc_delta.function.name,
-                                    tool_use_id=tc_delta.id or "",
-                                )
                             entry["name"] = tc_delta.function.name
                         if tc_delta.function.arguments:
                             entry["arguments"] += tc_delta.function.arguments
+                    # 名称和 ID 可能分别到达，同一 index 两者齐全才预告一次。
+                    if entry["name"] and entry["id"] and not entry["started"]:
+                        entry["started"] = True
+                        yield ApiToolCallStartedEvent(
+                            tool_name=entry["name"], tool_use_id=entry["id"],
+                        )
 
             # chunk 中的使用量（如果 provider 发送；兼容 Moonshot 的
             # choices[0] 非标准位置）
@@ -1071,10 +1072,11 @@ class OpenAICompatibleClient:
             if tc.get("extra_content") is not None:
                 provider_data["extra_content"] = tc["extra_content"]
             content.append(ToolUseBlock(
-                id=tc["id"],
                 name=tc["name"],
                 input=args,
                 provider_data=provider_data,
+                # 未提供 ID 时由 ToolUseBlock 分配，执行和结果均沿用该 ID。
+                **({"id": tc["id"]} if tc["id"] else {}),
             ))
 
         merged_reasoning = merge_reasoning_text(collected_reasoning, tagged_reasoning)
