@@ -68,8 +68,10 @@ from illusion.services.agent_creator import (
     write_agent_definition,
 )
 from illusion.services.session_reference import is_session_reference_snapshot
+from illusion.skills.types import SlashReferences
 from illusion.tasks import get_task_manager
 from illusion.tasks.types import is_task_notification
+from illusion.ui.command_catalog import web_builtin_names
 from illusion.ui.protocol import (
     BackendEvent,
     FrontendRequest,
@@ -80,7 +82,6 @@ from illusion.ui.protocol import (
 from illusion.ui.runtime import (
     RuntimeBundle,
     _on_task_complete,
-    _wrap_in_system_reminder,
     build_runtime,
     build_session_bundle,
     build_session_engine,
@@ -92,11 +93,22 @@ from illusion.ui.runtime import (
 )
 from illusion.ui.web.security import assert_trusted_authority
 from illusion.ui.web.session_runtime import MAX_MATERIALIZED_SESSIONS, SessionRuntime
-from illusion.ui.web.ws_web_api import build_replay_items, paginate_replay_page
+from illusion.ui.web.ws_web_api import (
+    build_replay_items,
+    is_plugin_toggle_command,
+    paginate_replay_page,
+)
 from illusion.utils.aioqueue import Queue, QueueShutDown
 
 # 配置模块级日志记录器
 log = logging.getLogger(__name__)
+
+
+# buildPromptWithWebElementContexts 追加的固定前缀，到首个网页可控字段为止。
+# 单独提及同名 Markdown 标题仍是用户正文。重生成时使用同一持久化格式。
+_WEB_ELEMENTS_TAIL = re.compile(
+    r"(?:\A|(?:\r?\n){2})# Web page elements:\r?\n\r?\n## Element 1\r?\nURL: "
+)
 
 
 def _now_local() -> datetime:
@@ -395,6 +407,10 @@ class WebBackendHost:
 
         self._web_api = WebApiDispatcher(self)
 
+    def _slash_command_names(self) -> list[str]:
+        """返回 Web 原生命令与当前注册表的交集。"""
+        return web_builtin_names(self._bundle)
+
     async def run(self) -> int:
         """运行后端主机主循环。"""
         # 注册到活跃主机表：REST 设置路由据此把 settings 变更热应用到本主机
@@ -486,7 +502,7 @@ class WebBackendHost:
             BackendEvent.ready(
                 self._bundle.app_state.get(),
                 get_task_manager().list_tasks(),
-                [f"/{command.name}" for command in self._bundle.commands.list_commands()],
+                self._slash_command_names(),
                 first_login=_first_login,
             )
         )
@@ -712,6 +728,11 @@ class WebBackendHost:
                 BackendEvent(type="error", message=f"Unknown request type: {request.type}")
             )
             return True
+        # 插件面板是 Web 启停写入口。旧式命令须在会话回退前处理。
+        line = (request.line or "").strip()
+        if not request.treat_as_text and is_plugin_toggle_command(line):
+            await self._web_api.reject_legacy_plugin_toggle(request)
+            return True
         # 提交行（按会话隔离，fire-and-forget，不阻塞主循环）
         session = self._resolve_session(request.session_id)
         if session is None:
@@ -722,19 +743,14 @@ class WebBackendHost:
                 session_id=session.session_id,
             )
             return True
-        line = (request.line or "").strip()
         if not line:
             return True
         session.busy = True
-        if request.treat_as_text:
-            # treat_as_text=True 时跳过命令注册表，直接当 user 消息提交给 LLM
-            # （前端非指定命令如 /resume、/model 走此路径，不被当作命令执行）
-            self._spawn_session_line(session, self._submit_line_as_text(session, line))
-        else:
-            # 命令行可携带 request_id（如 /agent <id> 查摘要）：绑定到会话，
-            # 命令结果事件据此回传，前端精确匹配到预览面板而非即逝 toast
-            session.current_request_id = request.request_id or None
-            self._spawn_session_line(session, self._process_line(session, line))
+        # 文本通道仅跳过内置命令分派；资源、引用、转录与队列提交使用相同入口。
+        session.current_request_id = request.request_id or None
+        self._spawn_session_line(
+            session, self._process_line(session, line, treat_as_text=bool(request.treat_as_text)),
+        )
         return True
 
     async def _read_requests(self) -> None:
@@ -762,7 +778,17 @@ class WebBackendHost:
                 log.info("_read_requests: 解析请求 type=%s", request.type)
             except ValidationError as exc:  # 防御性协议处理
                 log.warning("_read_requests: 请求解析失败: %s, payload=%s", exc, payload[:200])
-                await self._emit(BackendEvent(type="error", message=f"Invalid request: {exc}"))
+                try:
+                    raw = json.loads(payload)
+                except ValueError:
+                    raw = None
+                if isinstance(raw, dict) and raw.get("type") == "web_plugin_toggle":
+                    cwd = raw.get("cwd")
+                    await self._web_api.emit_plugin_toggle_error(
+                        f"Invalid plugin toggle request: {exc}", cwd if isinstance(cwd, str) else None,
+                    )
+                else:
+                    await self._emit(BackendEvent(type="error", message=f"Invalid request: {exc}"))
                 continue
 
             # 立即解析模态对话框交互以避免死锁
@@ -788,7 +814,7 @@ class WebBackendHost:
     async def _make_render_event(self, session: SessionRuntime) -> Callable[[StreamEvent], Awaitable[None]]:
         """创建会话级流式事件渲染器。
 
-        返回一个 _render_event 闭包，供 _process_line / _submit_line_as_text /
+        返回一个 _render_event 闭包，供 _process_line /
         _process_bg_completions 共用，消除重复代码并确保 TodoWrite/
         plan_mode_change 等事件处理一致。所有事件携带会话 ID，供前端
         按会话路由。
@@ -1099,7 +1125,7 @@ class WebBackendHost:
             session.busy = False
 
     async def _process_bg_completions(self, session: SessionRuntime) -> None:
-        # 后台完成处理属对话流：同 _submit_line_as_text，清命令标志
+        # 后台完成处理属对话流，清除上一行的命令标志
         # （置于函数体首行；本函数无 docstring，直接以注释说明）
         session.current_line_is_command = False
         """处理积压的后台完成通知（自动进入 busy），不新增用户输入。
@@ -1154,8 +1180,7 @@ class WebBackendHost:
         line_complete 提前后 busy 在回合结束瞬间释放，其余收尾事件
         （列表刷新/状态快照）随后发送，顺序无副作用。
         """
-        # 绑定自动标题完成回调：_process_line 与 _submit_line_as_text 都经由
-        # 本方法收尾，故在此统一绑定；后台标题任务约数秒后才完成，远晚于
+        # 绑定自动标题完成回调。后台标题任务约数秒后才完成，远晚于
         # 本方法执行，保证标题一生成即刷新侧边栏，不必等下一轮。
         if getattr(session.engine, "_title_on_generated", None) is None:
             async def _on_title_generated(_title: str) -> None:
@@ -1204,14 +1229,16 @@ class WebBackendHost:
         *,
         transcript_line: str | None = None,
         collect_output: list[str] | None = None,
+        treat_as_text: bool = False,
     ) -> bool:
         """处理用户输入的行内容（会话隔离）。
 
         Args:
             session: 目标会话运行时
             line: 用户输入的行
-            transcript_line: 非 None 时发送该文本为用户消息转录（静默场景传 None）
+            transcript_line: 指定转录显示文本；默认显示用户原文，普通内置指令静默
             collect_output: 非 None 时收集最终助手文本（cron 委托执行回传用）
+            treat_as_text: 用户文本通道，跳过内置指令分派
 
         Returns:
             bool: 是否继续会话（始终 True，web 端退出由 shutdown 请求控制）
@@ -1221,10 +1248,8 @@ class WebBackendHost:
         session.emitted_tool_started_ids.clear()
         # 更新会话阶段为思考中
         await self._update_phase(session, "thinking")
-        # 发送用户消息（transcript_line 为 None 时不发送转录，用于左侧栏操作等静默场景；
-        # /goal 创建命令走 submit_line 时 transcript_line 为 None，但命令原文需
-        # 作为真实 user 消息渲染，故例外地发送转录）
-        parsed_cmd = session.bundle.commands.lookup(line)
+        # 文本通道（含重新生成）不执行内置命令；已注册动态资源也属于真实用户消息。
+        parsed_cmd = None if treat_as_text else session.bundle.commands.lookup(line)
         # 标记本行是否斜杠命令：行内 ErrorEvent 据此改走 toast 通道。
         # goal 驱动行（创建/resume，drive_goal=True）除外——其行内错误属于
         # 对话流故障，必须持久化到转录，而非 5 秒即逝的 toast
@@ -1237,7 +1262,7 @@ class WebBackendHost:
             from illusion.commands.goal import is_goal_create_args
 
             is_goal_create = is_goal_create_args(parsed_cmd[1])
-        if transcript_line is not None or is_goal_create:
+        async def _emit_user(references: SlashReferences) -> None:
             # 命令产物标记：按命令注册表判定而非文本前缀——用户消息也可能以
             # / 开头，前缀判断会误吞真实消息。cron 委托场景 line 为任务 prompt
             # （非命令），因此 is_command=False。/goal 创建命令原文作为真实
@@ -1249,6 +1274,7 @@ class WebBackendHost:
                         role="user",
                         text=transcript_line or line,
                         is_command=parsed_cmd is not None and not is_goal_create,
+                        slash_references=references,
                     ),
                 ),
                 session_id=session.session_id,
@@ -1256,6 +1282,9 @@ class WebBackendHost:
             # 提交即刷新列表：新会话立即出现在侧栏（label 带摘要），
             # 不必等行任务结束才推送
             self._refresh_session_after_submit(session, line)
+
+        if parsed_cmd is not None and (transcript_line is not None or is_goal_create):
+            await _emit_user({})
 
         async def _print_system(message: str) -> None:
             """打印系统消息。"""
@@ -1324,9 +1353,12 @@ class WebBackendHost:
                 session_id=session.session_id,
             )
 
+        attachment = _WEB_ELEMENTS_TAIL.search(line)
         await handle_line(
             session.bundle,
             line,
+            slash_input_end=attachment.start() if attachment else None,
+            user_submission_emitter=_emit_user,
             print_system=_print_system,
             render_event=_render_event,
             clear_output=_clear_output,
@@ -1334,6 +1366,7 @@ class WebBackendHost:
             command_result_emitter=_command_result_emitter,
             replace_transcript_items=_replace_transcript_items,
             rewind_restored_emitter=_rewind_restored,
+            treat_as_text=treat_as_text,
         )
 
         await self._finish_session_line(session)
@@ -1511,77 +1544,6 @@ class WebBackendHost:
         result["started_at"] = started_at.isoformat()
         result["ended_at"] = _now_local().isoformat()
         await report_delegated_result(job_id, result)
-
-    async def _submit_line_as_text(self, session: SessionRuntime, line: str) -> bool:
-        """直接将用户输入当文本提交给 LLM，跳过命令注册表。
-
-        用于前端 treat_as_text=True 的 submit_line 请求（非指定命令如
-        /resume、/model 等），确保输入不被 commands.lookup 匹配为命令执行，
-        而是作为普通 user 消息发给 LLM。
-
-        普通对话行：清命令标志——粘滞的 True 会把真实对话错误误导进
-        toast，丢失转录中的持久错误记录。
-
-        Args:
-            session: 目标会话运行时
-            line: 用户输入的文本
-
-        Returns:
-            bool: 是否继续会话（始终返回 True）
-        """
-        session.current_line_is_command = False
-        assert session.bundle is not None
-        session.emitted_tool_started_ids.clear()
-        await self._update_phase(session, "thinking")
-        # 发送 user 消息到转录
-        await self._emit(
-            BackendEvent(type="transcript_item", item=TranscriptItem(role="user", text=line)),
-            session_id=session.session_id,
-        )
-        # 提交即刷新列表：新会话立即出现在侧栏（label 带摘要），
-        # 不必等行任务结束才推送
-        self._refresh_session_after_submit(session, line)
-
-        # 复用会话级的事件渲染器（含 TodoWrite/plan_mode_change 处理）
-        _render_event = await self._make_render_event(session)
-
-        # 直接调用 engine.submit_message，跳过 handle_line 的命令注册表
-        from illusion.engine.query import MaxTurnsExceeded
-
-        bundle = session.bundle
-        settings = bundle.current_settings()
-        bundle.engine.set_max_turns(settings.max_turns)
-        from illusion.prompts import build_runtime_system_prompt
-
-        system_prompt = build_runtime_system_prompt(
-            settings,
-            cwd=bundle.cwd,
-            latest_user_prompt=line,
-            channel_hint=bundle.channel_hint,
-        )
-        for ctx in bundle.hook_additional_contexts:
-            if ctx:
-                system_prompt = system_prompt + "\n\n" + _wrap_in_system_reminder(ctx)
-        bundle.engine.set_system_prompt(system_prompt)
-        try:
-            async for event in bundle.engine.submit_message(line):
-                await _render_event(event)
-        except MaxTurnsExceeded as exc:
-            await self._emit(
-                BackendEvent(
-                    type="transcript_item",
-                    item=TranscriptItem(
-                        role="system", text=f"Stopped after {exc.max_turns} turns (max_turns)."
-                    ),
-                ),
-                session_id=session.session_id,
-            )
-        # 更新会话 meta（替代旧 save_session_snapshot）
-        from illusion.ui.runtime import _update_session_meta
-        _update_session_meta(bundle)
-        sync_app_state(bundle)
-        await self._finish_session_line(session)
-        return True
 
     async def _handle_rewind_message_selected(self, session: SessionRuntime, value: str) -> bool:
         """rewind 第一步：用户选择了要回退的消息，弹出模式选择。"""

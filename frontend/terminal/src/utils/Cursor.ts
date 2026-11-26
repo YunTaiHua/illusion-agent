@@ -248,50 +248,21 @@ export class Cursor {
 	 * @param maxVisibleLines - 最大可见行数
 	 * @returns 渲染后的字符串（含 ANSI 颜色码，行间用 \n 连接）
 	 */
-	render(cursorChar: string, startLine: number = 0, maxVisibleLines?: number): string {
-		const {line: cursorLine, column: cursorColumn} = this.getPosition();
-		const allLines = this.measuredText.getWrappedText();
+	render(cursorChar: string, startLine = 0, maxVisibleLines?: number, paint?: (part: string, offset: number) => string): string {
+		const {line: cursorLine} = this.getPosition();
+		const lines = this.measuredText.getWrappedLines();
+		const endLine = maxVisibleLines && maxVisibleLines > 0 ? startLine + maxVisibleLines : lines.length;
+		return lines.slice(startLine, endLine).map((line, i) => {
+			const text = line.precededByNewline ? line.text : line.text.trimStart();
+			const start = line.startOffset + line.text.length - text.length;
+			const style = (part: string, relative = 0) => paint ? paint(part, start + relative) : part;
+			if (cursorLine !== startLine + i) return style(text.trimEnd()) || ' ';
 
-		const endLine = maxVisibleLines !== undefined && maxVisibleLines > 0
-			? Math.min(allLines.length, startLine + maxVisibleLines)
-			: allLines.length;
-
-		return allLines
-			.slice(startLine, endLine)
-			.map((text, i) => {
-				const currentLine = i + startLine;
-				// 非光标行直接返回
-				if (cursorLine !== currentLine) return text.trimEnd() || ' ';
-
-				// 光标行：在 cursorColumn 位置插入反色光标
-				let beforeCursor = '';
-				let atCursor = cursorChar;
-				let afterCursor = '';
-
-				// 逐字符累加显示宽度，找到光标位置
-				let currentWidth = 0;
-				let cursorFound = false;
-				for (let j = 0; j < text.length; j++) {
-					const char = text[j]!;
-					const charWidth = stringWidth(char);
-					if (cursorFound) {
-						afterCursor += char;
-					} else if (currentWidth + charWidth > cursorColumn) {
-						atCursor = char;
-						cursorFound = true;
-					} else {
-						currentWidth += charWidth;
-						beforeCursor += char;
-					}
-				}
-
-				// 光标在行尾时，atCursor 保持为 cursorChar（反色空格）
-				if (!cursorFound) {
-					atCursor = cursorChar;
-				}
-
-				return beforeCursor + chalk.inverse(atCursor) + afterCursor.trimEnd();
-			})
-			.join('\n');
+			const at = Math.max(0, Math.min(this.offset - start, text.length));
+			const point = text.codePointAt(at);
+			const char = point === undefined ? '' : String.fromCodePoint(point);
+			return style(text.slice(0, at)) + chalk.inverse(char ? style(char, at) : cursorChar)
+				+ style(text.slice(at + char.length).trimEnd(), at + char.length);
+		}).join('\n');
 	}
 }

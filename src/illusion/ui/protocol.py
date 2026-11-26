@@ -145,6 +145,8 @@ class FrontendRequest(BaseModel):
     delete_all: bool | None = None
     setting_key: str | None = None
     setting_value: Any = None
+    # web_plugin_toggle：资源快照中的安装作用域，供后端识别已失效的列表项
+    plugin_scope: Literal["user", "project"] | None = None
     limit: int | None = None
     offset: int | None = None
     args: str | None = None
@@ -211,6 +213,8 @@ class TranscriptItem(BaseModel):
 
     role: Literal["system", "user", "assistant", "tool", "tool_result", "log", "plan"]
     text: str
+    # 提交时解析成功的 /引用及其类型，恢复时使用当时的资源身份。
+    slash_references: dict[str, Literal["skill", "command"]] | None = None
     tool_name: str | None = None
     tool_input: dict[str, Any] | None = None
     is_error: bool | None = None
@@ -326,6 +330,7 @@ class BackendEvent(BaseModel):
         "web_sessions",
         "web_resources",
         "web_setting_changed",
+        "web_plugin_toggle_error",
         "web_models",
         "web_file_tree",
         "web_git_status",
@@ -366,6 +371,7 @@ class BackendEvent(BaseModel):
     tasks: list[TaskSnapshot] | None = None
     mcp_servers: list[dict[str, Any]] | None = None
     commands: list[str] | None = None
+    slash_commands: list[dict[str, Any]] | None = None  # 可在正文中引用的技能与命令
     modal: dict[str, Any] | None = None
     tool_name: str | None = None
     tool_input: dict[str, Any] | None = None
@@ -463,6 +469,8 @@ class BackendEvent(BaseModel):
         tasks: list[TaskRecord],
         commands: list[str],
         first_login: bool = False,
+        *,
+        slash_commands: list[dict[str, Any]] | None = None,
     ) -> BackendEvent:
         """创建就绪事件。
 
@@ -482,6 +490,7 @@ class BackendEvent(BaseModel):
             tasks=[TaskSnapshot.from_record(task) for task in tasks],
             mcp_servers=[],
             commands=commands,
+            slash_commands=slash_commands,
             first_login=first_login,
         )
 

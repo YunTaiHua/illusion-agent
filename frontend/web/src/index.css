@@ -829,6 +829,18 @@ pre code.hljs,
   animation: pulse-scale 1.2s ease-in-out infinite;
 }
 
+/* 工具行指示灯落定：PendingToolBubble 的脉冲缩放（pulse-scale）在工具完成
+   瞬间被 ToolResultBubble 的静态圆点替换，若脉冲停在半程相位（scale 0.5~1）
+   会瞬间跳回原大。静态圆点挂载时播放一次落定动画，从近半程相位平滑放大回
+   原尺寸（200ms ease-out），缩放动作完整收尾；对历史行挂载仅是一次轻微呼吸 */
+@keyframes dot-settle {
+  from { transform: scale(0.6); opacity: 0.6; }
+  to { transform: scale(1); opacity: 1; }
+}
+.animate-dot-settle {
+  animation: dot-settle 200ms ease-out 1;
+}
+
 /* 柔和呼吸：scale 1↔1.08，opacity 0.9↔1，用于连接遮罩层莫比乌斯环整体 */
 @keyframes pulse-soft {
   0%, 100% { transform: scale(1); opacity: 0.9; }

@@ -22,6 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createBrowserFrameStore, type BrowserFrameStore } from '../lib/browserFrameStore';
 
 import { attachAuthHeaders } from '../utils/launchToken';
+import { fileMentionChoices } from '../utils/mention';
 
 import type {
   AgentCatalog,
@@ -43,6 +44,7 @@ import type {
   RuleSnapshot,
   SessionFileItem,
   SkillSnapshot,
+  SlashCommandEntry,
   SwarmNotificationSnapshot,
   SwarmTeammateSnapshot,
   TaskSnapshot,
@@ -63,6 +65,7 @@ import {
  * 控制助手回复文本在屏幕上的更新频率
  */
 const ASSISTANT_DELTA_FLUSH_MS = 8;
+const EMPTY_SLASH_COMMANDS: SlashCommandEntry[] = [];
 
 /**
  * 助手流式回复刷新字符阈值
@@ -239,8 +242,12 @@ interface SessionViewState {
   label: string;
   /** 会话所属工作区目录（多目录空间，侧边栏分组与目录按钮展示依据） */
   cwd: string;
-  /** 是否正在运行任务 */
-  busy: boolean;
+  /** 当前行在转录中的起点；可指向 items.length（首段尚在流式缓冲中）。 */
+  liveTurnStartIndex: number | null;
+  /** 未物化视图收到真实 user 时记下其绝对轮号，用于和分页恢复边界对齐。 */
+  liveUserTurn?: number;
+  /** dispatching 连接 setBusyTrue 与紧随的 sendRequest；查询回执只释放自己的请求。 */
+  busy: false | 'dispatching' | 'line' | { queryId: string };
   /** 会话阶段：idle/thinking/tool_executing/awaiting_input */
   phase: string;
   /** 是否已加载转录（恢复完成） */
@@ -249,8 +256,8 @@ interface SessionViewState {
   restoring: boolean;
   /** 后端是否持有该会话的内存运行时 */
   inMemory: boolean;
-  /** 转录项列表 */
-  items: TranscriptItem[];
+  /** 转录项列表；仅无 ID 预启动后补发真实 ID 时需在工具锚上保留路由别名。 */
+  items: Array<TranscriptItem & { sourceToolId?: string }>;
   /** 助手流式缓冲 */
   assistantBuffer: string;
   /** 流式思考文本 */
@@ -288,8 +295,91 @@ interface StreamBuffer {
   pending: string;
   raw: string;
   reasoning: string;
-  flushedForTool: boolean;
+  /** 此模型消息已封存的片段。仅用它们核对 assistant_complete 的整条快照。 */
+  committed: TranscriptItem[];
+  firstToolId?: string;
+  /** 终稿到达后仍按动态时序展示。line_complete 时收成一条可复制的完整回复。 */
+  final?: { parts: TranscriptItem[]; item: TranscriptItem };
   timer: ReturnType<typeof setTimeout> | null;
+}
+
+type AssistantField = 'text' | 'reasoning';
+
+function assistantValue(snapshot: string | undefined, live: string): string {
+  if (!snapshot?.trim()) return live;
+  // 部分兼容端只回传本次尾段，或在取消时只回传前缀。保留已经收到的完整增量。
+  const shorter = snapshot.trim();
+  if (live.trim().length > shorter.length && (live.trimStart().startsWith(shorter) || live.trimEnd().endsWith(shorter))) return live;
+  return snapshot;
+}
+
+/** 从整条快照中消费已封存的前缀。后端会 trim 文本、在 thinking 块间补换行。 */
+function assistantTail(snapshot: string | undefined, committed: TranscriptItem[], field: AssistantField, live: string,
+  corrections: Map<TranscriptItem, TranscriptItem>): string {
+  if (!snapshot?.trim()) return live;
+  const parts = committed.filter((item) => item[field]?.trim());
+  const offsets: number[] = [];
+  let cursor = 0;
+  for (const item of parts) {
+    const part = item[field]!;
+    if (snapshot.startsWith(part, cursor)) {
+      offsets.push(cursor);
+      cursor += part.length;
+      continue;
+    }
+    // 供应商快照可能补入片段内部漏发的字符。游标只向前，不跨过下一已知片段。
+    let at = -1;
+    for (const char of part.trim()) {
+      const match = snapshot.indexOf(char, cursor);
+      if (match < 0) { at = -1; break; }
+      if (at < 0) at = match;
+      cursor = match + char.length;
+    }
+    if (at < 0) {
+      if (snapshot.trim() === live.trim()) return live;
+      // 无法按顺序定位原有片段（如 AC → ABC）时，保住可对齐的实时尾部，
+      // 其余快照只替换此字段的首个位置，不复制到工具之后。
+      const keepTail = live && snapshot.endsWith(live) ? live : '';
+      const corrected = keepTail ? snapshot.slice(0, -keepTail.length) : snapshot;
+      for (const [index, entry] of parts.entries()) {
+        corrections.set(entry, { ...(corrections.get(entry) ?? entry), [field]: index === 0 ? corrected : '' });
+      }
+      return keepTail;
+    }
+    offsets.push(at);
+  }
+  // 例如 A → 工具 → B 的快照 A!B，把漏掉的 ! 补给 A，B 仍在该工具之后。
+  for (const [i, item] of parts.entries()) {
+    const value = snapshot.slice(i === 0 ? 0 : offsets[i], offsets[i + 1] ?? cursor);
+    if (value !== item[field]) corrections.set(item, { ...(corrections.get(item) ?? item), [field]: value });
+  }
+  return assistantValue(snapshot.slice(cursor), live);
+}
+
+function displayAssistantText(raw: string): string {
+  return raw
+    .replace(/<think\b[^>]*>[\s\S]*?<\/think\b[^>]*>/gi, '')
+    .replace(/<\/?think\b[^>]*>/gi, '')
+    .replace(/<th(?:i(?:n(?:k)?)?)?\s*$/i, '');
+}
+
+/** 当前行内按 wire ID 定位工具。旧事件无 ID 时，仅在仍在途的同名调用中按开始顺序匹配。 */
+function findToolAnchor(view: SessionViewState, evt: BackendEvent): number {
+  const id = evt.item?.tool_use_id || evt.tool_use_id;
+  const name = evt.item?.tool_name || evt.tool_name;
+  const input = evt.item?.tool_input ?? evt.tool_input;
+  let fallback = -1;
+  for (let i = view.liveTurnStartIndex ?? view.items.length; i < view.items.length; i++) {
+    const item = view.items[i]!;
+    if (item.role !== 'tool') continue;
+    if (id && (item.tool_use_id === id || item.sourceToolId === id)) return i;
+    if (fallback !== -1 || (name && item.tool_name !== name) || (id && item.sourceToolId !== '')) continue;
+    const pending = view.pendingToolCalls.find((p) => p.tool_use_id === item.tool_use_id);
+    if (!pending || (!name && view.pendingToolCalls.length !== 1)) continue;
+    if (evt.type === 'tool_started' && !id && (pending.tool_input || !input || !Object.keys(input).length)) continue;
+    fallback = i;
+  }
+  return fallback;
 }
 
 /**
@@ -303,6 +393,8 @@ interface StreamBuffer {
 export interface WebSocketSessionState {
   // === 活跃会话视图（单会话语义，兼容既有组件）===
   staticItems: TranscriptItem[];
+  /** 当前模型活动在 staticItems 中的起点；无活动或仅执行指令时为 null。 */
+  liveTurnStartIndex: number | null;
   assistantBuffer: string;
   streamingReasoning: string;
   status: Record<string, unknown>;
@@ -318,7 +410,8 @@ export interface WebSocketSessionState {
   setRestoringSessionId: (id: string | null) => void;
   // === 全局状态 ===
   tasks: TaskSnapshot[];
-  commands: string[];
+  builtinCommands: string[];
+  slashCommands: SlashCommandEntry[];
   mcpServers: McpServerSnapshot[];
   skills: SkillSnapshot[];
   plugins: PluginSnapshot[];
@@ -528,6 +621,7 @@ function createSessionView(id: string, cwd: string = ''): SessionViewState {
     id,
     label: '',
     cwd,
+    liveTurnStartIndex: null,
     busy: false,
     phase: 'idle',
     materialized: false,
@@ -570,7 +664,9 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     statusRef.current = status;
   }, [status]);
   const [tasks, setTasks] = useState<TaskSnapshot[]>([]);
-  const [commands, setCommands] = useState<string[]>([]);
+  // ready 是 GUI 内置名称，slash_commands 是当前工作区的完整动态条目。
+  const [builtinCommands, setBuiltinCommands] = useState<string[]>([]);
+  const [slashCommands, setSlashCommands] = useState<SlashCommandEntry[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServerSnapshot[]>([]);
   const [skills, setSkills] = useState<SkillSnapshot[]>([]);
   const [plugins, setPlugins] = useState<PluginSnapshot[]>([]);
@@ -668,6 +764,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   const [sessionList, setSessionList] = useState<
     { value: string; label: string; busy: boolean; phase: string; active: boolean; cwd: string; createdAt: number; turnCount: number; summary: string; title: string }[]
   >([]);
+  const sessionListRef = useRef(sessionList);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   // === 工作区（目录空间）状态 ===
   const [workspaces, setWorkspaces] = useState<WebWorkspaceItem[]>([]);
@@ -690,7 +787,8 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   const activeSessionIdRef = useRef<string | null>(null);
   // 会话级流式缓冲（assistant_delta 分桶）
   const buffersRef = useRef<Record<string, StreamBuffer>>({});
-  const pendingToolCallsRef = useRef<Record<string, PendingToolCall[]>>({});
+  // line_complete 没有请求 ID。同会话所有已发送的 submit_line 各消费一次回执或拒绝。
+  const submittedLinesRef = useRef<Record<string, number>>({});
   const showThinkingRef = useRef(true);
   // 会话级 stop 超时定时器（sendStop 15s 兜底，line_complete 时清理）
   const stopTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -732,7 +830,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   // 乐观渲染的用户消息（按会话记录最近一次待确认文本，用于回执去重）。
   // 前端提交普通文本时立即本地渲染该 user 消息，杜绝"用户消息被吞/卡住"偶发问题；
   // 后端回执 transcript_item 时按文本精确去重，避免重复渲染。
-  const optimisticUserRef = useRef<Record<string, string | null>>({});
+  const optimisticUserRef = useRef<Record<string, TranscriptItem | null>>({});
 
   const setOnSelectRequest = useCallback((fn: ((payload: SelectRequestPayload) => void) | null) => { onSelectRequestRef.current = fn; }, []);
   const setOnCommandResult = useCallback((fn: ((text: string, type: string) => void) | null) => { onCommandResultRef.current = fn; }, []);
@@ -785,7 +883,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
   const getBuffer = useCallback((sid: string): StreamBuffer => {
     let buf = buffersRef.current[sid];
     if (!buf) {
-      buf = { pending: '', raw: '', reasoning: '', flushedForTool: false, timer: null };
+      buf = { pending: '', raw: '', reasoning: '', committed: [], timer: null };
       buffersRef.current[sid] = buf;
     }
     return buf;
@@ -797,22 +895,115 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     if (!pending) return;
     buf.pending = '';
     buf.raw += pending;
-    let displayText = buf.raw
-      .replace(/<think\b[^>]*>[\s\S]*?<\/think\b[^>]*>/gi, '')
-      .replace(/<\/think\b[^>]*>/gi, '')
-      .replace(/<think\b[^>]*>/gi, '')
-      .replace(/<th(?:i(?:n(?:k)?)?)?\s*$/i, '');
-    patchView(sid, { assistantBuffer: displayText });
+    patchView(sid, { assistantBuffer: displayAssistantText(buf.raw) });
   }, [getBuffer, patchView]);
 
-  const clearAssistantDelta = useCallback((sid: string): void => {
+  /** 整体替换和行结束会使该会话的定时刷新与前缀核对同时失效。 */
+  const discardBuffer = useCallback((sid: string): void => {
+    const buf = buffersRef.current[sid];
+    if (buf?.timer != null) clearTimeout(buf.timer);
+    delete buffersRef.current[sid];
+  }, []);
+
+  /** 封存一个按到达顺序连续的片段，包括尚未到刷帧阈值的 pending。 */
+  const commitAssistant = useCallback((sid: string, complete?: BackendEvent): void => {
+    const view = viewsRef.current[sid];
+    if (!view) return;
     const buf = getBuffer(sid);
-    buf.pending = '';
-    buf.raw = '';
-    buf.reasoning = '';
-    if (buf.timer) { clearTimeout(buf.timer); buf.timer = null; }
-    patchView(sid, { assistantBuffer: '', streamingReasoning: '' });
+    if (buf.timer != null) clearTimeout(buf.timer);
+    buf.timer = null;
+    const raw = stripToolCallLines(displayAssistantText(buf.raw + buf.pending));
+    const snapshot = complete?.message ?? complete?.item?.text;
+    const fullText = snapshot == null ? undefined : stripToolCallLines(snapshot);
+    const fullReasoning = complete?.reasoning ?? complete?.item?.reasoning;
+    const corrections = new Map<TranscriptItem, TranscriptItem>();
+    let text = assistantTail(fullText, buf.committed, 'text', raw, corrections);
+    let reasoning = assistantTail(fullReasoning, buf.committed, 'reasoning', buf.reasoning, corrections);
+    let items = view.items;
+    if (corrections.size) {
+      const applyCorrection = (item: TranscriptItem): TranscriptItem[] => {
+        const next = corrections.get(item);
+        return !next ? [item] : next.text.trim() || next.reasoning?.trim() ? [next] : [];
+      };
+      items = items.flatMap(applyCorrection);
+      buf.committed = buf.committed.flatMap(applyCorrection);
+    }
+    if (complete?.tool_chain_follows && buf.firstToolId) {
+      // 只有快照补发、且未在工具后观察到的前导内容，归回首个工具之前。
+      const at = items.findIndex((i, n) => n >= (view.liveTurnStartIndex ?? 0) && i.role === 'tool' && i.tool_use_id === buf.firstToolId);
+      if (at >= 0) {
+        const after = new Set(items.slice(at + 1));
+        const afterTool = buf.committed.filter((i) => after.has(i));
+        const beforeText = !afterTool.some((i) => i.text) && !raw ? text : '';
+        const beforeReasoning = !afterTool.some((i) => i.reasoning) && !buf.reasoning ? reasoning : '';
+        if (beforeText || beforeReasoning) {
+          const previous = items[at - 1];
+          items = items.slice();
+          if (previous && buf.committed.includes(previous)) {
+            items[at - 1] = { ...previous, text: previous.text + beforeText, reasoning: (previous.reasoning ?? '') + beforeReasoning || undefined };
+          } else {
+            items.splice(at, 0, { role: 'assistant', text: beforeText, reasoning: beforeReasoning || undefined });
+          }
+          if (beforeText) text = '';
+          if (beforeReasoning) reasoning = '';
+        }
+      }
+    }
+    if (text.trim() || reasoning.trim()) {
+      const item: TranscriptItem = { role: 'assistant', text, ...(reasoning.trim() ? { reasoning } : {}) };
+      items = [...items, item];
+      buf.committed.push(item);
+    }
+    if (complete) {
+      const parts = buf.committed;
+      buf.final = undefined;
+      if (parts.length > 1 && complete.tool_chain_follows !== true) {
+        const joined = parts.map((part) => part.text).join('');
+        const thoughts = parts.map((part) => part.reasoning).filter(Boolean).join('\n\n');
+        buf.final = { parts, item: { role: 'assistant', text: assistantValue(fullText, joined),
+          reasoning: assistantValue(fullReasoning, thoughts) || undefined } };
+      }
+      buf.committed = [];
+      buf.firstToolId = undefined;
+    }
+    buf.raw = buf.pending = buf.reasoning = '';
+    if (items !== view.items || view.assistantBuffer || view.streamingReasoning || view.reasoningStreaming) {
+      patchView(sid, { items, assistantBuffer: '', streamingReasoning: '', reasoningStreaming: false });
+    }
   }, [getBuffer, patchView]);
+
+  /** 重放/撤销替换整个转录时作废的是该会话的动态后缀，busy 仍由行/查询回执收尾。 */
+  const replaceTranscript = useCallback((sid: string, items: TranscriptItem[]): void => {
+    discardBuffer(sid);
+    optimisticUserRef.current[sid] = null;
+    patchView(sid, {
+      items, liveTurnStartIndex: null, assistantBuffer: '', streamingReasoning: '', reasoningStreaming: false,
+      pendingToolCalls: [], turnOutline: null, firstLoadedTurn: 1, loadingHistory: false,
+      transcriptReplaceTick: (viewsRef.current[sid]?.transcriptReplaceTick ?? 0) + 1,
+    });
+  }, [discardBuffer, patchView]);
+
+  const finishLine = useCallback((sid: string): void => {
+    const view = viewsRef.current[sid]!;
+    // 只有 assistant_complete 确认模型步。取消或模型错误会直接发 line_complete。
+    const buf = buffersRef.current[sid];
+    const partial = new Set(buf?.committed);
+    let items = partial.size ? view.items.filter((item) => !partial.has(item)) : view.items;
+    const final = buf?.final;
+    if (final) {
+      const parts = new Set(final.parts);
+      const last = final.parts[final.parts.length - 1];
+      items = items.flatMap((item) => item === last ? [final.item] : parts.has(item) ? [] : [item]);
+    }
+    discardBuffer(sid);
+    delete optimisticUserRef.current[sid];
+    delete submittedLinesRef.current[sid];
+    const stopTimer = stopTimersRef.current[sid];
+    if (stopTimer != null) clearTimeout(stopTimer);
+    delete stopTimersRef.current[sid];
+    patchView(sid, { items, assistantBuffer: '', streamingReasoning: '', reasoningStreaming: false,
+      pendingToolCalls: [], busy: false, liveTurnStartIndex: null, stopping: false });
+  }, [discardBuffer, patchView]);
 
   /** 向指定会话追加转录项 */
   const pushStatic = useCallback((sid: string, item: TranscriptItem): void => {
@@ -832,6 +1023,17 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     fileTreeLoadingRef.current.clear();
   }, [resourcesCwd]);
 
+  const pushLiveUser = useCallback((sid: string, item: TranscriptItem): void => {
+    const view = ensureView(sid);
+    // 后端在 user 回执之后才推送本行的列表计数。记录当时的旧计数，
+    // 后续恢复用绝对轮号匹配（cron 的可见摘要与引擎里的原始 user 文本不同）。
+    const listed = sessionListRef.current.find((entry) => entry.value === sid);
+    const liveUserTurn = view.materialized
+      ? view.firstLoadedTurn + view.items.filter((entry) => entry.role === 'user').length
+      : listed ? listed.turnCount + 1 : undefined;
+    patchView(sid, { items: [...view.items, item], liveTurnStartIndex: view.items.length, liveUserTurn, busy: 'line' });
+  }, [ensureView, patchView]);
+
   /** 发送原始请求（不注入 session_id，供内部使用） */
   const sendRaw = useCallback((payload: Record<string, unknown>): void => {
     const ws = wsRef.current;
@@ -844,8 +1046,19 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     // 显式 session_id 支持：侧边栏操作目标会话可能不是活跃会话
     // （如跨目录重命名），此时必须以目标会话 ID 路由到后端正确的工作区
     const sid = (payload.session_id as string | undefined) ?? activeSessionIdRef.current;
+    if (sid && (payload.type === 'submit_line' || (payload.type === 'apply_select_command' && !viewsRef.current[sid]?.busy))
+      && wsRef.current?.readyState === WebSocket.OPEN) {
+      submittedLinesRef.current[sid] = (submittedLinesRef.current[sid] ?? 0) + 1;
+    }
+    if (sid && viewsRef.current[sid]?.busy === 'dispatching') {
+      // 只有紧随 setBusyTrue 的请求占用输入。右栏查询和 rename 等旁路不改变所有者。
+      if (payload.type === 'submit_line') patchView(sid, { busy: 'line' });
+      if (payload.type === 'web_query' && typeof payload.request_id === 'string') {
+        patchView(sid, { busy: { queryId: payload.request_id } });
+      }
+    }
     sendRaw(sid ? { ...payload, session_id: sid } : payload);
-  }, [sendRaw]);
+  }, [sendRaw, patchView]);
 
   /**
    * 停止请求（针对活跃会话）：按钮进入旋转动画，直到后端确认（line_complete）清除；
@@ -867,7 +1080,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
 
   const setBusyTrue = useCallback((): void => {
     const sid = activeSessionIdRef.current;
-    if (sid) patchView(sid, { busy: true });
+    if (sid && !viewsRef.current[sid]?.busy) patchView(sid, { busy: 'dispatching' });
   }, [patchView]);
 
   /**
@@ -888,18 +1101,15 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     // 文本通道的真实用户消息一律乐观渲染（含以 / 开头的非命令文本）；
     // 命令由通道 1 分发（web_query/apply_select_command），不会走到这里
     if (!trimmed) return;
-    optimisticUserRef.current[sid] = trimmed;
-    ensureView(sid);
-    pushStatic(sid, { role: 'user', text: trimmed });
-  }, [ensureView, pushStatic]);
+    const item: TranscriptItem = { role: 'user', text: trimmed };
+    optimisticUserRef.current[sid] = item;
+    pushLiveUser(sid, item);
+  }, [pushLiveUser]);
 
   const clearStaticItems = useCallback((): void => {
     const sid = activeSessionIdRef.current;
-    if (!sid) return;
-    clearAssistantDelta(sid);
-    patchView(sid, { items: [], pendingToolCalls: [] });
-    pendingToolCallsRef.current[sid] = [];
-  }, [clearAssistantDelta, patchView]);
+    if (sid) replaceTranscript(sid, []);
+  }, [replaceTranscript]);
 
   const deleteSessions = useCallback((
     sessionIds: string[],
@@ -914,8 +1124,8 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       const next = { ...viewsRef.current };
       for (const sid of removed) {
         delete next[sid];
-        delete buffersRef.current[sid];
-        delete pendingToolCallsRef.current[sid];
+        discardBuffer(sid);
+        delete submittedLinesRef.current[sid];
         delete optimisticUserRef.current[sid]; // 同步清理乐观待确认标记
         const stopTimer = stopTimersRef.current[sid];
         if (stopTimer) {
@@ -945,7 +1155,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       delete_all: deleteAll,
       ...(cwd ? { cwd } : {}),
     });
-  }, [sendRaw]);
+  }, [sendRaw, discardBuffer]);
 
   const clearModal = useCallback((): void => {
     const sid = activeSessionIdRef.current;
@@ -1470,6 +1680,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
    */
   const resetWorkspaceResources = useCallback((): void => {
     setSkills([]);
+    setSlashCommands([]);
     setMcpServers([]);
     setPlugins([]);
     setRules([]);
@@ -1617,6 +1828,13 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
+    const releaseConnectionViews = () => {
+      for (const [sid, view] of Object.entries(viewsRef.current)) {
+        if (view.busy || buffersRef.current[sid]) finishLine(sid);
+        patchView(sid, { restoring: false, materialized: false });
+      }
+    };
+
     ws.onopen = () => {
       setConnected(true);
       setConnectionError(null);
@@ -1633,13 +1851,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
         awaitingNewTimerRef.current = null;
       }
       setAwaitingNewSession(false);
-      // 清空全部视图的 restoring 态，避免断线后残留加载动画
-      const next = { ...viewsRef.current };
-      for (const view of Object.values(next)) {
-        view.restoring = false;
-      }
-      viewsRef.current = next;
-      setSessionViews(next);
+      releaseConnectionViews();
     };
     ws.onerror = () => {
       setConnected(false);
@@ -1661,7 +1873,8 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
         const st = evt.state?.show_thinking;
         if (typeof st === 'boolean') { setShowThinking(st); showThinkingRef.current = st; }
         setTasks(evt.tasks ?? []);
-        setCommands(evt.commands ?? []);
+        setBuiltinCommands(evt.commands ?? []);
+        setSlashCommands([]);
         setMcpServers((evt.mcp_servers as McpServerSnapshot[]) ?? []);
         // 会话列表 / 活跃会话转录由后端随后的 web_sessions + web_restore_completed 驱动
         return;
@@ -1700,68 +1913,65 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
         return;
       }
 
+      if (evt.type === 'web_plugin_toggle_error') {
+        // 开关失败属于一次面板操作，保留当前对话的流式内容和运行状态。
+        if (evt.message) onCommandResultRef.current?.(evt.message, 'error');
+        return;
+      }
+
       // === 会话路由（携带 session_id 的会话级事件）===
       const sid = routeSessionId(evt);
       if (sid) {
         ensureView(sid);
         const view = viewsRef.current[sid]!;
 
-        // 流式
-        if (evt.type === 'assistant_delta') {
-          view.busy = true;
-          if (evt.reasoning) {
-            const buf = getBuffer(sid);
-            buf.reasoning += evt.reasoning;
-            // reasoning 正在流式：大脑脉冲动画开启
-            patchView(sid, { busy: true, streamingReasoning: buf.reasoning, reasoningStreaming: true });
-          } else {
-            // text 增量（reasoning 已流完或未开始）：大脑脉冲停止
-            patchView(sid, { reasoningStreaming: false });
+        // 只有实际模型/工具活动开启动态范围。命令置 busy 时，上一轮仍保持完成态。
+        const beginActivity = () => {
+          if (view.liveTurnStartIndex === null || view.busy !== 'line') {
+            patchView(sid, { busy: 'line', liveTurnStartIndex: view.liveTurnStartIndex ?? view.items.length });
           }
-          const delta = evt.message ?? '';
-          if (delta) {
-            const buf = getBuffer(sid);
-            buf.pending += delta;
+        };
+        if (evt.type === 'assistant_delta') {
+          if (!evt.reasoning && !evt.message) return;
+          beginActivity();
+          const buf = getBuffer(sid);
+          buf.final = undefined;
+          if (evt.reasoning) {
+            // reasoning → text 可同项展示。若 text 后又开始 reasoning，需要先封存前项。
+            if (buf.raw || buf.pending) commitAssistant(sid);
+            buf.reasoning += evt.reasoning;
+            patchView(sid, { streamingReasoning: buf.reasoning, reasoningStreaming: !evt.message });
+          }
+          if (evt.message) {
+            if (viewsRef.current[sid]?.reasoningStreaming) patchView(sid, { reasoningStreaming: false });
+            buf.pending += evt.message;
             if (buf.pending.length >= ASSISTANT_DELTA_FLUSH_CHARS) {
               flushAssistantDelta(sid);
-            } else if (!buf.timer) {
+            } else if (buf.timer === null) {
               buf.timer = setTimeout(() => { buf.timer = null; flushAssistantDelta(sid); }, ASSISTANT_DELTA_FLUSH_MS);
             }
           }
           return;
         }
+        if (evt.type === 'tool_chain_completed') {
+          const buf = buffersRef.current[sid];
+          if (buf) buf.firstToolId = undefined;
+          return;
+        }
         if (evt.type === 'assistant_complete') {
-          const buf = getBuffer(sid);
-          if (buf.timer) { clearTimeout(buf.timer); buf.timer = null; }
-          flushAssistantDelta(sid);
-          if (!buf.flushedForTool) {
-            const text = evt.message ?? buf.raw;
-            const reasoning = (evt.reasoning ?? buf.reasoning) || undefined;
-            if (text.trim() || (reasoning ?? '').trim()) {
-              pushStatic(sid, { role: 'assistant', text: stripToolCallLines(text), reasoning });
-            }
-          }
-          buf.flushedForTool = false;
-          clearAssistantDelta(sid);
-          // reasoning 流式结束，大脑脉冲停止
-          const completePatch: { reasoningStreaming: boolean; busy?: boolean } = { reasoningStreaming: false };
-          // 最终答案（不跟随工具链）时立即退出 busy，无需等待 line_complete；
-          // 中间步骤（tool_chain_follows=true）保持 busy，避免工具链期间闪烁
-          if (evt.tool_chain_follows === false) completePatch.busy = false;
-          patchView(sid, completePatch);
+          beginActivity();
+          commitAssistant(sid, evt);
           return;
         }
         if (evt.type === 'line_complete') {
-          clearAssistantDelta(sid);
-          pendingToolCallsRef.current[sid] = [];
-          patchView(sid, { pendingToolCalls: [], busy: false });
-          // 停止确认：清除按钮旋转动画与超时定时器
-          const stopTimer = stopTimersRef.current[sid];
-          if (stopTimer) {
-            clearTimeout(stopTimer);
-            delete stopTimersRef.current[sid];
+          // 行任务均带 session_id。无归属的面板请求异常也会补发 line_complete。
+          if (!evt.session_id || typeof view.busy === 'object') return;
+          const waiting = submittedLinesRef.current[sid] ?? 0;
+          if (waiting > 1) {
+            submittedLinesRef.current[sid] = waiting - 1;
+            return; // 前一条命令收尾，后一条真实 user 仍在等回执
           }
-          patchView(sid, { stopping: false });
+          finishLine(sid);
           return;
         }
 
@@ -1775,119 +1985,92 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
           // 不应作为真实用户消息显示
           if (evt.item.role === 'user' && evt.item.text.startsWith('<task-notification>')) return;
           if (suppressTranscriptRef.current) return;
-          // 乐观渲染去重：仅当本 user 项与乐观提交文本**精确匹配**时才视为回执，
-          // 清除待确认标记并跳过（已在乐观阶段渲染）。若不匹配（乱序/丢包时先到达的
-          // 是其他项），标记保持，等真正的回执到达时再去重，避免重复渲染同一 user 消息。
-          const optimisticText = optimisticUserRef.current[sid];
-          if (optimisticText != null && evt.item.role === 'user' && evt.item.text === optimisticText) {
+          // 同文回执确认乐观项，补回本次实际激活的资源快照。按对象替换以区分历史重复文本。
+          const optimistic = optimisticUserRef.current[sid];
+          if (optimistic && evt.item.role === 'user' && evt.item.text === optimistic.text) {
             optimisticUserRef.current[sid] = null;
-            return;
+            const index = view.items.indexOf(optimistic);
+            if (index >= 0) {
+              if (evt.item.slash_references != null) {
+                const items = view.items.slice();
+                items[index] = evt.item;
+                patchView(sid, { items });
+              }
+              return;
+            }
           }
-          pushStatic(sid, evt.item);
+          commitAssistant(sid);
+          if (evt.item.role === 'user') {
+            pushLiveUser(sid, evt.item);
+          } else {
+            pushStatic(sid, evt.item);
+          }
           return;
         }
 
-        // 工具
-        if ((evt.type === 'tool_started' || evt.type === 'tool_completed') && evt.item) {
-          // 浏览器工具呼吸指示（agent 操作中，右栏浏览器区块亮 5s）
-          const _bt = evt.item.tool_name ?? evt.tool_name ?? '';
-          if (_bt.startsWith('browser_')) markBrowserOpActive();
-          if (evt.type === 'tool_started') {
-            const buf = getBuffer(sid);
-            if (buf.raw.trim() || buf.pending || buf.reasoning.trim()) {
-              if (buf.timer) { clearTimeout(buf.timer); buf.timer = null; }
-              flushAssistantDelta(sid);
-              const text = buf.raw;
-              const reasoning = buf.reasoning || undefined;
-              if (text.trim() || (reasoning ?? '').trim()) {
-                pushStatic(sid, { role: 'assistant', text: stripToolCallLines(text), reasoning });
-              }
-              clearAssistantDelta(sid);
-              buf.flushedForTool = true;
+        // 工具首次出现即确定转录位置。执行状态由 pending 提供，结果按同一个锚回填。
+        if (evt.type === 'tool_started' || evt.type === 'tool_input_updated' || evt.type === 'tool_completed' || evt.type === 'tool_progress') {
+          const wireId = evt.item?.tool_use_id || evt.tool_use_id;
+          const name = evt.item?.tool_name || evt.tool_name;
+          const input = evt.item?.tool_input ?? evt.tool_input;
+          let index = findToolAnchor(view, evt);
+          const oldAnchor = view.items[index];
+          const id = oldAnchor?.tool_use_id ?? wireId;
+          const pending = view.pendingToolCalls.find((p) => p.tool_use_id === id);
+          if (evt.type === 'tool_progress') {
+            if (!pending || !evt.message) return;
+            const type = evt.progress_type ?? 'status';
+            const progress = [...(pending.progressMessages ?? [])];
+            const last = progress[progress.length - 1];
+            if ((type === 'thinking' || type === 'text') && last?.type === type) {
+              progress[progress.length - 1] = { type, message: last.message + evt.message };
+            } else {
+              progress.push({ type, message: evt.message });
             }
-            // reasoning 流式结束（工具调用前的思考已完整输出），大脑脉冲停止
-            patchView(sid, { reasoningStreaming: false });
-            const toolInput = evt.item.tool_input ?? evt.tool_input;
-            const toolUseId = evt.item.tool_use_id ?? evt.tool_use_id ?? '';
-            const pendingList = pendingToolCallsRef.current[sid] ?? [];
-            pendingToolCallsRef.current[sid] = [...pendingList, {
-              tool_name: evt.item.tool_name ?? evt.tool_name ?? 'tool', tool_use_id: toolUseId,
-              tool_input: (toolInput && Object.keys(toolInput as Record<string, unknown>).length > 0) ? toolInput as Record<string, unknown> : undefined,
-            }];
-            patchView(sid, { busy: true, pendingToolCalls: pendingToolCallsRef.current[sid] });
+            patchView(sid, { pendingToolCalls: view.pendingToolCalls.map((p) => p === pending ? { ...p, progressMessages: progress } : p) });
             return;
           }
-          const toolUseId = evt.item.tool_use_id ?? evt.tool_use_id ?? '';
-          const pendingList = pendingToolCallsRef.current[sid] ?? [];
-          const pendingIdx = pendingList.findIndex((p) => p.tool_use_id === toolUseId);
-          let toolName = evt.item.tool_name ?? evt.tool_name ?? 'tool';
-          let toolInput = (evt.item.tool_input ?? undefined) as Record<string, unknown> | undefined;
-          // 完成时从 pending 保留流式进度（agent 思考过程），随 tool_result 折叠展示
-          let progressMessages: Array<{message: string; type?: string}> | undefined;
-          if (pendingIdx !== -1) {
-            const pending = pendingList[pendingIdx]!;
-            toolName = pending.tool_name || toolName; toolInput = pending.tool_input || toolInput;
-            progressMessages = pending.progressMessages;
-            pendingToolCallsRef.current[sid] = pendingList.filter((p) => p.tool_use_id !== toolUseId);
-            patchView(sid, { pendingToolCalls: pendingToolCallsRef.current[sid] });
+          if (!oldAnchor && evt.type === 'tool_input_updated' && !wireId) return;
+          if (oldAnchor && !pending) return; // 已完成的同 ID 回执不能再次添加工具或结果
+          if (name?.startsWith('browser_') && evt.type !== 'tool_input_updated') markBrowserOpActive();
+          beginActivity();
+          const toolName = name ?? oldAnchor?.tool_name ?? 'tool';
+          const toolId = id || `local-tool-${genRequestId('tool')}`;
+          const toolInput = input && Object.keys(input).length ? input : pending?.tool_input ?? oldAnchor?.tool_input;
+          if (!oldAnchor) {
+            commitAssistant(sid);
+            const buf = getBuffer(sid);
+            buf.firstToolId ??= toolId;
+            buf.final = undefined;
           }
-          pushStatic(sid, { role: 'tool', text: toolName, tool_name: toolName, tool_input: toolInput, tool_use_id: toolUseId || undefined });
-          pushStatic(sid, { ...evt.item, role: 'tool_result', tool_name: toolName,
-            tool_use_id: toolUseId || undefined, is_error: (evt.item.is_error ?? evt.is_error ?? undefined) as boolean | undefined,
-            progress_messages: progressMessages,
-            // 变更工具的结构化统计（增减行数等）：随条目持久到转录，
-            // 工具气泡据此显示 +N/-M（恢复场景无此字段，前端回退文本解析）
-            structured_output: (evt.structured_output ?? undefined) as Record<string, unknown> | undefined });
-          // 变更类工具执行完成后统一刷新右栏（文件树 / Git / 资源快照）；
-          // 仅活跃会话触发的工具才刷新（后台 agent 的变更不联动活跃会话数据）
+          const items = viewsRef.current[sid]!.items.slice();
+          const anchor = {
+            ...(oldAnchor ?? (evt.type === 'tool_started' ? evt.item : undefined)),
+            role: 'tool' as const, text: oldAnchor?.text ?? toolName, tool_name: toolName, tool_use_id: toolId, tool_input: toolInput,
+            ...(wireId !== toolId ? { sourceToolId: wireId ?? oldAnchor?.sourceToolId ?? '' } : {}),
+          };
+          if (index < 0) index = items.length;
+          items[index] = anchor;
+          if (evt.type !== 'tool_completed') {
+            const call = { ...pending, tool_name: toolName, tool_use_id: toolId, tool_input: toolInput };
+            const calls = pending ? view.pendingToolCalls.map((p) => p === pending ? call : p) : [...view.pendingToolCalls, call];
+            patchView(sid, { items, pendingToolCalls: calls });
+            return;
+          }
+          items.splice(index + 1, 0, {
+            ...evt.item, role: 'tool_result', text: evt.item?.text ?? evt.output ?? '', tool_name: toolName, tool_use_id: toolId,
+            is_error: evt.item?.is_error ?? evt.is_error,
+            progress_messages: pending?.progressMessages ?? evt.item?.progress_messages,
+            structured_output: evt.structured_output ?? evt.item?.structured_output,
+          });
+          patchView(sid, { items, pendingToolCalls: view.pendingToolCalls.filter((p) => p !== pending) });
           if (CHANGE_TOOLS.has(toolName) && sid === activeSessionIdRef.current) refreshRightPanel();
-          return;
-        }
-        if (evt.type === 'tool_input_updated') {
-          const uid = evt.tool_use_id;
-          const pendingList = pendingToolCallsRef.current[sid] ?? [];
-          pendingToolCallsRef.current[sid] = pendingList.map((p) => p.tool_use_id === uid ? { ...p, tool_input: evt.tool_input ?? undefined } : p);
-          patchView(sid, { pendingToolCalls: pendingToolCallsRef.current[sid] });
-          return;
-        }
-        // 流式进度消息：累积到对应 pendingToolCall 的 progressMessages（对称于 terminal 端）
-        // thinking/text 为增量片段，累积到同类型最后一条；tool/status 为完整消息，直接追加
-        if (evt.type === 'tool_progress') {
-          const uid = evt.tool_use_id;
-          if (uid) {
-            const msgType = evt.progress_type ?? 'status';
-            const msgContent = evt.message ?? '';
-            const pendingList = pendingToolCallsRef.current[sid] ?? [];
-            pendingToolCallsRef.current[sid] = pendingList.map((p) => {
-              if (p.tool_use_id !== uid) return p;
-              const prev = p.progressMessages ?? [];
-              let next;
-              if (msgType === 'thinking' || msgType === 'text') {
-                const lastIdx = prev.length - 1;
-                const lastEntry = lastIdx >= 0 ? prev[lastIdx] : undefined;
-                if (lastEntry && lastEntry.type === msgType) {
-                  next = [...prev];
-                  next[lastIdx] = {message: lastEntry.message + msgContent, type: msgType};
-                } else {
-                  next = [...prev, {message: msgContent, type: msgType}];
-                }
-              } else {
-                next = [...prev, {message: msgContent, type: msgType}];
-              }
-              return {...p, progressMessages: next};
-            });
-            patchView(sid, { pendingToolCalls: pendingToolCallsRef.current[sid] });
-          }
           return;
         }
 
         // 转录管理
         if (evt.type === 'clear_transcript') {
-          optimisticUserRef.current[sid] = null;
-          pendingToolCallsRef.current[sid] = [];
-          clearAssistantDelta(sid);
-          // 清空转录 = 新会话语义：轮次大纲归零（本地轮次即全部轮次）
-          patchView(sid, { items: [], pendingToolCalls: [], turnOutline: null, firstLoadedTurn: 1, loadingHistory: false });
+          replaceTranscript(sid, []);
           return;
         }
         if (evt.type === 'replace_transcript' && evt.items) {
@@ -1905,20 +2088,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
             if (item.text.startsWith('<task-notification>')) return false;
             return true;
           });
-          pendingToolCallsRef.current[sid] = [];
-          clearAssistantDelta(sid);
-          // 整体替换（rewind/compact）：本地轮次即权威，作废后端大纲
-          // （其含已被回退/压缩掉的轮次，保留会导致导航序号错位）
-          patchView(sid, {
-            items: stripReplayItems(items),
-            pendingToolCalls: [],
-            turnOutline: null,
-            firstLoadedTurn: 1,
-            loadingHistory: false,
-            // bump 替换信号：ChatArea 收到后强制回到底部（rewind 时用户
-            // 往往停在旧消息位置且已停止跟随，不清零会留在错误的相对位置）
-            transcriptReplaceTick: Date.now(),
-          });
+          replaceTranscript(sid, stripReplayItems(items));
           return;
         }
 
@@ -1947,7 +2117,6 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
           // 通知 App（旧路径，用于需要全局处理的分支）；同时存入会话视图
           onSelectRequestRef.current?.(payload);
           patchView(sid, { inlineOptions: payload });
-          patchView(sid, { busy: false });
           return;
         }
 
@@ -1974,8 +2143,6 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
             awaitingNewTimerRef.current = null;
           }
           setAwaitingNewSession(false);
-          pendingToolCallsRef.current[sid] = [];
-          optimisticUserRef.current[sid] = null;
           const items = stripReplayItems((evt.items ?? []).filter((i) => !(i.role === 'user' && i.is_command)));
           // 只合并会话专属键：全局键（model/effort 等）由 state_snapshot 权威驱动，
           // 避免恢复快照影子化后续全局设置变更
@@ -1984,15 +2151,62 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
           for (const key of Object.keys(restoreState)) {
             if (SESSION_STATUS_KEYS.has(key)) sessionStatus[key] = restoreState[key];
           }
-          // 长会话分页：items 只含最近一页，全量轻量大纲随事件下发
+          // 切入正在运行的后台会话时，快照只有引擎已写入的历史，缺少当前流和工具进度。
+          const running = restoreState.phase === 'thinking' || restoreState.phase === 'tool_executing' || restoreState.phase === 'awaiting_input';
+          const liveStart = running ? view.liveTurnStartIndex : null;
+          let restoredItems = items;
+          let restoredStart: number | null = null;
+          let calls: PendingToolCall[] = [];
+          if (liveStart !== null) {
+            const live = view.items.slice(liveStart);
+            const first = live[0];
+            if (view.materialized) {
+              restoredItems = view.items;
+              restoredStart = liveStart;
+            } else {
+              // 快照可能已包含本行 user 或 tool，按最后一个 user/工具 ID 对齐同一后缀。
+              let at = -1;
+              if (first?.role === 'user' && view.liveUserTurn != null) {
+                let turn = Number(evt.first_loaded_turn ?? 1) - 1;
+                at = items.findIndex((item) => item.role === 'user' && ++turn === view.liveUserTurn);
+              } else {
+                for (let i = items.length - 1; i >= 0; i--) {
+                  const item = items[i]!;
+                  if (first?.role === 'tool' && item.role === 'tool' && item.tool_use_id === first.tool_use_id) { at = i; break; }
+                  if (first?.role === 'assistant' && item.role === 'assistant' && item.text === first.text && item.reasoning === first.reasoning) { at = i; break; }
+                  if (item.role === 'user') break;
+                }
+              }
+              const prefix = at < 0 ? items : items.slice(0, at);
+              restoredItems = [...prefix, ...live];
+              restoredStart = prefix.length;
+            }
+            calls = view.pendingToolCalls;
+          } else {
+            discardBuffer(sid);
+            optimisticUserRef.current[sid] = null;
+            if (running) {
+              // 重连发生在执行中时，快照可有已开始但尚无结果的工具。复用它的真实锚。
+              let lastUser = items.length - 1;
+              while (lastUser >= 0 && items[lastUser]!.role !== 'user') lastUser--;
+              const tail = items.slice(lastUser + 1);
+              const done = new Set(tail.filter((i) => i.role === 'tool_result').map((i) => i.tool_use_id));
+              for (const [offset, item] of tail.entries()) {
+                if (item.role !== 'tool' || !item.tool_use_id || done.has(item.tool_use_id)) continue;
+                restoredStart ??= lastUser + 1 + offset;
+                calls.push({ tool_name: item.tool_name ?? 'tool', tool_use_id: item.tool_use_id, tool_input: item.tool_input });
+              }
+            }
+          }
           patchView(sid, {
-            items,
-            pendingToolCalls: [],
+            items: restoredItems, liveTurnStartIndex: restoredStart, pendingToolCalls: calls,
+            ...(liveStart === null ? { assistantBuffer: '', streamingReasoning: '', reasoningStreaming: false } : {}),
+            busy: running ? 'line' : false,
             materialized: true,
             restoring: false,
             status: sessionStatus,
             turnOutline: (evt.turn_outline as TurnOutlineEntry[] | null | undefined) ?? null,
-            firstLoadedTurn: Math.max(1, Number(evt.first_loaded_turn ?? 1) || 1),
+            firstLoadedTurn: liveStart !== null && view.materialized ? view.firstLoadedTurn : Math.max(1, Number(evt.first_loaded_turn ?? 1) || 1),
             loadingHistory: false,
             // 恢复载荷携带会话所属工作区目录（多目录分组与目录按钮展示依据）
             ...(typeof restoreState.cwd === 'string' && restoreState.cwd ? { cwd: restoreState.cwd } : {}),
@@ -2045,14 +2259,20 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
             return;
           }
           const firstTurn = Math.max(1, Number(page.first_turn) || 1);
+          if (firstTurn >= view.firstLoadedTurn) {
+            patchView(sid, { loadingHistory: false });
+            return;
+          }
           const newItems = stripReplayItems(
             (page.items as TranscriptItem[]).filter((i) => !(i.role === 'user' && i.is_command)));
           const pageTurns = Math.max(1, newItems.filter((i) => i.role === 'user').length);
           // 新页尾部与现有头部的重叠轮数（迟到/重复响应兜底）：
           // 截掉被覆盖的头部轮，再前插新页，保证轮序不重复
           const overlap = Math.max(0, firstTurn + pageTurns - (view.firstLoadedTurn ?? 1));
+          const prefix = overlap ? newItems.slice(0, countLeadingTurnItems(newItems, pageTurns - overlap)) : newItems;
           patchView(sid, {
-            items: [...newItems, ...view.items.slice(countLeadingTurnItems(view.items, overlap))],
+            items: [...prefix, ...view.items],
+            liveTurnStartIndex: view.liveTurnStartIndex === null ? null : prefix.length + view.liveTurnStartIndex,
             firstLoadedTurn: firstTurn,
             loadingHistory: false,
           });
@@ -2062,15 +2282,30 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
         // rewind 被回退的 user 消息：回填输入框（转录已由 replace_transcript 刷新）
         if (evt.type === 'session_rewind' && evt.restored_text) {
           optimisticUserRef.current[sid] = null;
-          onRewindRestoredRef.current?.(evt.restored_text);
+          if (sid === activeSessionIdRef.current) onRewindRestoredRef.current?.(evt.restored_text);
           return;
         }
 
         // 会话级错误 → 转录
         if (evt.type === 'error') {
-          pushStatic(sid, { role: 'system', text: `error: ${evt.message ?? 'unknown error'}` });
-          clearAssistantDelta(sid);
-          patchView(sid, { busy: false });
+          if (evt.session_id && evt.message === 'Session is busy' && submittedLinesRef.current[sid]) {
+            const remaining = --submittedLinesRef.current[sid]!;
+            const optimistic = optimisticUserRef.current[sid];
+            if (optimistic) {
+              delete optimisticUserRef.current[sid];
+              patchView(sid, { items: view.items.filter((i) => i !== optimistic), liveTurnStartIndex: null,
+                busy: remaining ? 'line' : false });
+            } else if (!remaining && view.liveTurnStartIndex === null) {
+              patchView(sid, { busy: false });
+            }
+          }
+          // 无归属的侧栏错误不会打断或拆开模型回复。
+          if (!evt.session_id || evt.message === 'Session is busy') {
+            onCommandResultRef.current?.(evt.message ?? 'unknown error', 'error');
+          } else {
+            commitAssistant(sid);
+            pushStatic(sid, { role: 'system', text: `error: ${evt.message ?? 'unknown error'}` });
+          }
           // 挂起的 fork 自动激活一并取消：fork 失败时若不清除，下一次
           // 自发的 web_restore_completed 会把用户拽到错误的会话
           if (pendingActivateRef.current === '__new__' && sid === activeSessionIdRef.current) {
@@ -2104,6 +2339,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
           summary: String(o.summary ?? ''),
           title: String(o.title ?? ''),
         }));
+        sessionListRef.current = items;
         setSessionList(items);
         // 同步各会话视图的静态信息：busy 不覆盖本地实时状态
         // （本地 busy 由 assistant_delta/tool_started/line_complete 事件驱动，
@@ -2114,8 +2350,8 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
           const id = String(item.id ?? '');
           const view = viewPatch[id];
           if (view) {
-            if (!view.materialized) {
-              view.busy = item.busy === true;
+            if (!view.materialized && !view.busy) {
+              view.busy = item.busy === true ? 'line' : false;
             }
             view.phase = item.phase ?? view.phase;
             view.inMemory = item.in_memory !== false;
@@ -2181,6 +2417,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
           : undefined;
         if (evt.cwd && active?.cwd && evt.cwd !== active.cwd) return;
         setSkills((res.skills as SkillSnapshot[]) ?? []);
+        setSlashCommands(res.slash_commands ?? []);
         setPlugins((res.plugins as PluginSnapshot[]) ?? []);
         setRules((res.rules as RuleSnapshot[]) ?? []);
         setMcpServers((res.mcp_servers as McpServerSnapshot[]) ?? []);
@@ -2268,24 +2505,13 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       }
       if (evt.type === 'web_file_mentions') {
         // @ 提及补全候选：requestId 不匹配的迟到响应由 PromptInput 侧丢弃；
-        // 分区顺序 skills → sessions → files（优先级 Skills > Sessions > Files），
-        // kind 供菜单分区渲染。直通订阅方不落状态：补全按击键高频往返，
-        // 进状态会拖累整页渲染
+        // @ 仅展示会话与文件。旧后端可能仍附带 skills，忽略该分区。
         const payload = evt.web_file_mentions;
         if (payload) {
           const result = {
             requestId: evt.request_id ?? '',
             query: payload.query,
-            candidates: [
-              ...(payload.skills ?? []).map((s) => ({ path: s.name, kind: 'skill' as const, description: s.description })),
-              ...(payload.sessions ?? []).map((s) => ({
-                path: s.path,
-                kind: 'session' as const,
-                description: s.description,
-                sessionId: s.sessionId,
-              })),
-              ...(payload.candidates ?? []),
-            ],
+            candidates: fileMentionChoices(payload),
           };
           // 逐监听器隔离异常：单个订阅方抛错不中断其余分发与消息处理
           for (const cb of fileMentionListenersRef.current) {
@@ -2354,24 +2580,20 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
               tb.key === agentKey ? { ...tb, payload: summaryPayload, loading: false } : tb
             )));
           }
-          if (sid) patchView(sid, { busy: false });
           return;
         }
+        const owner = sid ? viewsRef.current[sid]?.busy : false;
+        const ownsQuery = typeof owner === 'object' && owner.queryId === evt.web_request_id;
         if (evt.web_query_kind === 'text' && typeof payload === 'string') {
           // 所有 B 通道指令的文本结果统一走 toast，不渲染到主会话
           if (payload.trim() && onCommandResultRef.current) {
-            onCommandResultRef.current(payload, 'info');
+            onCommandResultRef.current(payload, evt.is_error ? 'error' : 'info');
           }
         } else if (evt.web_query_kind === 'transcript_replace' && Array.isArray(payload)) {
-          const target = routeSessionId(evt) ?? activeSessionIdRef.current;
-          if (target) {
-            patchView(target, {
-              items: payload as TranscriptItem[],
-              transcriptReplaceTick: Date.now(),
-            });
-          }
+          // compact 可先发文本提示再发替换快照；迟到快照不得覆盖新行。
+          if (sid && (ownsQuery || !owner)) replaceTranscript(sid, stripReplayItems(payload as TranscriptItem[]));
         }
-        if (sid) patchView(sid, { busy: false });
+        if (sid && ownsQuery) patchView(sid, { busy: false });
         return;
       }
 
@@ -2487,21 +2709,28 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       if (evt.type === 'shutdown') { ws.close(); }
     }
 
-    return () => { ws.close(); wsRef.current = null; };
-  }, [url, routeSessionId, ensureView, patchView, getBuffer, flushAssistantDelta, clearAssistantDelta, pushStatic, sendRaw, refreshRightPanel, syncBrowserPreviewTabs, clearBrowserStarting]);
+    return () => {
+      ws.onopen = ws.onclose = ws.onerror = ws.onmessage = null;
+      releaseConnectionViews();
+      ws.close();
+      wsRef.current = null;
+    };
+  }, [url, routeSessionId, ensureView, patchView, getBuffer, flushAssistantDelta, discardBuffer, commitAssistant, finishLine, replaceTranscript, pushLiveUser, pushStatic, sendRaw, refreshRightPanel, syncBrowserPreviewTabs, clearBrowserStarting]);
 
   // 首次登录配置保存后手动清除 firstLogin 状态（避免再次打开表单仍显示首次登录）
   const clearFirstLogin = useCallback(() => setFirstLogin(false), []);
 
   return useMemo(() => {
     const view = activeSessionId ? viewsRef.current[activeSessionId] : undefined;
+    const resourcesMatchView = !!resourcesCwd && (!view?.cwd || view.cwd === resourcesCwd);
     return {
       // 活跃会话视图
       staticItems: view?.items ?? [],
+      liveTurnStartIndex: view?.liveTurnStartIndex ?? null,
       assistantBuffer: view?.assistantBuffer ?? '',
       streamingReasoning: view?.streamingReasoning ?? '',
       status: { ...status, ...(view?.status ?? {}) },
-      busy: view?.busy ?? false,
+      busy: !!view?.busy,
       modal: view?.modal ?? null,
       todoItems: view?.todoItems ?? [],
       pendingToolCalls: view?.pendingToolCalls ?? [],
@@ -2511,7 +2740,9 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
         if (id) patchView(id, { restoring: true });
       },
       // 全局状态
-      tasks, commands, mcpServers, skills, plugins, rules, modelOptions,
+      tasks, builtinCommands, mcpServers, skills, rules, modelOptions,
+      plugins: connected && resourcesMatchView && !awaitingNewSession ? plugins : [],
+      slashCommands: view?.cwd && resourcesCwd && view.cwd !== resourcesCwd ? EMPTY_SLASH_COMMANDS : slashCommands,
       agentTasks, fileTree, fileTreeLoadingPaths, gitStatus, gitLoading,
       sessionFiles, sessionFilesLoading,
       turnOutline: view?.turnOutline ?? null,
@@ -2539,7 +2770,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
         const v = viewsRef.current[s.value];
         return {
           ...s,
-          busy: v?.busy ?? s.busy,
+          busy: v ? !!v.busy : s.busy,
           phase: v?.phase ?? s.phase,
           active: s.value === activeSessionId,
           cwd: v?.cwd || s.cwd,
@@ -2577,7 +2808,7 @@ export function useWebSocketSession(url: string): WebSocketSessionState {
       setOnToast,
     };
   }, [
-    status, tasks, commands, mcpServers, skills, plugins, rules, modelOptions,
+    status, tasks, builtinCommands, slashCommands, mcpServers, skills, plugins, rules, modelOptions,
     agentTasks, fileTree, fileTreeLoadingPaths, gitStatus, gitLoading,
     sessionFiles, sessionFilesLoading,
     browserState, browserFrameStore, browserOpActive, browserStarting, markBrowserOpActive,

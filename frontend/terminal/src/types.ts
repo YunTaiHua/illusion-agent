@@ -73,6 +73,8 @@ export type TranscriptItem = {
 	message_id?: string;
 	/** 命令产物标记：命令选择器产生的转录（如 /context set 512000），非真实用户输入 */
 	is_command?: boolean;
+	/** 回放时保留提交当时激活的原始 /token；空表表示未激活任何资源。 */
+	slash_references?: Record<string, SlashCommand['kind']>;
 	/** 结构化输出数据（仅在 role 为 'tool_result' 时存在） */
 	structured_output?: Record<string, unknown>;
 	/** 输出类型：text/diff/search_results/file_list/error */
@@ -219,6 +221,15 @@ export type SwarmNotificationSnapshot = {
 	timestamp: number;
 };
 
+/** 可由用户引用的工作区资源。name 已含 /，保留全部命名空间。 */
+export type SlashCommand = {
+	name: string;
+	kind: 'skill' | 'command';
+	description: string;
+	source?: string;
+	accepts_short_name?: boolean;
+};
+
 /**
  * 后端事件类型
  *
@@ -240,6 +251,8 @@ export type BackendEvent = {
 	mcp_servers?: McpServerSnapshot[] | null;
 	/** 可用命令列表（可选） */
 	commands?: string[] | null;
+	/** ready 或目录更新快照携带，普通状态快照可省略。 */
+	slash_commands?: SlashCommand[] | null;
 	/** 模态对话框配置（可选） */
 	modal?: Record<string, unknown> | null;
 	/** 选择选项列表（可选） */
@@ -319,7 +332,6 @@ export type BackendEvent = {
 	web_file_mentions?: {
 		query: string;
 		candidates: FileMentionCandidate[];
-		skills?: {name: string; description: string}[];
 		sessions?: {sessionId: string; path: string; description?: string; cwd?: string}[];
 		truncated?: boolean;
 	} | null;
@@ -328,15 +340,12 @@ export type BackendEvent = {
 /**
  * @ 提及补全的单个候选
  *
- * 仅名称/路径文本（不读内容）；kind='skill' 表示技能候选（path 字段存技能名），
- * kind='session' 表示会话候选（path 字段存会话标题，sessionId 供插入规范提及文本）。
+ * 文件/目录使用根相对路径；会话使用标题，sessionId 供插入规范引用。
  */
 export type FileMentionCandidate = {
-	/** 根相对路径（/ 分隔）、技能名或会话标题 */
 	path: string;
-	/** 候选类型：dir=目录、file=文件、skill=技能、session=会话 */
-	kind: 'dir' | 'file' | 'skill' | 'session';
-	/** 技能描述或会话描述「轮次 · 时间」（仅 skill/session 候选携带） */
+	kind: 'dir' | 'file' | 'session';
+	/** 会话描述「轮次 · 时间」 */
 	description?: string;
 	/** 源会话 ID（仅 session 候选携带，插入提及文本用） */
 	sessionId?: string;

@@ -13,7 +13,7 @@ import { t, type UiLanguage } from '../i18n';
 import AutoScrollText from './AutoScrollText';
 import { CollapsibleSection } from './RightPanel';
 import type { FileTreeNode } from '../types/protocol';
-import { ChevronRightIcon, FileIcon as FileGlyphIcon, FolderClosedIcon, FolderOpenIcon, FolderOutlineIcon } from './icons';
+import { ChevronRightIcon, FolderClosedIcon, FolderOpenIcon, FolderOutlineIcon, TreeFileIcon } from './icons';
 
 /**
  * FileTreeSection 组件属性接口
@@ -32,23 +32,6 @@ interface FileTreeSectionProps {
   /** 是否显示区块顶部分隔线（可选，默认显示） */
   topBorder?: boolean;
 }
-
-/** 常见扩展名 → 图标颜色（无映射时用次级文本色） */
-const EXT_COLORS: Record<string, string> = {
-  ts: '#3178c6', tsx: '#3178c6',
-  js: '#b58900', jsx: '#b58900', mjs: '#b58900', cjs: '#b58900',
-  py: '#3572a5', pyi: '#3572a5',
-  json: '#a0752a', jsonc: '#a0752a',
-  md: '#6f42c1', mdx: '#6f42c1',
-  css: '#563d7c', scss: '#563d7c', less: '#563d7c',
-  html: '#e34c26', xml: '#e34c26', svg: '#e34c26', vue: '#41b883',
-  rs: '#b7410e', go: '#008080', java: '#b07219',
-  c: '#555555', h: '#555555', cpp: '#f34b7d', hpp: '#f34b7d',
-  sh: '#4e9a3d', bash: '#4e9a3d', ps1: '#012456',
-  yml: '#6f42c1', yaml: '#6f42c1', toml: '#6f42c1', ini: '#6f42c1',
-  sql: '#e38c00', rb: '#701516', php: '#4f5d95', swift: '#f05138',
-  txt: '#8b949e', lock: '#8b949e',
-};
 
 /**
  * 文件树区块组件
@@ -188,7 +171,7 @@ function TreeRows({
           >
             {/* 与目录行的三角指示器等宽占位，保持图标纵向对齐 */}
             <span className="w-3 shrink-0" />
-            <FileIcon name={node.name} />
+            <TreeFileIcon name={node.name} />
             <AutoScrollText trigger="parent" className="text-content-secondary flex-1 min-w-0 text-left">
               {node.name}
             </AutoScrollText>
@@ -203,10 +186,4 @@ function TreeRows({
 function FolderIcon({ open }: { open: boolean }) {
   const cls = 'w-3.5 h-3.5 shrink-0 text-content-secondary';
   return open ? <FolderOpenIcon className={cls} /> : <FolderClosedIcon className={cls} />;
-}
-
-/** 文件图标（按扩展名着色；复用 icons.tsx 的 FileIcon） */
-function FileIcon({ name }: { name: string }) {
-  const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
-  return <FileGlyphIcon className="w-3.5 h-3.5 shrink-0" color={EXT_COLORS[ext]} />;
 }

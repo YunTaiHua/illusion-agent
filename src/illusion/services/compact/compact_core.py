@@ -68,7 +68,7 @@ async def compact_conversation(
             async for event in api_client.stream_message(
                 ApiMessageRequest(
                     model=model,
-                    messages=compact_messages_list,
+                    messages=[message.for_model() for message in compact_messages_list],
                     system_prompt=system_prompt or "You are a conversation summarizer.",
                     max_tokens=MAX_OUTPUT_TOKENS_FOR_SUMMARY,
                     tools=[],

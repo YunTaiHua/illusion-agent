@@ -53,9 +53,7 @@ from illusion.config.capabilities import ModelCapabilities
 from illusion.engine.messages import (
     ContentBlock,
     ConversationMessage,
-    MediaBlock,
     TextBlock,
-    ThinkingBlock,
     ToolResultBlock,
     ToolUseBlock,
     _build_tool_result_content,
@@ -834,7 +832,7 @@ async def run_query(
             async for event in context.api_client.stream_message(  # type: ignore[attr-defined]
                 ApiMessageRequest(
                     model=context.model,
-                    messages=messages,
+                    messages=[message.for_model() for message in messages],
                     system_prompt=context.system_prompt,
                     max_tokens=context.max_tokens,
                     tools=context.tool_registry.to_api_schema(),
@@ -1191,7 +1189,7 @@ async def run_query(
         # 将工具结果作为用户消息添加到历史记录
         # 钩子 additionalContext 合并到同一 user 消息中（作为 TextBlock 追加在
         # tool_result 之后），保持 tool_use→tool_result 紧邻不变量。
-        all_results: list[TextBlock | ToolUseBlock | ToolResultBlock | ThinkingBlock | MediaBlock] = [r for r in tool_results_list if r is not None]
+        all_results: list[ContentBlock] = [r for r in tool_results_list if r is not None]
         for ctx in all_hook_ctxs:
             all_results.append(TextBlock(text=_wrap_in_system_reminder(ctx)))
         messages.append(ConversationMessage(role="user", content=all_results))

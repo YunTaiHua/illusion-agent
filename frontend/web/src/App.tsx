@@ -21,6 +21,8 @@ import { useTheme } from './hooks/useTheme';
 import Sidebar, { SidebarControls } from './components/Sidebar';
 import ChatArea from './components/ChatArea';
 import PromptInput, { type PromptInputHandle } from './components/PromptInput';
+import { buildSlashCatalog, builtinForLine } from './utils/slashTokens';
+import { SlashCatalogContext } from './utils/mention';
 import Toolbar from './components/Toolbar';
 import RightPanel, { RightPanelControls } from './components/RightPanel';
 import TitleBar from './components/TitleBar';
@@ -32,7 +34,7 @@ import { CustomInputModal } from './components/CustomInputModal';
 import { SetupForm } from './components/SetupForm';
 import { GoalBar } from './components/GoalBar';
 import { ToastMarkdown } from './components/ToastMarkdown';
-import type { GoalStatus } from './types/protocol';
+import type { GoalStatus, PluginSnapshot } from './types/protocol';
 import { PICK_ELEMENT_SCRIPT } from './lib/webElementPickerScript';
 import {
   buildPromptWithWebElementContexts,
@@ -100,6 +102,20 @@ const MAX_RIGHT_STACK_RATIO = 0.5;
  */
 export default function App() {
   const session = useWebSocketSession(WS_URL);
+  const slashCatalog = useMemo(() => buildSlashCatalog(session.builtinCommands, session.slashCommands),
+    [session.builtinCommands, session.slashCommands]);
+
+  const handlePluginToggle = useCallback((plugin: PluginSnapshot, enabled: boolean) => {
+    // 绑定生成该插件行的资源快照，切换会话时也能校验操作的目标。
+    if (!session.connected || !session.resourcesCwd) return;
+    session.sendRequest({
+      type: 'web_plugin_toggle',
+      setting_key: plugin.name,
+      setting_value: enabled,
+      plugin_scope: plugin.scope,
+      cwd: session.resourcesCwd,
+    });
+  }, [session.connected, session.resourcesCwd, session.sendRequest]);
 
   // 在 App 顶层应用主题（dark class 写到 <html>）。
   // 主界面在遮罩褪去前不渲染，若只靠子组件的 useTheme 挂载来应用主题，
@@ -637,8 +653,9 @@ export default function App() {
     const trimmed = line.trim();
 
     // 通道 1：B 类斜杠指令 → web_query（精细化处理，不经过命令注册表）
-    if (trimmed.startsWith('/')) {
-      const cmdName = trimmed.slice(1).split(/\s+/)[0] ?? '';
+    const builtin = builtinForLine(line, slashCatalog);
+    if (builtin) {
+      const cmdName = builtin.slice(1);
       const args = trimmed.slice(1 + cmdName.length).trim();
 
       // /rename（无参数）→ 弹出会话选择器
@@ -700,8 +717,8 @@ export default function App() {
       }
     }
 
-    // 通道 2：所有其他输入（含 /resume、/model 等非 B 类指令）→ 当 user 消息发给 LLM
-    // treat_as_text=true 告诉后端跳过命令注册表，直接当文本提交给 LLM
+    // 普通消息与动态资源共用文本通道。保留原文用于显示、恢复和重生成，
+    // 后端只在模型提交边界展开匹配的工作区资源。
     // 拾取附件（pill）在此提交边界序列化为 `# Web page elements:` 尾块
     // （与composer 一致），发送后清空、不跨轮次残留；斜杠指令
     // （通道 1）不携带上下文
@@ -1279,7 +1296,7 @@ export default function App() {
             (t.status === 'in_progress' || t.status === 'pending') &&
             t.metadata?.owner_session_id === session.activeSessionId,
         )}
-        commands={session.commands} onSubmit={handleSubmit} onStop={handleStop} stopping={session.stopping}
+        onSubmit={handleSubmit} onStop={handleStop} stopping={session.stopping}
         inlineOptions={session.inlineOptions} onInlineSelect={handleInlineSelect} onInlineClose={handleInlineClose}
         workspaces={session.workspaces} activeCwd={session.activeWorkspaceCwd}
         welcomeVisible={welcomeVisible}
@@ -1308,6 +1325,7 @@ export default function App() {
   );
 
   return (
+    <SlashCatalogContext.Provider value={slashCatalog}>
     <div className="flex flex-col h-screen">
       {/* 桌面壳自定义顶部栏：与主内容同门控——遮罩期不渲染，避免品牌图标/字体
           浮在遮罩层上方（浏览器端 TitleBar 本身返回 null） */}
@@ -1329,6 +1347,7 @@ export default function App() {
         onOpenSettings={() => { setSetupInitialTab('settings'); setShowSetupForm(true); }} />
       <div className="flex flex-col flex-1 min-w-0 min-h-0 relative">
         <ChatArea lang={lang} staticItems={session.staticItems} assistantBuffer={session.assistantBuffer}
+          liveTurnStartIndex={session.liveTurnStartIndex}
           streamingReasoning={session.streamingReasoning} pendingToolCalls={session.pendingToolCalls}
           reasoningStreaming={session.reasoningStreaming}
           busy={session.busy} connected={session.connected}
@@ -1435,8 +1454,7 @@ export default function App() {
             expandForBrowser({ activateNewestBrowserTab: true });
             session.sendRequest({ type: 'web_browser_tabs', browser_action: 'new', url });
           }}
-          onPluginToggle={(name, enabled) =>
-            session.sendRequest({ type: 'web_plugin_toggle', setting_key: name, setting_value: enabled })}
+          onPluginToggle={handlePluginToggle}
         />
       </div>
       )}
@@ -1660,8 +1678,7 @@ export default function App() {
           onClose={handleCloseSetupForm}
           onGoalToggle={handleGoalToggle}
           plugins={session.plugins}
-          onPluginToggle={(name, enabled) =>
-            session.sendRequest({ type: 'web_plugin_toggle', setting_key: name, setting_value: enabled })}
+          onPluginToggle={handlePluginToggle}
           sendSetting={(key, value) =>
             session.sendRequest({ type: 'web_set_setting', setting_key: key, setting_value: value })}
         />
@@ -1725,6 +1742,7 @@ export default function App() {
         rootDirLabel={session.activePreviewTab?.synthetic ? null : previewRootLabel}
         onClose={() => setPreviewPopOut(false)} />
     </div>
+    </SlashCatalogContext.Provider>
   );
 }
 

@@ -1,37 +1,11 @@
-"""
-@ 提及补全共享模块
-==================
-
-提供 terminal 与 web 两个前端共用的 @ 提及（@file / @skill）补全候选收集：
-
-    - normalize_mention_query: 查询串规范化
-    - file_mention_candidates: 工作区内文件/目录路径候选（BFS，不读内容）
-    - skill_mention_candidates: 技能名候选（名称 + 描述）
-
-安全边界：文件候选以工作区根为界 BFS 遍历，过滤规则与文件树一致
-（tree_entry_visible），不会越出根目录；技能候选仅返回名称与描述。
-选中后的提及文本保持普通 prompt 文本，内容由模型自行调用 read 工具获取。
-
-主要组件：
-    - normalize_mention_query: 规范化 @ 提及查询串
-    - file_mention_candidates: 收集文件/目录路径候选
-    - skill_mention_candidates: 收集技能提及候选
-
-使用示例：
-    >>> from illusion.ui.file_mentions import normalize_mention_query
-    >>> normalize_mention_query(".\\src\\ma")
-    'src/ma'
-"""
+"""终端和 Web 共用的文件提及补全：在工作区内按相对路径搜索文件和目录。"""
 
 from __future__ import annotations
 
-import logging
 import os
 from collections import deque
 from pathlib import Path
 from typing import Any
-
-log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # 文件树可见性过滤（与右栏 Files 文件树共用同一规则）
@@ -165,61 +139,3 @@ def file_mention_candidates(root: str, query: str) -> tuple[list[dict[str, Any]]
     if len(candidates) > _MENTION_MAX_CANDIDATES:
         truncated = True
     return candidates[:_MENTION_MAX_CANDIDATES], truncated
-
-
-# @ 技能提及候选上限
-_MENTION_MAX_SKILLS = 8
-
-
-# 技能注册表短 TTL 缓存（补全按击键触发请求，避免每次重读/解析全部 SKILL.md）
-_SKILL_REGISTRY_TTL = 5.0
-_skill_registry_cache: dict[str, tuple[float, Any]] = {}
-
-
-def skill_mention_candidates(cwd: str, query: str) -> list[dict[str, str]]:
-    """收集 @ 技能提及候选（名称 + 描述，按查询串过滤并按相关度排序）。
-
-    与文件候选同走一个补全菜单；匹配为大小写不敏感的子串包含。
-    排序按相关度分层：名称前缀命中 > 名称包含 > 仅描述命中，
-    层内按名称字母序——避免描述含常见字母的长尾技能把精确
-    前缀候选挤出上限窗口。注册表按 cwd 缓存 5 秒（TTL），
-    加载失败返回空列表，补全菜单静默降级。
-
-    Args:
-        cwd: 工作区根目录（技能注册表按此解析用户级/项目级技能）
-        query: 规范化后的查询串
-
-    Returns:
-        list[dict[str, str]]: 候选列表，元素为 {name, description}
-    """
-    import time
-
-    now = time.monotonic()
-    cached = _skill_registry_cache.get(cwd)
-    if cached is not None and now - cached[0] <= _SKILL_REGISTRY_TTL:
-        registry = cached[1]
-    else:
-        try:
-            from illusion.skills.loader import load_skill_registry
-            registry = load_skill_registry(cwd)
-        except Exception:
-            log.exception("收集技能提及候选失败")
-            return []
-        _skill_registry_cache[cwd] = (now, registry)
-    lowered = query.lower()
-
-    def _rank(s: dict[str, str]) -> tuple[int, str]:
-        name = s["name"].lower()
-        if not lowered or name.startswith(lowered):
-            return (0, name)
-        if lowered in name:
-            return (1, name)
-        return (2, name)
-
-    skills = [
-        {"name": s.name, "description": s.description or ""}
-        for s in registry.list_skills()
-        if lowered in s.name.lower() or lowered in (s.description or "").lower()
-    ]
-    skills.sort(key=_rank)
-    return skills[:_MENTION_MAX_SKILLS]

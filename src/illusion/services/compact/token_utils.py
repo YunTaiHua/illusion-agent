@@ -9,6 +9,7 @@ import logging
 from illusion.engine.messages import (
     ConversationMessage,
     MediaBlock,
+    SlashResourceBlock,
     TextBlock,
     ThinkingBlock,
     ToolResultBlock,
@@ -34,7 +35,7 @@ def estimate_message_tokens(messages: list[ConversationMessage]) -> int:
     total = 0
     for msg in messages:
         for block in msg.content:
-            if isinstance(block, TextBlock):
+            if isinstance(block, (TextBlock, SlashResourceBlock)):
                 total += estimate_tokens(block.text)
             elif isinstance(block, ToolResultBlock):
                 if isinstance(block.content, str):

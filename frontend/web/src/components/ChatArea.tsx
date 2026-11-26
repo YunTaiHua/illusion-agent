@@ -25,12 +25,12 @@ import { t, type UiLanguage } from "../i18n";
 import MessageBubble, {
   PendingToolBubble,
   StreamingBuffer,
+  StreamingReasoning,
   ThinkingBlock,
   useContentCollapse,
 } from "./MessageBubble";
 import {
   computeTurnFileStats,
-  type TurnFileStat,
   useStableTurns,
   useStableToolInputMap,
 } from "../utils/turnGrouping";
@@ -53,15 +53,24 @@ const SMOOTH_SCROLL_GUARD_MS = 420;
 /** 平滑滚动事件忽略窗：平滑滚动进行中的 scroll 事件不参与跟随判定 */
 const SMOOTH_EVENT_IGNORE_MS = 100;
 
+function finalReplyIndex(items: TranscriptItem[]): number {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i]!;
+    // 工具执行期间停止时，工具之前的说明仍属于过程。
+    if (item.role === "tool" || item.role === "tool_result") break;
+    if (item.role === "assistant" && item.text.trim()) return i;
+  }
+  return -1;
+}
+
 /**
  * 将一轮对话的 items 拆分为三部分：
  * - userItems：用户消息（始终可见）
  * - thinkingItems：工具调用 + 中间 assistant 消息（各自独立折叠）
  * - finalAssistant：最后一条含文本的 assistant 消息（始终可见，其 reasoning 独立折叠）
  *
- * 流式阶段（streaming=true）所有 assistant 消息都视作中间消息：
- * 最终回复由 StreamingBuffer 实时展示，避免中间 LLM 消息被误判为最终回复，
- * 导致后续工具调用显示在消息上方、以及复制/回退按钮闪烁等问题。
+ * 进行中的轮次里，所有 assistant 消息和流式正文都属于任务过程。
+ * 整轮完成后才选出最终回复。
  *
  * @param items - 单轮转录项列表
  * @param streaming - 是否处于流式输出阶段
@@ -72,30 +81,7 @@ function splitTurnItems(items: TranscriptItem[], streaming: boolean = false) {
   const thinkingItems: TranscriptItem[] = [];
   let finalAssistant: TranscriptItem | null = null;
 
-  // 流式阶段：所有 assistant 消息归入思考过程，不区分"最终回复"
-  // plan 角色由 ModalCard 专门展示，不在对话流中重复显示
-  if (streaming) {
-    for (const item of items) {
-      if (item.role === "plan") {
-        continue; // 跳过 plan 消息，由 ModalCard 处理
-      }
-      if (item.role === "user") {
-        userItems.push(item);
-      } else {
-        thinkingItems.push(item);
-      }
-    }
-    return { userItems, thinkingItems, finalAssistant };
-  }
-
-  // 完成态：找最后一条有非空 text 的 assistant 消息作为"最终回复"
-  let lastAssistantIdx = -1;
-  for (let i = items.length - 1; i >= 0; i--) {
-    if (items[i]!.role === "assistant" && items[i]!.text.trim()) {
-      lastAssistantIdx = i;
-      break;
-    }
-  }
+  const lastAssistantIdx = streaming ? -1 : finalReplyIndex(items);
 
   for (let i = 0; i < items.length; i++) {
     const item = items[i]!;
@@ -114,62 +100,64 @@ function splitTurnItems(items: TranscriptItem[], streaming: boolean = false) {
   return { userItems, thinkingItems, finalAssistant };
 }
 
-/**
- * "任务完成"折叠区组件（三级标题样式）
- *
- * 将一轮对话中最终回复之前的所有内容（中间 text、工具调用、思考过程、
- * 最终回复的思考过程）再折叠一次（二级折叠），折叠样式与普通折叠区分：
- * - 三级标题"任务完成 >"（展开后箭头变为向下"任务完成 ∨"），字号/字重/颜色
- *   与最终回复 markdown 渲染的 h3（.prose h3）保持一致
- * - 流式阶段标题显示"任务进行中"
- * - 标题下方是一条分隔直线
- *
- * 流式阶段自动展开（内容可见）；轮次完成（streaming=false）时自动折叠。
- * 用户手动操作过的折叠区不被自动状态覆盖（尊重用户选择）。
- *
- * memo 化：children 由 TurnView useMemo 提供（引用稳定），
- * 历史轮次的折叠区不会因其他消息的 token 更新而重渲染。
- *
- * @param props.streaming - 轮次是否仍在流式（流式展开、完成折叠）
- * @param props.lang - UI 语言
- * @param props.hasContent - 折叠内容是否非空（空内容时展开态不渲染内容区）
- * @param props.children - 折叠内容（中间 text、工具行、思考过程）
- */
+interface LiveProcessProps {
+  pendingToolCalls?: PendingToolCall[];
+  assistantBuffer?: string;
+  streamingReasoning?: string;
+  reasoningStreaming?: boolean;
+  liveContentRef?: (node: HTMLDivElement | null) => void;
+}
+
+/** 动态工具占用调用开始时的转录位置。折叠只隐藏已完成的条目。 */
 const TaskCompleteSection = memo(function TaskCompleteSection({
   streaming,
   lang,
-  hasContent,
-  children,
-}: {
+  items,
+  toolInputMap,
+  finalReasoning,
+  pendingToolCalls,
+  assistantBuffer,
+  streamingReasoning,
+  reasoningStreaming,
+  liveContentRef,
+}: LiveProcessProps & {
   streaming: boolean;
   lang: UiLanguage;
-  hasContent: boolean;
-  children: ReactNode;
+  items: TranscriptItem[];
+  toolInputMap: Map<string, Record<string, unknown>>;
+  finalReasoning?: string;
 }) {
-  const [open, setOpen] = useState(streaming);
-  // 用户是否手动操作过（展开/折叠）：手动操作后自动状态变化不再覆盖
-  const interactedRef = useRef(false);
-  // React 官方 "adjusting state during render" 模式：prev 值用 state 存储
-  const [prevStreaming, setPrevStreaming] = useState(streaming);
+  const [openOverride, setOpenOverride] = useState<boolean | null>(null);
+  const open = openOverride ?? streaming;
+  const [textVisible, setTextVisible] = useState(false);
+  const liveReasoning = streamingReasoning?.trim() ? streamingReasoning : undefined;
+  const liveText = assistantBuffer?.trim() ? assistantBuffer : undefined;
+  const rows = useMemo(() => {
+    const pending = new Map(pendingToolCalls?.map(call => [call.tool_use_id, call]));
+    const nodes: ReactNode[] = [];
+    let messageIndex = 0;
+    for (const item of items) {
+      const id = item.tool_use_id;
+      if (item.role === "tool") {
+        const call = id ? pending.get(id) : undefined;
+        if (call) {
+          nodes.push(<PendingToolBubble key={`tool:${id}`} call={call} />);
+          pending.delete(call.tool_use_id);
+        }
+      } else if (open && item.role !== "plan") {
+        const key = item.role === "tool_result" && id ? `tool:${id}` : `message:${messageIndex++}`;
+        nodes.push(<MessageBubble key={key} item={item} toolInputMap={toolInputMap} lang={lang} showActions={false} />);
+      }
+    }
+    // 恢复或老快照可能只有在途工具数据，没有对应的开始条目。
+    for (const call of pending.values()) {
+      nodes.push(<PendingToolBubble key={`tool:${call.tool_use_id}`} call={call} />);
+    }
+    return nodes;
+  }, [items, pendingToolCalls, open, toolInputMap, lang]);
 
-  // streaming 变化（流式开始/完成）时自动同步展开状态；用户手动操作过则不覆盖
-  if (streaming !== prevStreaming) {
-    setPrevStreaming(streaming);
-    if (!interactedRef.current) setOpen(streaming);
-  }
-
-  const handleToggle = () => {
-    interactedRef.current = true;
-    setOpen(!open);
-  };
-
-  // 右键内容区域快速折叠（对齐思考过程的右键折叠）；忽略内层独立折叠区
-  // （思考过程块、工具行）与交互元素，右键中间 text 空白处即收起整个区
   const { handleContextMenu: handleContentContextMenu } = useContentCollapse(
-    () => {
-      interactedRef.current = true;
-      setOpen(false);
-    },
+    () => setOpenOverride(false),
     "[data-thinking-block], [data-tool-row]",
   );
 
@@ -178,7 +166,9 @@ const TaskCompleteSection = memo(function TaskCompleteSection({
       {/* 三级标题：与最终回复 markdown 渲染的 h3（.prose h3 = 1.125em/700/主色）保持一致 */}
       <h3 className="text-lg font-bold text-content-primary">
         <button
-          onClick={handleToggle}
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpenOverride(!open)}
           className="flex items-center gap-2 transition-colors py-1 cursor-pointer"
         >
           <span>
@@ -199,12 +189,19 @@ const TaskCompleteSection = memo(function TaskCompleteSection({
       </h3>
       {/* 标题下方的分隔直线：浅色下 --border-medium 比 border-border-light 清晰可见 */}
       <div className="border-t border-border-medium" />
-      {/* 展开/折叠微动画（简洁 fade：纯透明度 150ms） */}
-      {hasContent && open && (
-        <div className="animate-fade">
-          <div className="mt-1" onContextMenu={handleContentContextMenu}>
-            {children}
-          </div>
+      {(rows.length > 0 || (open && finalReasoning) || liveReasoning || liveText) && (
+        <div className="mt-1" ref={liveContentRef} onContextMenu={handleContentContextMenu}>
+          {rows}
+          {open && finalReasoning && <ThinkingBlock text={finalReasoning} lang={lang} />}
+          {liveReasoning && (
+            <StreamingReasoning
+              text={liveReasoning}
+              lang={lang}
+              streaming={reasoningStreaming}
+              autoCollapsed={!!liveText && textVisible}
+            />
+          )}
+          {liveText && <StreamingBuffer text={liveText} onTextVisibleChange={setTextVisible} />}
         </div>
       )}
     </div>
@@ -214,7 +211,7 @@ const TaskCompleteSection = memo(function TaskCompleteSection({
 /**
  * TurnView 组件属性接口
  */
-interface TurnViewProps {
+interface TurnViewProps extends LiveProcessProps {
   /** 单轮转录项列表（引用稳定：useStableTurns 结构化共享） */
   turn: TranscriptItem[];
   /** 该轮的绝对轮号（1-based：firstLoadedTurn + 本地序号；分叉/导航的定位键） */
@@ -223,10 +220,10 @@ interface TurnViewProps {
   isLastTurn: boolean;
   /** 回退到该轮需回退的轮次数（= 轮数 - 轮序号） */
   turnsToRewind: number;
-  /** 是否忙碌（决定 turnStreaming 判定） */
+  /** 是否忙碌（用于禁用消息操作） */
   busy: boolean;
-  /** 是否存在待处理工具调用（引用稳定，避免 pendingToolCalls 数组变化导致全量重渲染） */
-  hasPendingTools: boolean;
+  /** 当前轮是否仍在流式输出 */
+  turnStreaming: boolean;
   /** 当前 UI 语言 */
   lang: UiLanguage;
   /** 工具输入映射（引用稳定） */
@@ -247,12 +244,7 @@ interface TurnViewProps {
  * 单轮渲染单元（memo 化）
  *
  * 流式 token 更新时，历史轮的 turn / isLastTurn / turnsToRewind / busy /
- * hasPendingTools / toolInputMap / 回调引用全部稳定 → memo 直接短路，
- * 本轮内所有子组件（MessageBubble / TaskCompleteSection）也因引用稳定
- * 跳过 reconcile，最终只有流式缓冲区真正重渲染。
- *
- * @param props - 组件属性
- * @returns 单轮对话的 JSX
+ * toolInputMap / 回调引用稳定，实时内容的变化只影响当前轮。
  */
 const TurnView = memo(function TurnView({
   turn,
@@ -260,7 +252,7 @@ const TurnView = memo(function TurnView({
   isLastTurn,
   turnsToRewind,
   busy,
-  hasPendingTools,
+  turnStreaming,
   lang,
   toolInputMap,
   onRewindToTurn,
@@ -268,53 +260,21 @@ const TurnView = memo(function TurnView({
   onForkTurn,
   hasTopGap,
   onOpenSessionFile,
+  ...liveProcess
 }: TurnViewProps) {
-  // 轮是否仍在流式：busy=true 与 user 消息（transcript_item）存在网络往返
-  // 窗口期——若仅按 busy && isLastTurn 判定，窗口期内旧轮会被误判为流式轮，
-  // 上一条回复的思考过程闪开又折叠。"轮已完成"判定：最后一条是 assistant
-  // 完成消息（tool_started 时 pushStatic 的中间 assistant 消息伴随
-  // pendingToolCalls 非空，排除）。
-  const turnFinished =
-    turn.length > 0 &&
-    turn[turn.length - 1]!.role === "assistant" &&
-    !hasPendingTools;
-  const turnStreaming = busy && isLastTurn && !turnFinished;
-
-  // splitTurnItems 结果仅随 turn / turnStreaming 变化重建
   const { userItems, thinkingItems, finalAssistant } = useMemo(
     () => splitTurnItems(turn, turnStreaming),
     [turn, turnStreaming],
   );
 
-  // 单轮变更统计（本轮对话增量，本地从工具结果累计；流式期间结果未到齐不渲染）。
-  // changedFiles 取首次出现的原样路径（map 键为归一化路径），供展示与预览
-  const turnFileStats = useMemo(
-    () =>
-      turnStreaming
-        ? new Map<string, TurnFileStat>()
-        : computeTurnFileStats(turn),
-    [turn, turnStreaming],
-  );
-  const changedFiles = useMemo(
-    () => [...turnFileStats.values()].map((s) => s.raw),
-    [turnFileStats],
-  );
-
-  // 单轮变更条（footer 插槽）：渲染于最终回复正文之后、复制/重新生成按钮
-  // 上方。统计为该轮转录的纯本地派生（引用随 turn 稳定），不依赖会话级
-  // 缓存，历史轮的 memo(MessageBubble) 不受其他轮次影响。
-  const turnFilesFooter = useMemo(
-    () =>
-      changedFiles.length > 0 ? (
-        <TurnFilesBar
-          lang={lang}
-          rawPaths={changedFiles}
-          stats={turnFileStats}
-          onOpenFile={onOpenSessionFile}
-        />
-      ) : null,
-    [changedFiles, turnFileStats, lang, onOpenSessionFile],
-  );
+  const turnFilesFooter = useMemo(() => {
+    if (!finalAssistant) return null;
+    const stats = computeTurnFileStats(turn);
+    return stats.size > 0 ? (
+      <TurnFilesBar lang={lang} rawPaths={[...stats.values()].map(s => s.raw)}
+        stats={stats} onOpenFile={onOpenSessionFile} />
+    ) : null;
+  }, [finalAssistant, turn, lang, onOpenSessionFile]);
 
   // 分叉回调引用稳定：turnNumber 变化时才重建
   const handleFork = useCallback(() => {
@@ -326,35 +286,8 @@ const TurnView = memo(function TurnView({
     onRewindToTurn?.(turnsToRewind);
   }, [onRewindToTurn, turnsToRewind]);
 
-  // 折叠区 children 引用稳定：thinkingItems / toolInputMap 不变则复用，
-  // 保证 memo(TaskCompleteSection) 生效
-  const thinkingChildren = useMemo(
-    () =>
-      thinkingItems.map((item, msgIdx) => (
-        <MessageBubble
-          key={`t-${msgIdx}`}
-          item={item}
-          toolInputMap={toolInputMap}
-          lang={lang}
-          showActions={false}
-        />
-      )),
-    [thinkingItems, toolInputMap, lang],
-  );
-
-  // TaskCompleteSection 的整个 children（含 thinking 列表与最终回复思考块）
-  // 整体 memo，避免 fragment 每次重建导致折叠区 memo 失效
-  const sectionChildren = useMemo(
-    () => (
-      <>
-        {thinkingChildren}
-        {finalAssistant?.reasoning?.trim() && (
-          <ThinkingBlock text={finalAssistant.reasoning} lang={lang} />
-        )}
-      </>
-    ),
-    [thinkingChildren, finalAssistant, lang],
-  );
+  const finalReasoning = finalAssistant?.reasoning?.trim() ? finalAssistant.reasoning : undefined;
+  const hasProcessHistory = thinkingItems.length > 0 || !!finalReasoning;
 
   return (
     <div className={hasTopGap ? "pt-12" : ""} data-turn={turnNumber}>
@@ -367,22 +300,15 @@ const TurnView = memo(function TurnView({
           actionsDisabled={busy}
         />
       ))}
-      {/* 二级折叠："任务完成"大标题区——折叠最终回复之前的所有内容
-          （中间 text、工具行、思考过程、最终回复的思考过程）；
-          流式阶段（turnStreaming）强制渲染显示"任务进行中"标题
-          （即使中间内容尚未推入），完成后自动折叠 */}
-      {(turnStreaming ||
-        thinkingItems.length > 0 ||
-        finalAssistant?.reasoning?.trim()) && (
+      {(turnStreaming || hasProcessHistory) && (
         <TaskCompleteSection
           streaming={turnStreaming}
           lang={lang}
-          hasContent={
-            thinkingItems.length > 0 || !!finalAssistant?.reasoning?.trim()
-          }
-        >
-          {sectionChildren}
-        </TaskCompleteSection>
+          items={thinkingItems}
+          toolInputMap={toolInputMap}
+          finalReasoning={finalReasoning}
+          {...liveProcess}
+        />
       )}
       {finalAssistant && (
         <MessageBubble
@@ -409,6 +335,8 @@ interface ChatAreaProps {
   lang: UiLanguage;
   /** 静态转录项列表 */
   staticItems: TranscriptItem[];
+  /** 当前输入行的转录起点；从该位置起的内容均属于尚未结束的过程。 */
+  liveTurnStartIndex: number | null;
   /** 助手回复缓冲区 */
   assistantBuffer: string;
   /** 流式推理文本 */
@@ -467,6 +395,7 @@ interface ChatAreaProps {
 export default function ChatArea({
   lang,
   staticItems,
+  liveTurnStartIndex,
   assistantBuffer,
   streamingReasoning,
   pendingToolCalls,
@@ -489,26 +418,56 @@ export default function ChatArea({
   children,
 }: ChatAreaProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  /** 流式缓冲区容器：ResizeObserver 跟随已揭示文本的高度增长（rAF 揭示不经过 assistantBuffer） */
-  const streamBufferRef = useRef<HTMLDivElement>(null);
   const [showScrollDown, setShowScrollDown] = useState(false);
   // 本地折叠：除最新 COLLAPSE_TURN_THRESHOLD 轮外，点"加载更多"每次多显示
-  // LOCAL_REVEAL_TURNS 轮；与服务端分页（unloadedTurns）共用同一个按钮
+  // LOCAL_REVEAL_TURNS 轮；与服务端分页（加载更多）共用同一个按钮
   const [expandedCount, setExpandedCount] = useState(0);
-  // 是否跟随底部（对齐 kimi-code 的弱跟随）：用户向上滚动即停止跟随，
-  // 恢复仅通过"向下滚动回底部附近"或点击"回到底部"按钮
+  // 是否跟随底部：用户向上滚动即停止跟随，恢复仅通过回到底部附近或按钮
   const followingRef = useRef(true);
   const lastScrollTopRef = useRef(0);
-  // 平滑滚动保护（参考 kimi-code）：平滑滚动期间跳过 instant 跟随与滚动事件判定
+  // 平滑滚动保护：平滑滚动期间跳过 instant 跟随与滚动事件判定
   const lastSmoothScrollAtRef = useRef(0);
   const smoothScrollGuardUntilRef = useRef(0);
   // 程序滚动标记：auto-scroll 赋值 scrollTop 后派生的 scroll 事件用此忽略
   const programmaticScrollRef = useRef(false);
 
-  // 按用户消息分组为轮次(turn)，每轮以用户消息开头。
-  // 结构化共享：流式追加期间历史轮的数组引用稳定（memo(TurnView) 生效前提）。
-  // 注意：hooks 必须在任何条件返回之前调用（React Rules of Hooks）
-  const turns = useStableTurns(staticItems);
+  // 流式内容长出新行时贴底跟随，与普通增量更新遵守同一滚动保护。
+  const followBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || !followingRef.current) return;
+    if (performance.now() < smoothScrollGuardUntilRef.current) return;
+    const prevTop = el.scrollTop;
+    el.scrollTop = el.scrollHeight;
+    if (el.scrollTop !== prevTop) programmaticScrollRef.current = true;
+  }, []);
+
+  // 实时内容容器随当前轮的工具或思考出现，只在节点实际挂载时建立观察。
+  const liveContentObserverRef = useRef<ResizeObserver | null>(null);
+  const observeLiveContent = useCallback(
+    (node: HTMLDivElement | null) => {
+      liveContentObserverRef.current?.disconnect();
+      liveContentObserverRef.current = null;
+      if (!node) return;
+      const observer = new ResizeObserver(followBottom);
+      observer.observe(node);
+      liveContentObserverRef.current = observer;
+    },
+    [followBottom],
+  );
+
+  // 后台续跑有时没有可见 user。其活动后缀单独显示，上一轮仍保留自己的最终回复。
+  const detachedStart = liveTurnStartIndex !== null && staticItems[liveTurnStartIndex]?.role !== "user"
+    ? liveTurnStartIndex : null;
+  const groupedItems = useMemo(
+    () => detachedStart === null ? staticItems : staticItems.slice(0, detachedStart),
+    [staticItems, detachedStart],
+  );
+  const detachedItems = useMemo(
+    () => detachedStart === null ? null : staticItems.slice(detachedStart),
+    [staticItems, detachedStart],
+  );
+  const turns = useStableTurns(groupedItems);
+  const hasStreamingTurn = liveTurnStartIndex !== null && detachedStart === null;
 
   // 本地折叠裁剪：始终显示最新 (阈值 + expandedCount) 轮；本地全部显示后
   // 由服务端分页（加载更多）继续向前取数
@@ -553,14 +512,8 @@ export default function ChatArea({
   // tool_use_id → tool_input 映射（增量缓存：追加期间 Map 引用稳定）
   const toolInputMap = useStableToolInputMap(staticItems);
 
-  // 最后一条静态消息是否为已完成的 assistant 回复。
-  // assistant_complete 已将最终回复推入 staticItems，但 busy 需等 line_complete
-  // 才置 false；此窗口内 buffers 已清空、无待处理工具，"思考中"指标会误触发。
-  // 用该标志抑制，保证最终回复结束后不再闪现"思考中"。
-  const lastReplyDone = useMemo(() => {
-    if (staticItems.length === 0) return false;
-    return staticItems[staticItems.length - 1]!.role === "assistant";
-  }, [staticItems]);
+  // 此判断只用于等待指示器；模型的一次 assistant_complete 可以接着调用工具或继续输出。
+  const lastReplyDone = staticItems[staticItems.length - 1]?.role === "assistant";
 
   // onRegenerate / onRewindToTurn 经 ref 稳定包装：App 传入的 onRegenerate
   // 依赖 session 对象（每次 patchView 重建），直接透传会导致所有 TurnView
@@ -599,17 +552,13 @@ export default function ChatArea({
         loaded: false,
       }));
     const loaded: TurnNavItem[] = turns.map((turn, i) => {
-      let prompt = "";
-      let response = "";
-      for (const item of turn) {
-        if (item.role === "user" && !prompt) prompt = item.text.slice(0, 80);
-        if (item.role === "assistant" && item.text.trim())
-          response = item.text.trim().slice(0, 120);
-      }
+      const prompt = turn.find(item => item.role === "user")?.text.slice(0, 80) ?? "";
+      const reply = hasStreamingTurn && i === turns.length - 1 ? -1 : finalReplyIndex(turn);
+      const response = turn[reply]?.text.trim().slice(0, 120) ?? "";
       return { turn: firstLoadedTurn + i, prompt, response, loaded: true };
     });
     return [...unloaded, ...loaded];
-  }, [turnOutline, firstLoadedTurn, turns]);
+  }, [turnOutline, firstLoadedTurn, turns, hasStreamingTurn]);
 
   // 当前阅读位置所在轮（视口顶部阅读线命中的 data-turn 行）
   const [activeTurn, setActiveTurn] = useState<number | null>(null);
@@ -969,6 +918,7 @@ export default function ChatArea({
     setShowScrollDown(false); // 跟随到底后隐藏"回到底部"按钮
   }, [
     staticItems,
+    liveTurnStartIndex,
     assistantBuffer,
     streamingReasoning,
     pendingToolCalls,
@@ -1040,25 +990,6 @@ export default function ChatArea({
     ro.observe(el);
     return () => ro.disconnect();
   }, [restoringSessionId]);
-
-  // 平滑揭示在 rAF 中分批写 DOM，高度增长不一定伴随 assistantBuffer 变化；
-  // 用 ResizeObserver 盯住流式块，揭示长出新行时同样贴底跟随。
-  // 依赖用「块是否挂载」布尔值：若用 buffer 字符串，每个 token 都会拆掉重建 RO
-  const hasStreamBlock = !!(busy && (assistantBuffer || streamingReasoning));
-  useEffect(() => {
-    const el = scrollRef.current;
-    const streamEl = streamBufferRef.current;
-    if (!el || !streamEl) return;
-    const ro = new ResizeObserver(() => {
-      if (!followingRef.current) return;
-      if (performance.now() < smoothScrollGuardUntilRef.current) return;
-      const prevTop = el.scrollTop;
-      el.scrollTop = el.scrollHeight;
-      if (el.scrollTop !== prevTop) programmaticScrollRef.current = true;
-    });
-    ro.observe(streamEl);
-    return () => ro.disconnect();
-  }, [hasStreamBlock]);
 
   // 用户发送新消息时强制回到底部（忽略用户是否已停止跟随）。
   // 判据必须是"新 user 消息追加在末尾"而非数量增加：加载更早轮次会把
@@ -1197,19 +1128,26 @@ export default function ChatArea({
               {visibleTurns.map((turn, visIdx) => {
                 const turnIdx = turnOffset + visIdx;
                 const isCommandTurn = turnIsCommand[turnIdx] ?? false;
+                const isLastTurn = turnIdx === turns.length - 1;
+                const turnStreaming = isLastTurn && hasStreamingTurn;
                 return (
                   <TurnView
                     key={firstLoadedTurn + turnIdx}
                     turn={turn}
                     turnNumber={firstLoadedTurn + turnIdx}
-                    isLastTurn={turnIdx === turns.length - 1}
+                    isLastTurn={isLastTurn}
                     turnsToRewind={
                       turnRewindCounts[turnIdx] ?? turns.length - turnIdx
                     }
                     busy={busy}
-                    hasPendingTools={pendingToolCalls.length > 0}
+                    turnStreaming={turnStreaming}
                     lang={lang}
                     toolInputMap={toolInputMap}
+                    pendingToolCalls={turnStreaming ? pendingToolCalls : undefined}
+                    assistantBuffer={turnStreaming ? assistantBuffer : undefined}
+                    streamingReasoning={turnStreaming ? streamingReasoning : undefined}
+                    reasoningStreaming={turnStreaming ? reasoningStreaming : undefined}
+                    liveContentRef={turnStreaming ? observeLiveContent : undefined}
                     onRewindToTurn={
                       !isCommandTurn ? stableOnRewindToTurn : undefined
                     }
@@ -1220,12 +1158,13 @@ export default function ChatArea({
                   />
                 );
               })}
-              {pendingToolCalls.length > 0 && (
-                <div className={turns.length > 0 ? "mt-4" : ""}>
-                  {pendingToolCalls.map((call) => (
-                    <PendingToolBubble key={call.tool_use_id} call={call} />
-                  ))}
-                </div>
+              {detachedItems !== null && (
+                <TaskCompleteSection
+                  streaming lang={lang} items={detachedItems} toolInputMap={toolInputMap}
+                  pendingToolCalls={pendingToolCalls} assistantBuffer={assistantBuffer}
+                  streamingReasoning={streamingReasoning} reasoningStreaming={reasoningStreaming}
+                  liveContentRef={observeLiveContent}
+                />
               )}
               {busy &&
                 !assistantBuffer &&
@@ -1236,19 +1175,6 @@ export default function ChatArea({
                     <ThinkingIndicator lang={lang} />
                   </div>
                 )}
-              {busy && (assistantBuffer || streamingReasoning) && (
-                <div
-                  ref={streamBufferRef}
-                  className={turns.length > 0 ? "mt-4" : ""}
-                >
-                  <StreamingBuffer
-                    text={assistantBuffer}
-                    reasoning={streamingReasoning}
-                    reasoningStreaming={reasoningStreaming}
-                    lang={lang}
-                  />
-                </div>
-              )}
               {modal?.kind === "permission" && (
                 <PermissionCard
                   modal={modal}

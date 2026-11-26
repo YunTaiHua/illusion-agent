@@ -29,6 +29,7 @@ import subprocess
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from weakref import WeakValueDictionary
 
 from illusion.commands.registry import create_default_command_registry
 from illusion.commands.session import resume_handler as _resume_handler
@@ -52,6 +53,7 @@ from illusion.services.session_storage import (
 from illusion.services.session_storage import (
     list_session_snapshots as _list_session_snapshots,
 )
+from illusion.ui.command_catalog import slash_resource_entries
 
 # @ 提及补全候选收集（terminal 与 web 共享，见 illusion.ui.file_mentions）
 from illusion.ui.file_mentions import (
@@ -61,17 +63,25 @@ from illusion.ui.file_mentions import (
     normalize_mention_query as _normalize_mention_query,
 )
 from illusion.ui.file_mentions import (
-    skill_mention_candidates as _skill_mention_candidates,
-)
-from illusion.ui.file_mentions import (
     tree_entry_visible as _tree_entry_visible,
 )
 from illusion.ui.protocol import BackendEvent, FrontendRequest
-from illusion.ui.runtime import RuntimeBundle, build_session_engine
+from illusion.ui.runtime import RuntimeBundle, build_session_engine, user_replay_item
 from illusion.ui.web.session_runtime import SessionRuntime
 
 if TYPE_CHECKING:
+    from illusion.browser import BrowserManager
+    from illusion.hooks.loader import HookRegistry
     from illusion.ui.web.ws_host import WebBackendHost
+
+
+def is_plugin_toggle_command(line: str) -> bool:
+    """只识别命令注册表和 /plugin handler 都会作为启停写操作分发的输入。"""
+    command, _, args = line.strip().partition(" ")
+    if command != "/plugin":
+        return False
+    tokens = args.split(maxsplit=1)
+    return len(tokens) == 2 and tokens[0] in ("enable", "disable")
 
 
 def build_replay_items(replay_messages: list[Any] | None) -> list[dict[str, Any]]:
@@ -101,7 +111,7 @@ def build_replay_items(replay_messages: list[Any] | None) -> list[dict[str, Any]
             # 仅注入 LLM，不参与前端重放渲染
             if msg.text.strip() and not is_task_notification(msg.text) and not is_goal_system_message(msg.text) \
                     and not is_session_reference_snapshot(msg.text):
-                items.append({"role": "user", "text": msg.text})
+                items.append(user_replay_item(msg))
             for block in msg.content:
                 if isinstance(block, ToolResultBlock):
                     items.append({
@@ -144,6 +154,9 @@ def build_replay_items(replay_messages: list[Any] | None) -> list[dict[str, Any]
     return items
 
 log = logging.getLogger(__name__)
+
+# 同一 Web 事件循环的各连接串行执行启停直到 purge 完成。空闲锁随请求释放。
+_plugin_toggle_locks: WeakValueDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = WeakValueDictionary()
 
 # === 长会话分页恢复（左侧轮次导航数据源）===
 
@@ -281,6 +294,12 @@ class WebApiDispatcher:
             log.exception("处理 web 请求 %s 时发生异常", request.type)
             # 异常隔离：发 error 事件而非冒泡，避免拖垮 host
             try:
+                if request.type == "web_plugin_toggle":
+                    await self.emit_plugin_toggle_error(f"切换插件失败: {exc}", request.cwd)
+                    return
+                if request.type == "web_query":
+                    await self._emit_query_error(request, f"处理 {request.type} 失败: {exc}")
+                    return
                 await self._emit(BackendEvent(
                     type="error",
                     message=f"处理 {request.type} 失败: {exc}",
@@ -1078,34 +1097,63 @@ class WebApiDispatcher:
         host = self._host
         if host._bundle is None:
             return
-        bundle = self._resolve_resource_bundle(request)
+        try:
+            bundle = self._resolve_resource_bundle(request, require_match=True)
+        except ValueError as exc:
+            # 切换目录后旧的拉取请求可能迟到，不能向当前对话发送会话级 error。
+            log.debug("忽略过期的资源列表请求: %s", exc)
+            return
         await self._push_resources(bundle)
 
-    def _resolve_resource_bundle(self, request: FrontendRequest) -> RuntimeBundle:
-        """解析资源推送的目标 bundle（会话优先，其次 cwd，最后活跃/默认）。"""
+    def _resolve_resource_bundle(
+        self, request: FrontendRequest, *, require_match: bool = False,
+    ) -> RuntimeBundle:
+        """资源列表及其写操作必须命中宿主持有的目标，过期选择不能回退。"""
+        from illusion.ui.web.ws_host import _cwd_key
+
         host = self._host
-        assert host._bundle is not None
-        if request.session_id:
+        if host._bundle is None:
+            raise ValueError("运行时未就绪")
+        if request.session_id is not None:
             session = host._sessions.get(request.session_id)
             if session is not None:
+                if (
+                    require_match and request.cwd is not None
+                    and _cwd_key(request.cwd) != _cwd_key(session.bundle.cwd)
+                ):
+                    raise ValueError("会话与资源列表的工作区不一致，请刷新资源列表")
                 return session.bundle
-        if request.cwd:
+            if require_match:
+                raise ValueError("资源列表的会话已失效，请刷新资源列表")
+        if request.cwd is not None:
             bundle = host._workspace_bundle_for(request.cwd)
+            if require_match:
+                # 默认 bundle 可独立于工作区索引存在，也须命中同一目录。
+                bundle = bundle or host._bundle
+                if _cwd_key(bundle.cwd) != _cwd_key(request.cwd):
+                    raise ValueError("资源列表的工作区已失效，请刷新资源列表")
             if bundle is not None:
                 return bundle
         return host._active_bundle() or host._bundle
 
-    async def _push_resources(self, bundle: RuntimeBundle) -> None:
-        """推送资源快照（供多处复用）。
+    async def _push_resources(
+        self, bundle: RuntimeBundle, *, snapshot_cache: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
+        """推送该连接的快照。一次跨连接广播可按 cwd 复用磁盘资源，MCP 状态取自本连接。"""
+        from illusion.ui.web.ws_host import _cwd_key
 
-        复用 _collect_resources 收集 skills/plugins/rules/mcp_servers，
-        废弃旧的命令文本正则解析（_parseSkillsResult 等）。
-        事件携带 cwd，前端据此判断资源所属工作区。
-
-        Args:
-            bundle: 运行时 bundle
-        """
-        resources = _collect_resources(bundle)
+        key = _cwd_key(bundle.cwd)
+        if snapshot_cache is not None and key in snapshot_cache:
+            shared = snapshot_cache[key]
+            resources = {
+                **shared,
+                "slash_commands": slash_resource_entries(bundle, shared["skills"]),
+                "mcp_servers": _collect_mcp_statuses(bundle),
+            }
+        else:
+            resources = _collect_resources(bundle)
+            if snapshot_cache is not None:
+                snapshot_cache[key] = resources
         await self._emit(BackendEvent(
             type="web_resources",
             web_resources=resources,
@@ -1350,7 +1398,7 @@ class WebApiDispatcher:
     async def handle_web_request_file_mentions(self, request: FrontendRequest) -> None:
         """收集 @ 提及补全候选并推送 web_file_mentions 事件。
 
-        仅返回工作区内路径、技能名与会话候选（不读内容）。会话候选只查
+        仅返回工作区内路径和会话候选（不读内容）。会话候选只查
         元数据（id/标题/摘要/轮次，磁盘快照 + 内存运行时合并，同工作区
         优先），排除发起请求的当前会话；选中后的会话提及为规范文本
         ``@[label](illusion-session:<id>)``，内容由引擎在提交边界以只读
@@ -1367,7 +1415,6 @@ class WebApiDispatcher:
         bundle = self._resolve_resource_bundle(request)
         query = _normalize_mention_query(request.query)
         candidates, truncated = await asyncio.to_thread(_file_mention_candidates, bundle.cwd, query)
-        skills = await asyncio.to_thread(_skill_mention_candidates, bundle.cwd, query)
 
         # 会话候选：全部工作区磁盘快照 + 内存运行时合并（线程池扫描，
         # 同 _push_sessions 范式）；排除发起请求的会话（自引用无意义）
@@ -1403,7 +1450,6 @@ class WebApiDispatcher:
             web_file_mentions={
                 "query": query,
                 "candidates": candidates,
-                "skills": skills,
                 "sessions": sessions,
                 "truncated": truncated,
             },
@@ -1580,7 +1626,7 @@ class WebApiDispatcher:
             "system_prompt": agent.system_prompt,
         }
 
-    def _collect_agents_catalog(self) -> dict[str, Any]:
+    def _collect_agents_catalog(self, cwd: str | None = None) -> dict[str, Any]:
         """收集全部代理并按作用域分组（同步，供 to_thread 调用）。
 
         分组：
@@ -1601,6 +1647,10 @@ class WebApiDispatcher:
         from illusion.services import workspace_registry
 
         settings = load_settings()
+        if cwd is None:
+            host = getattr(self, "_host", None)
+            active_bundle = host._active_bundle() if host is not None else None
+            cwd = active_bundle.cwd if active_bundle is not None else None
         global_entries: list[dict[str, Any]] = []
 
         for agent in get_builtin_agent_definitions():
@@ -1627,7 +1677,7 @@ class WebApiDispatcher:
             from illusion.coordinator.agent_definitions import AgentDefinition
             from illusion.plugins.loader import load_plugins as _load_plugins
 
-            for plugin in _load_plugins(_load_settings(), _os.getcwd()):
+            for plugin in _load_plugins(_load_settings(), cwd or _os.getcwd()):
                 if not getattr(plugin, "enabled", True):
                     continue
                 for agent_def in getattr(plugin, "agents", []) or []:
@@ -1654,9 +1704,9 @@ class WebApiDispatcher:
 
         return {"global": global_entries, "projects": projects}
 
-    async def _push_agents(self) -> None:
+    async def _push_agents(self, cwd: str | None = None) -> None:
         """收集并推送 web_agents 事件（供多处复用）。"""
-        catalog = await asyncio.to_thread(self._collect_agents_catalog)
+        catalog = await asyncio.to_thread(self._collect_agents_catalog, cwd)
         await self._emit(BackendEvent(type="web_agents", web_agents=catalog))
 
     async def handle_web_request_agents(self, request: FrontendRequest) -> None:
@@ -1669,7 +1719,8 @@ class WebApiDispatcher:
         if host._bundle is None:
             await self._emit(BackendEvent(type="error", message="运行时未就绪"))
             return
-        await self._push_agents()
+        target_bundle = await asyncio.to_thread(self._resolve_resource_bundle, request)
+        await self._push_agents(target_bundle.cwd)
 
     def _allowed_agents_dirs(self) -> set[str]:
         """返回允许读写的 agents 目录集合（规范化）。
@@ -1889,6 +1940,14 @@ class WebApiDispatcher:
         if bundle is not None:
             await self._push_resources(bundle)
 
+    async def _emit_query_error(self, request: FrontendRequest, message: str) -> None:
+        """失败也按查询请求回执，使它只结束自己的等待状态。"""
+        await self._emit(BackendEvent(
+            type="web_query_result", web_request_id=request.request_id or "",
+            web_command=request.command or "", web_query_kind="text",
+            web_query_payload=message, is_error=True,
+        ), session_id=request.session_id)
+
     async def handle_web_query(self, request: FrontendRequest) -> None:
         """B 通道精细化指令处理。
 
@@ -1901,15 +1960,19 @@ class WebApiDispatcher:
             request: 前端请求（command/args/request_id 必填）
         """
         host = self._host
+        command = request.command or ""
+        line = f"/{command} {request.args or ''}".strip()
+        if is_plugin_toggle_command(line):
+            await self.reject_legacy_plugin_toggle(request)
+            return
         if host._bundle is None:
-            await self._emit(BackendEvent(type="error", message="运行时未就绪"))
+            await self._emit_query_error(request, "运行时未就绪")
             return
         session = host._resolve_session(request.session_id)
         if session is None:
+            await self._emit_query_error(request, "会话尚未就绪")
             return
         bundle = session.bundle
-        command = request.command or ""
-        args = request.args or ""
         request_id = request.request_id or ""
         session_id = session.session_id
 
@@ -1933,7 +1996,7 @@ class WebApiDispatcher:
 
         # 执行型/查询型（compact/export/init 及无参查询）：复用 registry handler
         # （rename 跨工作区时 bundle 已切换为目标会话所属工作区）
-        result = await _run_command_via_registry(f"/{command} {args}".strip(), bundle)
+        result = await _run_command_via_registry(line, bundle)
         if result is None:
             # 已通过 select_request 或其他机制处理
             return
@@ -1968,11 +2031,11 @@ class WebApiDispatcher:
 
     def _browser_manager(self, request: FrontendRequest) -> Any | None:
         """解析浏览器管理器（目标工作区 bundle 持有；未启用时 None）。"""
-        host = self._host
-        if host._bundle is None:
+        try:
+            bundle = self._resolve_resource_bundle(request, require_match=True)
+        except ValueError:
             return None
-        bundle = self._resolve_resource_bundle(request)
-        return getattr(bundle, "browser_manager", None)
+        return bundle.browser_manager
 
     async def _push_browser_state(self, manager: Any, error: str | None = None) -> None:
         """把浏览器当前状态推给前端（面板打开/Tab 变化；error=最近一次导航失败）。"""
@@ -2336,140 +2399,149 @@ class WebApiDispatcher:
 
     # === 插件启用/禁用开关（右栏插件列表 + 设置页插件 Tab）===
 
+    async def emit_plugin_toggle_error(self, message: str, cwd: str | None = None) -> None:
+        """插件写入反馈独立于正在运行的会话。"""
+        await self._emit(BackendEvent(type="web_plugin_toggle_error", message=message, cwd=cwd))
+
+    async def reject_legacy_plugin_toggle(self, request: FrontendRequest) -> None:
+        """Web 只在插件面板提供启停操作。"""
+        await self.emit_plugin_toggle_error("请在插件面板中启用或禁用插件", request.cwd)
+
     async def handle_web_plugin_toggle(self, request: FrontendRequest) -> None:
-        """切换插件启用状态并热生效。
+        """另一标签页重新启用浏览器前，先完成上一次禁用的 purge 和推送。"""
+        lock = _plugin_toggle_locks.setdefault(asyncio.get_running_loop(), asyncio.Lock())
+        async with lock:
+            await self._set_plugin_and_refresh(request)
 
-        写入 settings.enabled_plugins 后，对现存会话做外科手术式热切换：
-        browser-use 插件——注册/注销 12 个 browser_* 工具并创建/关闭
-        BrowserManager；技能列表天然随下一次系统提示词重建生效
-        （load_skill_registry 每次重扫插件）。最后推送新资源快照。
-        """
+    async def _set_plugin_and_refresh(self, request: FrontendRequest) -> None:
+        """先在资源列表所属工作区持久化一次，再刷新各活跃宿主的有效运行时。"""
+        from illusion.plugins.loader import set_plugin_enabled
+        from illusion.ui.web.ws_host import _cwd_key, iter_active_hosts
+
         host = self._host
-        name = (request.setting_key or "").strip()  # 插件名（setting_key 复用）
-        enabled = bool(request.setting_value)
-        if not name:
-            return
-        settings = _load_settings()
-        settings.enabled_plugins[name] = enabled
-        _save_settings(settings)
-
-        handled_engines: set[int] = set()
-        new_hook_by_cwd: dict[str, Any] = {}
-        for bundle in host._workspace_bundles():
-            try:
-                if name == "browser-use":
-                    # 工作区 bundle（管理器生命周期 + bundle 原引擎）+ 全部活会话引擎：
-                    # build_session_engine 对 tool_metadata 做了创建时快照拷贝，只更新
-                    # bundle 原引擎的话，用户正在对话的会话引擎拿到的仍是旧元数据
-                    # （browser_manager 缺失 → 工具调用报"插件未启用"）
-                    await self._hot_toggle_browser_tools(bundle, enabled)
-                    handled_engines.add(id(bundle.engine))
-                # 插件钩子热生效（所有插件）：重建 bundle 级 HookExecutor
-                self._rebuild_hook_executor(bundle)
-                new_hook_by_cwd[str(bundle.cwd)] = bundle.hook_executor
-            except Exception:
-                log.exception("热切换插件失败: cwd=%s", bundle.cwd)
-        if name == "browser-use":
-            # 会话级 bundle 是工作区 bundle 的浅拷贝（browser_manager /
-            # hook_executor 是创建那一刻的引用快照）：逐会话把新管理器/
-            # 新执行器回绑，并补齐会话引擎的元数据快照，否则该会话永远
-            # 拿不到 browser_manager（工具调用报"插件未启用"）
-            managers_by_cwd = {
-                str(b.cwd): getattr(b, "browser_manager", None)
-                for b in host._workspace_bundles()
-            }
-            for session in getattr(host, "_sessions", {}).values():
-                engine = getattr(session, "engine", None)
-                s_bundle = getattr(session, "bundle", None)
-                if engine is None or s_bundle is None or id(engine) in handled_engines:
-                    continue
-                try:
-                    manager = managers_by_cwd.get(str(s_bundle.cwd)) or next(
-                        (m for m in managers_by_cwd.values() if m is not None), None)
-                    self._apply_browser_toggle(
-                        engine, s_bundle.tool_registry, manager, enabled)
-                    handled_engines.add(id(engine))
-                    if enabled and getattr(s_bundle, "browser_manager", None) is None:
-                        s_bundle.browser_manager = manager
-                    new_hook = new_hook_by_cwd.get(str(s_bundle.cwd))
-                    if new_hook is not None:
-                        s_bundle.hook_executor = new_hook
-                except Exception:
-                    log.exception("热切换 browser-use 会话引擎失败: sid=%s",
-                                  getattr(session, "session_id", "?"))
-
-        # 推送新资源快照（插件/技能列表即时刷新）
+        name = (request.setting_key or "").strip()
+        enabled = request.setting_value
+        cwd = request.cwd
         try:
-            resource_bundle = host._active_bundle() or host._bundle
-            if resource_bundle is not None:
-                await self._push_resources(resource_bundle)
-        except Exception:
-            log.exception("推送插件切换后的资源快照失败")
+            target = self._resolve_resource_bundle(request, require_match=True)
+            cwd = target.cwd
+            if not name or not isinstance(enabled, bool):
+                raise ValueError("切换插件需要插件名和布尔启用状态")
+            scope = set_plugin_enabled(name, enabled, cwd, scope=request.plugin_scope)
+        except ValueError as exc:
+            await self.emit_plugin_toggle_error(str(exc), cwd)
+            return
+
+        target_key = _cwd_key(cwd)
+        project_key = target_key if scope == "project" else None
+        peers = [host, *(p for p in iter_active_hosts() if p is not host and p._bundle is not None and not p._ws_closed)]
+        views: dict[str, tuple[HookRegistry, bool]] = {}
+        failed: list[str] = []
+        retired: list[tuple[str, BrowserManager]] = []
+        for peer in peers:
+            api = peer._web_api
+            for key, group in api._plugin_workspace_groups(project_key).items():
+                try:
+                    manager = api._refresh_plugin_workspace(key, group, name, views)
+                    if manager is not None:
+                        retired.append((group[0].cwd, manager))
+                except Exception:
+                    failed.append(group[0].cwd)
+                    log.exception("热切换插件失败: cwd=%s", group[0].cwd)
+        # 全部引擎先同步撤销工具。关闭浏览器可能让出事件循环，此时新会话
+        # 必须从已更新的工作区引擎继承元数据。
+        for retired_cwd, manager in retired:
+            try:
+                await manager.aclose(purge=True)
+            except Exception:
+                failed.append(retired_cwd)
+                log.exception("关闭插件浏览器失败: cwd=%s", retired_cwd)
+
+        # 每个连接只推当前可见的受影响目录，发起方另外刷新原列表所属目录。
+        snapshots = []
+        for peer in peers:
+            active = peer._active_bundle()
+            if active is None:
+                continue
+            active_key = _cwd_key(active.cwd)
+            if project_key is not None and active_key != project_key:
+                continue
+            if peer is not host or active_key != target_key:
+                snapshots.append((peer._web_api, active))
+        snapshots.append((self, target))
+        snapshot_cache: dict[str, dict[str, Any]] = {}
+        for api, bundle in snapshots:
+            try:
+                await api._push_resources(bundle, snapshot_cache=snapshot_cache)
+            except Exception:
+                failed.append(bundle.cwd)
+                log.exception("推送插件资源快照失败: cwd=%s", bundle.cwd)
+        if failed:
+            await self.emit_plugin_toggle_error(f"插件设置已保存，刷新失败: {', '.join(dict.fromkeys(failed))}", cwd)
+            return
         await self._emit(BackendEvent(
-            type="web_setting_changed",
-            setting_key="plugin_toggle",
-            setting_value={"name": name, "enabled": enabled},
+            type="web_setting_changed", cwd=cwd,
+            setting_key="plugin_toggle", setting_value={"name": name, "enabled": enabled},
         ))
 
-    async def _hot_toggle_browser_tools(self, bundle: RuntimeBundle, enabled: bool) -> Any:
-        """对单个 bundle 注册/注销浏览器工具并管理 BrowserManager 生命周期。
+    def _plugin_workspace_groups(self, project_key: str | None) -> dict[str, list[RuntimeBundle]]:
+        """工作区放在会话浅拷贝之前，使 manager 的生命周期归属本连接的工作区。"""
+        from illusion.ui.web.ws_host import _cwd_key
 
-        Returns:
-            Any: 切换后的 BrowserManager（enabled=None 时为 None）。
-        """
+        groups: dict[str, list[RuntimeBundle]] = {}
+        live = {id(b): b for b in self._host._workspace_bundles()}
+        live.update((id(s.bundle), s.bundle) for s in self._host._sessions.values())
+        for bundle in live.values():
+            key = _cwd_key(bundle.cwd)
+            if project_key is None or key == project_key:
+                groups.setdefault(key, []).append(bundle)
+        return groups
+
+    def _refresh_plugin_workspace(
+        self, key: str, bundles: list[RuntimeBundle], name: str, views: dict[str, tuple[HookRegistry, bool]],
+    ) -> BrowserManager | None:
+        """同一 cwd 跨连接复用只读发现结果，各自绑定运行对象。MCP 在 build_runtime 时重建。"""
+        from illusion.hooks.loader import load_hook_registry
+        from illusion.plugins.loader import native_browser_enabled
+
+        if key not in views:
+            workspace = bundles[0]
+            plugins = workspace.current_plugins()
+            hooks = load_hook_registry(workspace.current_settings(), plugins, workspace.cwd)
+            views[key] = hooks, native_browser_enabled(plugins)
+        hooks, browser_enabled = views[key]
+        # 原地更新，已进入查询循环的引擎仍持有此执行器和会话级 hook store。
+        for bundle in bundles:
+            bundle.hook_executor.update_registry(hooks)
+        if name == "browser-use":
+            return self._hot_toggle_browser_tools(bundles, browser_enabled)
+        return None
+
+    def _hot_toggle_browser_tools(self, bundles: list[RuntimeBundle], enabled: bool) -> BrowserManager | None:
+        """浏览器管理器只在同一工作区共享，返回已解除绑定的管理器供异步关闭。"""
         from illusion.browser import BrowserConfig, BrowserManager
+        from illusion.tools.browser_tools import apply_browser_toggle
 
-        settings = bundle.current_settings()
+        workspace = bundles[0]
+        previous = workspace.browser_manager
+        manager = previous if enabled else None
         if enabled:
-            if getattr(bundle, "browser_manager", None) is None:
-                bundle.browser_manager = BrowserManager(BrowserConfig(
+            if manager is None:
+                settings = workspace.current_settings()
+                manager = BrowserManager(BrowserConfig(
                     kernel=settings.browser.kernel,
                     headless=settings.browser.headless,
                     viewport_width=settings.browser.viewport_width,
                     viewport_height=settings.browser.viewport_height,
                     proxy=settings.browser.proxy,
                 ))
-            bundle.browser_manager.on_state_change = self._host._emit_browser_state
-            bundle.browser_manager.on_frame = self._host._emit_browser_frame
-            self._apply_browser_toggle(
-                bundle.engine, bundle.tool_registry, bundle.browser_manager, enabled)
-            return bundle.browser_manager
-        manager = getattr(bundle, "browser_manager", None)
-        if manager is not None:
-            # 禁用插件=彻底关闭：purge 清空 Electron 侧 tabs/webview
-            await manager.aclose(purge=True)
-        bundle.browser_manager = None
-        self._apply_browser_toggle(bundle.engine, bundle.tool_registry, None, enabled)
-        return None
+            manager.on_state_change = self._host._emit_browser_state
+            manager.on_frame = self._host._emit_browser_frame
+        for bundle in bundles:
+            bundle.browser_manager = manager
+            apply_browser_toggle(bundle.engine, bundle.tool_registry, manager, enabled)
+        return None if enabled else previous
 
-    def _apply_browser_toggle(self, engine: Any, registry: Any,
-                              manager: Any, enabled: bool) -> None:
-        """把浏览器工具注册/注销 + browser_manager 元数据落到一个引擎。"""
-        from illusion.tools.browser_tools import apply_browser_toggle
-
-        apply_browser_toggle(engine, registry, manager, enabled)
-
-    def _rebuild_hook_executor(self, bundle: RuntimeBundle) -> None:
-        """按最新设置/插件重建 bundle 级钩子执行器（插件热切换的 hooks 部分）。
-
-        会话运行时共享 bundle.hook_executor，重建即覆盖所有会话；
-        session_hook_store 原样保留（会话级钩子状态不丢）。
-        """
-        from illusion.hooks import HookExecutionContext, HookExecutor
-        from illusion.hooks.loader import load_hook_registry
-        from illusion.plugins.loader import load_plugins
-
-        settings = bundle.current_settings()
-        previous = bundle.hook_executor
-        bundle.hook_executor = HookExecutor(
-            load_hook_registry(settings, load_plugins(settings, bundle.cwd)),
-            HookExecutionContext(
-                cwd=Path(bundle.cwd).resolve(),
-                api_client=bundle.api_client,
-                default_model=settings.active_model_name,
-            ),
-            session_hook_store=previous._session_hook_store,
-        )
 
 def _collect_resources(bundle: RuntimeBundle) -> dict[str, Any]:
     """收集右侧栏资源快照（skills/agents/plugins/rules/mcp_servers）。
@@ -2483,13 +2555,31 @@ def _collect_resources(bundle: RuntimeBundle) -> dict[str, Any]:
     Returns:
         dict[str, Any]: {skills, agents, plugins, rules, mcp_servers} 结构化快照
     """
-    # skills：从技能注册表读取结构化数据
+    # skills：从技能注册表读取结构化数据（kind 区分真技能与插件斜杠命令）
+    # 技能目录可能包含损坏条目（符号链接失效等），加载失败时降级为空
+    # 列表而不是让整个 web_request_resources 请求失败
     from illusion.skills.loader import load_skill_registry
-    skill_registry = load_skill_registry(bundle.cwd)
-    skills = [
-        {"name": s.name, "description": s.description or "", "source": s.source}
-        for s in skill_registry.list_skills()
-    ]
+    skills: list[dict[str, str]] = []
+    slash_commands: list[dict[str, Any]] = []
+    try:
+        skill_registry = load_skill_registry(bundle.cwd)
+        definitions = (
+            skill_registry.list_entries()
+            if hasattr(skill_registry, "list_entries")
+            else skill_registry.list_skills()
+        )
+        skills = [
+            {
+                "name": s.name,
+                "description": s.description or "",
+                "source": s.source,
+                "kind": s.kind,
+            }
+            for s in definitions
+        ]
+        slash_commands = slash_resource_entries(bundle, skills)
+    except Exception:
+        log.exception("收集技能快照失败")
 
     # agents：内置 + 用户级 + 项目级（随 bundle.cwd）+ 插件的合并视图
     agents = []
@@ -2511,16 +2601,16 @@ def _collect_resources(bundle: RuntimeBundle) -> dict[str, Any]:
     plugins = []
     try:
         for plugin in bundle.current_plugins():
-            manifest = getattr(plugin, "manifest", None)
-            name = getattr(manifest, "name", "") if manifest else ""
-            description = getattr(manifest, "description", "") if manifest else ""
             plugins.append({
-                "name": name,
-                "description": description,
-                "enabled": bool(getattr(plugin, "enabled", False)),
-                "skill_count": 0,
-                "mcp_count": 0,
-                "command_count": 0,
+                "name": plugin.name,
+                "description": plugin.description,
+                "scope": plugin.scope,
+                "is_builtin_browser": plugin.is_builtin_browser,
+                "enabled": plugin.enabled,
+                "skill_count": len(plugin.skills),
+                "command_count": len(plugin.commands),
+                "agent_count": len(plugin.agents),
+                "mcp_count": len(plugin.mcp_servers),
             })
     except Exception:
         log.exception("收集插件快照失败")
@@ -2546,7 +2636,18 @@ def _collect_resources(bundle: RuntimeBundle) -> dict[str, Any]:
     except Exception:
         log.exception("收集规则快照失败")
 
-    # mcp_servers：复用 mcp_manager 的连接状态
+    return {
+        "skills": skills,
+        "slash_commands": slash_commands,
+        "agents": agents,
+        "plugins": plugins,
+        "rules": rules,
+        "mcp_servers": _collect_mcp_statuses(bundle),
+    }
+
+
+def _collect_mcp_statuses(bundle: RuntimeBundle) -> list[dict[str, Any]]:
+    """MCP 连接由各自工作区运行时持有，快照按连接采集。"""
     mcp_servers = []
     try:
         for server in bundle.mcp_manager.list_statuses():
@@ -2557,8 +2658,7 @@ def _collect_resources(bundle: RuntimeBundle) -> dict[str, Any]:
             })
     except Exception:
         log.exception("收集 MCP 服务器快照失败")
-
-    return {"skills": skills, "agents": agents, "plugins": plugins, "rules": rules, "mcp_servers": mcp_servers}
+    return mcp_servers
 
 
 # ---------------------------------------------------------------------------

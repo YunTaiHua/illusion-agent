@@ -110,7 +110,7 @@ def _remove_orphaned_tool_results(
             new_blocks.append(block)
 
         if new_blocks:
-            result.append(ConversationMessage(role=msg.role, content=new_blocks))
+            result.append(msg.model_copy(update={"content": new_blocks}))
         else:
             log.warning("Dropping user message that contained only orphaned tool_results")
 

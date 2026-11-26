@@ -413,6 +413,28 @@ export function FileIcon({ className, color }: { className?: string; color?: str
   );
 }
 
+/** 目录树文件和 @ 文件候选沿用同一套扩展名配色。 */
+const TREE_FILE_COLORS: Record<string, string> = {
+  ts: '#3178c6', tsx: '#3178c6',
+  js: '#b58900', jsx: '#b58900', mjs: '#b58900', cjs: '#b58900',
+  py: '#3572a5', pyi: '#3572a5',
+  json: '#a0752a', jsonc: '#a0752a',
+  md: '#6f42c1', mdx: '#6f42c1',
+  css: '#563d7c', scss: '#563d7c', less: '#563d7c',
+  html: '#e34c26', xml: '#e34c26', svg: '#e34c26', vue: '#41b883',
+  rs: '#b7410e', go: '#008080', java: '#b07219',
+  c: '#555555', h: '#555555', cpp: '#f34b7d', hpp: '#f34b7d',
+  sh: '#4e9a3d', bash: '#4e9a3d', ps1: '#012456',
+  yml: '#6f42c1', yaml: '#6f42c1', toml: '#6f42c1', ini: '#6f42c1',
+  sql: '#e38c00', rb: '#701516', php: '#4f5d95', swift: '#f05138',
+  txt: '#8b949e', lock: '#8b949e',
+};
+
+export function TreeFileIcon({ name }: { name: string }) {
+  const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
+  return <FileIcon className="w-3.5 h-3.5 shrink-0" color={TREE_FILE_COLORS[ext]} />;
+}
+
 /** 会话文件行（修改文件铅笔） */
 export function ModifiedFileIcon({ className }: { className?: string }) {
   return (

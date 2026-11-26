@@ -70,6 +70,7 @@ async def test_file_mentions_includes_sessions(tmp_path: Path):
     assert evt.request_id == "m1"
     payload = evt.web_file_mentions
     assert payload is not None
+    assert "skills" not in payload
     assert payload["query"] == "调研"
     assert payload["sessions"] == [{
         "kind": "session",

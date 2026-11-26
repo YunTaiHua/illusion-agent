@@ -12,11 +12,13 @@
  */
 
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {Box, Text, useApp, useInput} from 'ink';
+import {Box, Text, useApp, useInput, type Key} from 'ink';
 
 import {getActivityDescription} from './tools/registry.js';
 import {AgentWizard} from './components/AgentWizard.js';
 import {CommandPicker} from './components/CommandPicker.js';
+import {useComposerDraft, useSlashPicker} from './components/ComposerController.js';
+import {buildCommandCatalog} from './utils/slashCommands.js';
 import {ConversationView} from './components/ConversationView.js';
 import {CustomInputModal} from './components/CustomInputModal.js';
 import {MentionPicker} from './components/MentionPicker.js';
@@ -37,13 +39,6 @@ import type {FrontendConfig, FileMentionCandidate} from './types.js';
 import {fmtTokens} from './utils/fmtTokens.js';
 import {detectMentionToken, formatMentionInsertion, normalizeMentionQuery} from './utils/mention.js';
 import {VERSION} from './version.js';
-
-/**
- * 是否使用原始回车提交模式
- * 当环境变量 ILLUSION_FRONTEND_RAW_RETURN 设置为 '1' 时启用
- * 启用后回车键会直接提交输入内容，而不是触发换行
- */
-const rawReturnSubmit = process.env.ILLUSION_FRONTEND_RAW_RETURN === '1';
 
 /**
  * 脚本化自动化步骤列表
@@ -125,27 +120,22 @@ export function App({config}: {config: FrontendConfig}): React.JSX.Element {
 function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 	const {exit} = useApp();
 	const theme = useTheme();
-	const [input, setInput] = useState('');
+	const draft = useComposerDraft();
+	const {input, setInput, caret, setCaret, cursorReset, replaceDraft} = draft;
 	const [modalInput, setModalInput] = useState('');
 	const [scriptIndex, setScriptIndex] = useState(0);
-	const [pickerIndex, setPickerIndex] = useState(0);
 	const [selectModal, setSelectModal] = useState<SelectModalState>(null);
 	const [selectIndex, setSelectIndex] = useState(0);
 	const [customInputModal, setCustomInputModal] = useState<
 		{prompt: string; command: string; prefixValue?: string; numeric?: boolean} | null
 	>(null);
-	const [cursorReset, setCursorReset] = useState(0);
 	/** 停止请求已发送、等待后端确认（终止过程可能有 1-2s 延迟，期间提示符显示旋转动画） */
 	const [stopping, setStopping] = useState(false);
-	// === @ 提及补全（与 web 端对称：光标处 token 检测 + 防抖请求 + 过期响应丢弃） ===
-	/** 光标位置（MultilineTextInput 上报，token 检测依据） */
-	const [caret, setCaret] = useState(0);
+	// === @ 提及补全（光标处 token 检测 + 防抖请求 + 过期响应丢弃） ===
 	/** 补全菜单当前选中候选索引 */
 	const [mentionIndex, setMentionIndex] = useState(0);
 	/** Esc 关闭后不再弹出；token 变化时重新武装 */
 	const [mentionDismissed, setMentionDismissed] = useState(false);
-	/** 应用提及后的光标位置（cursorReset 重挂载时定位到插入点之后） */
-	const [pendingCaret, setPendingCaret] = useState<number | null>(null);
 	const mentionReqIdRef = useRef(0);
 	/** 已发出的最新请求 id（ref 形式：仅作响应过期判别，不触发渲染，避免往返期间菜单闪没） */
 	const latestMentionReqIdRef = useRef<string | null>(null);
@@ -155,7 +145,7 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 	const [goalKeyMode, setGoalKeyMode] = useState(false);
 	/** goal 快捷键编辑弹窗（预填当前 objective） */
 	const [goalEditModal, setGoalEditModal] = useState(false);
-	const session = useBackendSession(config, () => exit(), (text) => setInput(text));
+	const session = useBackendSession(config, () => exit(), text => replaceDraft(text, text.length));
 	const isPermissionModal = session.modal?.kind === 'permission';
 	const language = normalizeLanguage(session.status.ui_language);
 	// 当前 goal（Ctrl+G 热键与快捷键提示的显示依据；complete 后不可操作）
@@ -195,47 +185,16 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 		return undefined;
 	}, [session.staticItems, session.pendingToolCalls]);
 
-	/**
-	 * 命令提示列表
-	 *
-	 * 根据用户当前输入内容，过滤并排序匹配的命令列表。
-	 * 当输入以 '/' 开头时，显示所有以该前缀开头的可用命令。
-	 * 特别地，当输入仅为 '/' 时，将 '/language' 命令优先显示。
-	 *
-	 * @returns 匹配的命令字符串数组
-	 */
-	const commandHints = useMemo(() => {
-		if (!input.startsWith('/')) {
-			return [] as string[];
-		}
-		const value = input.trimEnd();
-		if (value === '') {
-			return [] as string[];
-		}
-		const matches = session.commands.filter((cmd) => cmd.startsWith(value));
-		if (value === '/') {
-			const preferred = ['/language'];
-			const boosted = preferred.filter((cmd) => matches.includes(cmd));
-			const rest = matches.filter((cmd) => !preferred.includes(cmd));
-			return [...boosted, ...rest];
-		}
-		return matches;
-	}, [session.commands, input]);
-
-	const canShowPicker = input.startsWith('/') && commandHints.length > 0;
-	const showPicker = canShowPicker && !session.busy && !session.modal && !selectModal;
-
-	useEffect(() => {
-		setPickerIndex(0);
-	}, [canShowPicker, commandHints.length, input]);
+	const catalog = useMemo(() => buildCommandCatalog(session.commands, session.slashCommands), [session.commands, session.slashCommands]);
+	const composerActive = session.ready && !session.busy && !session.modal && !selectModal && !customInputModal && !goalKeyMode && !goalEditModal && !showAgentWizard;
+	const slashPicker = useSlashPicker(draft, catalog, composerActive);
+	const showPicker = slashPicker.open;
 
 	// === @ 提及补全（与 web 端 PromptInput 同构的检测/防抖/过期丢弃逻辑） ===
 	/** 光标处提及 token；斜杠命令选择器、忙碌或模态框期间不触发 */
 	const mentionToken = useMemo(
-		() => (showPicker || session.busy || session.modal || selectModal
-			? null
-			: detectMentionToken(input, caret)),
-		[input, caret, showPicker, session.busy, session.modal, selectModal],
+		() => composerActive && !showPicker ? detectMentionToken(input, caret) : null,
+		[input, caret, composerActive, showPicker],
 	);
 	const tokenKey = mentionToken ? `${mentionToken.start}:${mentionToken.query}` : null;
 
@@ -308,20 +267,8 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 		if (!mentionToken) return;
 		const insertion = formatMentionInsertion(candidate);
 		const nextCaret = mentionToken.start + insertion.length;
-		setInput((prev) => prev.slice(0, mentionToken.start) + insertion + prev.slice(mentionToken.end));
-		// 重挂载 MultilineTextInput 并把光标定位到插入点之后（与 web 端 setSelectionRange 对称）
-		setPendingCaret(nextCaret);
-		setCursorReset((c) => c + 1);
-	}, [mentionToken]);
-
-	// 消费 pendingCaret：重挂载（cursorReset 变化）已完成初始化后清理，
-	// 避免残留值污染未来其他路径的 cursorReset 递增（正确光标位置）。
-	// Node 环境无 requestAnimationFrame，用 setTimeout(0) 等价异步清理
-	useEffect(() => {
-		if (pendingCaret === null) return;
-		const timer = setTimeout(() => setPendingCaret(null), 0);
-		return () => clearTimeout(timer);
-	}, [cursorReset, pendingCaret]);
+		replaceDraft(input.slice(0, mentionToken.start) + insertion + input.slice(mentionToken.end), nextCaret);
+	}, [input, mentionToken, replaceDraft]);
 
 	/**
 	 * 动态设置终端窗口/tab 标题为当前会话显示名称
@@ -737,99 +684,22 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 			return;
 		}
 
-		// --- 脚本化原始回车提交 ---
-		if (rawReturnSubmit && key.return) {
-			if (session.modal?.kind === 'question') {
-				session.sendRequest({
-					type: 'question_response',
-					request_id: session.modal.request_id,
-					answer: modalInput,
-				});
-				session.setModal(null);
-				setModalInput('');
-				return;
-			}
-			if (!session.modal && !session.busy && input.trim()) {
-				onSubmit(input);
-				return;
-			}
-		}
+		// 问题/权限对话框与聚焦的 composer 自行处理 Enter 键。
+	});
 
-		// --- 权限确认模态对话框（复用问题卡片 QuestionModal 渲染与键盘交互，见渲染区） ---
-		if (isPermissionModal) {
-			return;
-		}
-
-		// --- 问题模态对话框（在忙碌时也会出现） ---
-		if (session.modal?.kind === 'question') {
-			return;
-		}
-
-		// --- 忙碌时忽略输入 ---
-		if (session.busy) {
-			return;
-		}
-
-		// --- @ 提及补全选择器（优先于命令选择器；输入框导航键已被 suppressNavigation 抑制） ---
+	const handlePickerKey = (key: Key): boolean => {
 		if (showMentionMenu) {
-			if (key.upArrow) {
-				setMentionIndex((i) => Math.max(0, i - 1));
-				return;
-			}
-			if (key.downArrow) {
-				setMentionIndex((i) => Math.min(mentionCandidates.length - 1, i + 1));
-				return;
-			}
-			if (key.return || key.tab) {
+			if (key.upArrow) setMentionIndex(i => Math.max(0, i - 1));
+			else if (key.downArrow) setMentionIndex(i => Math.min(mentionCandidates.length - 1, i + 1));
+			else if (key.return || key.tab) {
 				const picked = mentionCandidates[mentionIndex];
 				if (picked) applyMention(picked);
-				return;
-			}
-			if (key.escape) {
-				setMentionDismissed(true);
-				return;
-			}
+			} else if (key.escape) setMentionDismissed(true);
+			else return false;
+			return true;
 		}
-
-		// --- 命令选择器 ---
-		if (showPicker) {
-			if (key.upArrow) {
-				setPickerIndex((i) => Math.max(0, i - 1));
-				return;
-			}
-			if (key.downArrow) {
-				setPickerIndex((i) => Math.min(commandHints.length - 1, i + 1));
-				return;
-			}
-			if (key.return) {
-				const selected = commandHints[pickerIndex];
-				if (selected) {
-					setInput('');
-					setCursorReset((c) => c + 1);
-					if (!handleCommand(selected)) {
-						onSubmit(selected);
-					}
-				}
-				return;
-			}
-			if (key.tab) {
-				const selected = commandHints[pickerIndex];
-				if (selected) {
-					setInput(selected + ' ');
-					setCursorReset((c) => c + 1);
-				}
-				return;
-			}
-			if (key.escape) {
-				setInput('');
-				setCursorReset((c) => c + 1);
-				return;
-			}
-		}
-
-		// 注意：普通的回车提交由 PromptInput 中的 TextInput 的 onSubmit 处理。
-		// 不要在这里重复处理 — 否则会导致重复请求。
-	});
+		return slashPicker.handleKey(key, onSubmit);
+	};
 
 	/**
 	 * 表单提交处理函数
@@ -970,7 +840,7 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 					showThinking={session.showThinking}
 					language={language}
 					pendingToolCalls={session.pendingToolCalls}
-					commandPickerOpen={showPicker}
+					catalog={catalog}
 				/>
 			</Box>
 
@@ -1047,10 +917,10 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 
 		{/* 命令选择器 */}
 			{showPicker ? (
-				<CommandPicker hints={commandHints} selectedIndex={pickerIndex} totalCommands={session.commands.length} />
+				<CommandPicker hints={slashPicker.hints} selectedIndex={slashPicker.selectedIndex} />
 			) : null}
 
-			{/* @ 提及补全选择器（技能在前、文件在后；按键由 App 层统一拦截） */}
+			{/* @ 文件和会话选择器 */}
 			{!showPicker && showMentionMenu ? (
 				<MentionPicker candidates={mentionCandidates} selectedIndex={mentionIndex} />
 			) : null}
@@ -1151,14 +1021,14 @@ function AppInner({config}: {config: FrontendConfig}): React.JSX.Element {
 			setInput={setInput}
 			onSubmit={onSubmit}
 			toolName={session.busy ? currentToolName : undefined}
-			suppressSubmit={showPicker || goalKeyMode || showMentionMenu}
 			inputFocus={!goalKeyMode}
 			cursorReset={cursorReset}
 			language={language}
 			todoItems={session.todoItems}
 			onCursorChange={setCaret}
-			suppressNavigation={showMentionMenu}
-			initialCursorOffset={pendingCaret ?? undefined}
+			onPickerKey={handlePickerKey}
+			initialCursorOffset={caret}
+			referenceRanges={slashPicker.ranges}
 		/>
 	)}
 

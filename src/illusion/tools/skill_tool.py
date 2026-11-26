@@ -13,6 +13,7 @@ import logging
 
 from pydantic import BaseModel, Field, ValidationError
 
+from illusion.commands.slash_skills import _expand_skill_content
 from illusion.skills.loader import load_skill_registry
 from illusion.tools.base import BaseTool, ToolExecutionContext, ToolResult
 
@@ -43,7 +44,7 @@ This tool does NOT execute anything — it only returns the skill's content (ins
 
 When users ask you to perform tasks, check if any of the available skills match. Skills provide specialized capabilities and domain knowledge.
 
-When users reference a "slash command" or "/<something>" (e.g., "/<skill-name>"), they are referring to a skill. Use this tool to load its instructions.
+When users reference a slash resource such as "/<something>", the runtime expands it before the model turn. Do not use this tool to load commands. Use this tool only for true skills.
 
 How to use:
 - Call this tool with the skill name and optional arguments
@@ -65,27 +66,31 @@ Important:
     async def execute(self, arguments: SkillToolInput, context: ToolExecutionContext) -> ToolResult:
         # 加载技能注册表（涉及大量文件 I/O，委托给线程池避免阻塞事件循环）
         registry = await asyncio.to_thread(load_skill_registry, context.cwd)
-        # 尝试多种名称格式匹配
-        skill = (
-            registry.get(arguments.name)
-            or registry.get(arguments.name.lower())
-            or registry.get(arguments.name.title())
-            or registry.get(arguments.name.replace("-", "_"))
-            or registry.get(arguments.name.replace("_", "-"))
-        )
+        # 查找技能注册表。命令和技能使用独立检索空间，命令不会被此工具误取。
+        # 保留旧有的连字符/下划线输入兼容，同时始终只检索真技能。
+        skill = None
+        for candidate in (
+            arguments.name,
+            arguments.name.replace("-", "_"),
+            arguments.name.replace("_", "-"),
+        ):
+            skill = registry.get(candidate)
+            if skill is not None:
+                break
         if skill is None:
             return ToolResult(output=f"Skill not found: {arguments.name}", is_error=True)
+        if skill.disable_model_invocation:
+            return ToolResult(
+                output=f"Skill cannot be invoked by the model: {arguments.name}",
+                is_error=True,
+            )
 
-        content = skill.content
-
-        # 变量替换
-        if arguments.args and "$ARGUMENTS" in content:
-            content = content.replace("$ARGUMENTS", arguments.args)
-
-        # 插件变量替换
-        if skill.skill_root:
-            content = content.replace("${CLAUDE_PLUGIN_ROOT}", skill.skill_root)
-            content = content.replace("${CLAUDE_SKILL_DIR}", skill.skill_root)
+        content = _expand_skill_content(
+            skill.content,
+            skill.skill_root,
+            arguments.args or "",
+            plugin_root=skill.plugin_root,
+        )
 
         # 注册技能钩子到会话（如果有的话）
         if skill.hooks:

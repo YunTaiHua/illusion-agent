@@ -519,7 +519,7 @@ async def test_handle_file_mentions_emits_candidates(tmp_path):
     """_handle_file_mentions：terminal 通道 @ 提及补全，request_id 回显 + 候选载荷。
 
     与 web 端 handle_web_request_file_mentions 对称：同一共享候选收集，
-    仅返回路径与技能名（不读内容）。
+    仅返回文件路径与会话候选。
     """
 
     (tmp_path / "src").mkdir()
@@ -538,7 +538,8 @@ async def test_handle_file_mentions_emits_candidates(tmp_path):
     assert event.request_id == "m1"
     assert event.web_file_mentions is not None
     payload = event.web_file_mentions
-    # 规范化 query 原样回显；文件命中子串 "ma"（main.py），无技能环境不崩溃
+    # 规范化 query 原样回显；文件命中子串 "ma"（main.py）
+    assert "skills" not in payload
     assert payload["query"] == "ma"
     paths = [c["path"] for c in payload["candidates"]]
     assert any(p.endswith("main.py") for p in paths)

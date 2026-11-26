@@ -2,7 +2,7 @@
  * @fileoverview @ 提及补全选择器
  *
  * terminal 前端的 @ 提及候选菜单，与 web 端补全弹窗对称：
- * - 技能（skills）在前、会话（sessions）居中、文件（files）在后分区展示
+ * - 会话（sessions）与文件（files）依次展示
  * - ↑↓ 导航、Tab/Enter 选中、Esc 关闭（按键由 App 层统一拦截分发）
  *
  * label 做单行截断：Ink 的自动换行在浮动菜单中易引发布局问题，
@@ -32,7 +32,7 @@ const MIN_LABEL_WIDTH = 8;
  * @ 提及补全选择器属性
  */
 type MentionPickerProps = {
-	/** 候选列表（技能在前、会话居中、文件在后；顺序即导航顺序） */
+	/** 候选列表（会话在前、文件在后；顺序即导航顺序） */
 	candidates: FileMentionCandidate[];
 	/** 当前选中索引 */
 	selectedIndex: number;
@@ -41,7 +41,7 @@ type MentionPickerProps = {
 /**
  * @ 提及补全选择器
  *
- * 以浮动列表形式展示当前 @ token 的补全候选，技能/会话/文件分区；
+ * 以浮动列表形式展示当前 @ token 的会话与文件候选；
  * label 单行截断不换行；无候选时返回 null。
  *
  * @param props - 组件属性
@@ -80,7 +80,7 @@ export function MentionPicker({candidates, selectedIndex}: MentionPickerProps): 
 						<Text color={isSelected ? theme.colors.suggestion : theme.colors.muted}>
 							{isSelected ? `${theme.icons.pointer} ` : '  '}
 						</Text>
-						{/* 极简形式：截断后的 label + [skill]/[session]/[dir]/[file] 后缀区分，无图标无描述 */}
+						{/* 显示截断后的名称及会话、目录或文件类型 */}
 						<Text color={isSelected ? theme.colors.suggestion : undefined} bold={isSelected} dimColor={!isSelected}>
 							{label}
 						</Text>

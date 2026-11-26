@@ -97,6 +97,167 @@ async def test_backend_host_processes_command(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_plugin_toggle_refreshes_terminal_slash_resource_types(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ILLUSION_CONFIG_DIR", str(tmp_path / "user"))
+    monkeypatch.setenv("ILLUSION_DATA_DIR", str(tmp_path / "data"))
+    plugin = tmp_path / ".illusion" / "plugins" / "meta"
+    (plugin / "commands").mkdir(parents=True)
+    (plugin / "skills" / "review").mkdir(parents=True)
+    (plugin / "plugin.json").write_text('{"name":"meta"}', encoding="utf-8")
+    for path, name in [(plugin / "commands" / "check.md", "check"), (plugin / "skills" / "review" / "SKILL.md", "review")]:
+        path.write_text(f"---\nname: {name}\ndescription: Fixture {name}\n---\nInstructions.", encoding="utf-8")
+
+    client = StaticApiClient("unused")
+    host = ReactBackendHost(BackendHostConfig(api_client=client))
+    host._bundle = await build_runtime(api_client=client, cwd=str(tmp_path))
+    events = []
+
+    async def capture(event):
+        events.append(event)
+
+    host._emit = capture  # type: ignore[method-assign]
+    try:
+        await start_runtime(host._bundle)
+        for action, expected in [("disable", {}), ("enable", {"/meta:check": "command", "/meta:review": "skill"})]:
+            events.clear()
+            await host._process_line(f"/plugin {action} meta")
+            catalog = next(e for e in events if e.type == "state_snapshot" and e.slash_commands is not None)
+            assert {e["name"]: e["kind"] for e in catalog.slash_commands if e["source"] == "plugin"} == expected
+            assert {n for n in catalog.commands if n.startswith("/meta:")} == set(expected)
+            assert "/exit" in catalog.commands
+            preferences = tmp_path / ".illusion" / "permissions.json"
+            assert json.loads(preferences.read_text(encoding="utf-8")) == {
+                "enabled_plugins": {"meta": action == "enable"}
+            }
+            assert "meta" not in host._bundle.current_settings().enabled_plugins
+            events.clear()
+            await host._process_line("/plugin list")
+            expected_state = "enabled" if action == "enable" else "disabled"
+            assert any(
+                f"meta [{expected_state}] [project]" in (e.command_result_data or {}).get("message", "")
+                for e in events
+            )
+    finally:
+        await close_runtime(host._bundle)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ["project-only", "seeded", "denied"])
+async def test_terminal_browser_plugin_scope_controls_native_tools(tmp_path, monkeypatch, scenario):
+    from illusion.config.settings import Settings, load_settings, save_settings
+
+    # cwd 与进程目录不同，避免命令用进程目录作隐式回退。
+    monkeypatch.chdir(tmp_path)
+    workspace = tmp_path / "workspace"
+    project = workspace / ".illusion" / "plugins" / "browser-use"
+    project.mkdir(parents=True)
+    (project / "plugin.json").write_text('{"name":"browser-use"}', encoding="utf-8")
+    if scenario == "project-only":
+        monkeypatch.setattr("illusion.browser.seeding.seed_builtin_browser_plugin", lambda: None)
+    denied = scenario == "denied"
+    policy = workspace / ".illusion" / "permissions.json"
+    policy.write_text(json.dumps({
+        "enabled_plugins": {"browser-use": True}, "denied_plugins": ["*"] if denied else [],
+    }), encoding="utf-8")
+    before = policy.read_bytes()
+    save_settings(Settings(enabled_plugins={"browser-use": denied}))
+
+    client = StaticApiClient("unused")
+    host = ReactBackendHost(BackendHostConfig(api_client=client))
+    bundle = host._bundle = await build_runtime(api_client=client, cwd=str(workspace))
+    events = []
+
+    async def capture(event):
+        events.append(event)
+
+    def has_browser_tools():
+        return any(tool.name.startswith("browser_") for tool in bundle.tool_registry.list_tools())
+
+    host._emit = capture  # type: ignore[method-assign]
+    try:
+        await start_runtime(bundle)
+        assert bundle.browser_manager is None and not has_browser_tools()
+        await host._process_line("/plugin enable browser-use")
+        assert has_browser_tools() == (scenario == "seeded")
+        assert (bundle.browser_manager is not None) == (scenario == "seeded")
+        assert bundle.engine._tool_metadata.get("browser_manager") is bundle.browser_manager
+        if denied:
+            assert any("denied by project policy" in (e.command_result_data or {}).get("message", "") for e in events)
+        await host._process_line("/plugin disable browser-use")
+        assert not has_browser_tools()
+        assert bundle.browser_manager is None and bundle.engine._tool_metadata.get("browser_manager") is None
+        assert load_settings().enabled_plugins["browser-use"] == denied
+        if scenario == "project-only":
+            assert json.loads(policy.read_text(encoding="utf-8"))["enabled_plugins"] == {"browser-use": False}
+        else:
+            assert policy.read_bytes() == before
+    finally:
+        await close_runtime(bundle)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enable", [False, True])
+async def test_plugin_command_updates_session_end_before_immediate_exit(tmp_path, monkeypatch, enable):
+    from illusion.hooks.types import HookResult
+
+    plugin = tmp_path / ".illusion" / "plugins" / "ending"
+    plugin.mkdir(parents=True)
+    (plugin / "plugin.json").write_text(json.dumps({"name": "ending", "enabled_by_default": not enable}), encoding="utf-8")
+    (plugin / "hooks.json").write_text(json.dumps({
+        "SessionEnd": [{"matcher": "", "hooks": [{"type": "command", "command": "fixture-exit-hook"}]}],
+    }), encoding="utf-8")
+    client = StaticApiClient("unused")
+    host = ReactBackendHost(BackendHostConfig(api_client=client))
+    bundle = host._bundle = await build_runtime(api_client=client, cwd=str(tmp_path))
+    executor = bundle.hook_executor
+    context, session_store = executor._context, executor._session_hook_store
+    calls = []
+
+    async def record(hook, event, payload):
+        calls.append((hook.command, event.value, payload["cwd"]))
+        return HookResult(hook_type=hook.type, success=True)
+
+    monkeypatch.setattr(executor, "_run_command_hook", record)
+    try:
+        await start_runtime(bundle)
+        await host._process_line(f"/plugin {'enable' if enable else 'disable'} ending")
+        assert bundle.hook_executor is executor is bundle.engine._hook_executor
+        assert executor._context is context and executor._session_hook_store is session_store
+    finally:
+        await close_runtime(bundle)
+    assert calls == ([("fixture-exit-hook", "SessionEnd", str(tmp_path))] if enable else [])
+
+
+@pytest.mark.asyncio
+async def test_browser_reenabled_after_startup_closes_the_current_manager(tmp_path, monkeypatch):
+    from illusion.browser import BrowserManager
+    from illusion.config.settings import Settings, save_settings
+
+    save_settings(Settings(enabled_plugins={"browser-use": True}))
+    client = StaticApiClient("unused")
+    host = ReactBackendHost(BackendHostConfig(api_client=client))
+    bundle = host._bundle = await build_runtime(api_client=client, cwd=str(tmp_path))
+    first = bundle.browser_manager
+    closed = []
+
+    async def record_close(manager, *, purge=False):
+        closed.append((manager, purge))
+
+    monkeypatch.setattr(BrowserManager, "aclose", record_close)
+    try:
+        await start_runtime(bundle)
+        await host._process_line("/plugin disable browser-use")
+        assert bundle.browser_manager is None and closed == [(first, True)]
+        await host._process_line("/plugin enable browser-use")
+        second = bundle.browser_manager
+        assert second is not first and second is bundle.engine._tool_metadata["browser_manager"]
+    finally:
+        await close_runtime(bundle)
+    assert closed == [(first, True), (second, False)]
+
+
+@pytest.mark.asyncio
 async def test_backend_host_slash_prefixed_user_message_not_command(tmp_path, monkeypatch):
     """Regression: 以 / 开头但未命中命令注册表的输入是真实用户消息。
 

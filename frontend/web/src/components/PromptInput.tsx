@@ -3,8 +3,8 @@
  *
  * Web 前端的用户输入组件，支持：
  * - 多行文本输入
- * - 命令自动补全（/ 前缀触发）
- * - @ 提及补全（会话引用 / 文件 / 技能；仅插入提及文本，文件内容由模型
+ * - 工作区资源和 Web 内置命令补全（光标处 / 触发）
+ * - @ 提及补全（会话引用 / 文件；仅插入提及文本，文件内容由模型
  *   自行读取，会话内容由引擎在提交边界以只读快照注入）
  * - 内联选项选择
  * - 快捷键支持（Enter 发送、Ctrl+Enter 换行、Esc 关闭）
@@ -17,6 +17,7 @@ import {
   forwardRef,
   Fragment,
   useCallback,
+  useContext,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
@@ -26,37 +27,26 @@ import {
 } from "react";
 import { t, type UiLanguage } from "../i18n";
 import type { FileMentionCandidate, WebWorkspaceItem } from "../types/protocol";
-import { highlightMentions } from "../utils/mention";
+import { highlightMentions, SlashCatalogContext } from "../utils/mention";
+import {
+  builtinForLine, filterSlashChoices, insertSlashChoice, scanPromptTokens,
+  slashAtCaret, slashSection, standaloneToken, type SlashChoice,
+} from "../utils/slashTokens";
 import type { WebElementContextComposerAttachment } from "../lib/webElementContext";
 import WebElementContextAttachmentChip from "./WebElementContextAttachmentChip";
 import {
   CheckIcon,
   FolderClosedIcon,
   GearIcon,
+  ListChecksIcon,
+  McpIcon,
   PlusIcon,
+  SparkleIcon,
   StopIcon,
+  TreeFileIcon,
 } from "./icons";
 
-/**
- * Web 端允许的 B 类指令集合（自动补全只显示这些）
- *
- * A 类指令（new/resume/delete/model/effort/permissions/plan）已完全交由 UI 控件承载，
- * 输入框不识别；其余指令当作普通文本发给 LLM。因此自动补全只列出 B 类指令。
- *
- * 阻塞会话的指令：/compact、/goal（busy 时由 App 端 toast 提示不可用）；
- * 非阻塞指令：/export、/init、/rename、/agent（不改变 busy 状态）。
- * 回退功能由 user 气泡下方的回退按钮承担，/rewind 不再作为输入框指令。 */
-// 自动补全列表：包含所有前端识别的斜杠指令
-// 注意：'/agent' 已移除——agent 创建/管理由设置表单的"代理"标签页（AgentsTab）承担，
-// agent 任务摘要在右栏查看
-// '/goal' 在 App.tsx 中走 submit_line（A 通道命令注册表），后端执行 /goal 命令并驱动 goal 轮次
-export const WEB_COMMANDS = [
-  "/compact",
-  "/export",
-  "/init",
-  "/rename",
-  "/goal",
-];
+const PICKER_ICON_CLASS = "w-3.5 h-3.5 shrink-0 text-content-secondary";
 
 /** 输入框最大高度（px）：内容超过后输入框内部滚动，不再继续撑大 */
 const MAX_TEXTAREA_HEIGHT = 240;
@@ -87,7 +77,7 @@ interface MentionToken {
  * 规则：'@' 必须位于输入开头或空白字符之后（邮箱等文本不触发）；
  * 未加引号时 token 内不允许空格；@" 开启的引号形式允许空格，
  * 出现闭合引号即视为提及结束。会话引用文法（@[label](illusion-session:id)，
- * '[' 开头）由引擎在提交边界解析，不触发文件/技能补全菜单。
+ * '[' 开头）由引擎在提交边界解析，不触发文件补全菜单。
  *
  * @param text - 输入框全文
  * @param pos - 光标位置
@@ -116,7 +106,7 @@ export function detectMentionToken(
  * 会话引用为规范形式 @[label](illusion-session:id)（label 转义 \ 与 ]，
  * 与后端 session_reference 文法一致——转义规则修改需同步后端与终端端）；
  * 名称含空格或引号时用 @"..." 形式；目录保留尾部 / 继续下钻，
- * 文件与技能追加空格闭合 token。
+ * 文件追加空格闭合 token。
  *
  * @param candidate - 选中的候选
  * @returns 插入到输入框的完整文本
@@ -185,8 +175,6 @@ interface PromptInputProps {
   hasActiveTasks?: boolean;
   /** 是否已连接 */
   connected: boolean;
-  /** 可用命令列表 */
-  commands: string[];
   /** 提交回调 */
   onSubmit: (line: string) => void;
   /** 停止回调 */
@@ -252,6 +240,10 @@ export interface PromptInputHandle {
   appendText: (text: string) => void;
 }
 
+function slashChoiceId(choice: SlashChoice): string {
+  return `${choice.kind}:${choice.name.toLowerCase()}`;
+}
+
 const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
   function PromptInput(
     {
@@ -260,7 +252,6 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
       stopping,
       hasActiveTasks,
       connected,
-      commands,
       onSubmit,
       onStop,
       inlineOptions,
@@ -338,9 +329,30 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
       }),
       [],
     );
-    const [showCommands, setShowCommands] = useState(false);
-    const [selectedIndex, setSelectedIndex] = useState(0);
+    const catalog = useContext(SlashCatalogContext);
+    const [focused, setFocused] = useState(false);
+    const [composing, setComposing] = useState(false);
+    const [slashDismissed, setSlashDismissed] = useState(false);
+    const tokens = useMemo(() => scanPromptTokens(value), [value]);
+    const slashToken = useMemo(() => slashAtCaret(value, tokens, caret), [value, tokens, caret]);
+    const allowBuiltins = standaloneToken(value, slashToken);
+    const query = plusOpen ? '' : slashToken?.query ?? '';
+    const menuCommands = useMemo(() => filterSlashChoices(catalog, query, allowBuiltins), [catalog, query, allowBuiltins]);
+    const showCommands = focused && !composing && !activeMenu && !inlineOptions && !slashDismissed && !!slashToken;
+    const showMenu = (plusOpen || showCommands) && menuCommands.length > 0;
+    const [inlineIndex, setInlineIndex] = useState(0);
+    const menuScope = showMenu ? JSON.stringify([activeCwd, plusOpen, slashToken?.start, query, allowBuiltins]) : '';
+    const [selection, setSelection] = useState({ scope: '', id: '' });
+    const selectedIndex = selection.scope === menuScope && selection.id
+      ? Math.max(0, menuCommands.findIndex(cmd => slashChoiceId(cmd) === selection.id)) : 0;
+    const selectedId = showMenu ? slashChoiceId(menuCommands[selectedIndex]!) : '';
+    // 默认/兜底行也要锚定。新查询从其最佳匹配开始；
+    // 同一查询的新快照保持选中名称在原位置不动。
+    if (selection.scope !== menuScope || selection.id !== selectedId) {
+      setSelection({ scope: menuScope, id: selectedId });
+    }
     const listRef = useRef<HTMLDivElement>(null);
+    const selectedCommandRef = useRef<HTMLButtonElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     // 欢迎界面目录为空：必须先在目录按钮中选定目录（新建会话）才能开始对话，
@@ -354,16 +366,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
      * 而 pre-wrap 文本节点的尾部换行在部分布局下也不稳定，导致「内容已换行
      * 但框没长高」。镜像层负责撑高后，高度完全由我们控制。
      */
-    const mirrorNodes = useMemo(() => {
-      const lines = value.split("\n");
-      return lines.map((line, i) => (
-        <Fragment key={i}>
-          {i > 0 && <br />}
-          {/* 空行必须有 NBSP，否则 <br> 后的空行高度为 0，新行「看不见」 */}
-          {line === "" ? "\u00A0" : highlightMentions(line)}
-        </Fragment>
-      ));
-    }, [value]);
+    const mirrorNodes = useMemo(() => highlightMentions(value, catalog, { tokens, mirror: true }), [value, catalog, tokens]);
 
     /**
      * 镜像层内容变化后对齐 DOM 与滚动。
@@ -378,7 +381,9 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
       const ta = textareaRef.current;
       const mirror = mirrorRef.current;
       if (!ta || !mirror) return;
-      if (ta.value !== value) ta.value = value;
+      // React 提交期 autoFocus 可能先于欢迎页 composer 的 onFocus 触发。
+      setFocused(ta.ownerDocument.activeElement === ta);
+      if (!composing && ta.value !== value) ta.value = value;
       if (pendingCaretRef.current != null) {
         const c = pendingCaretRef.current;
         pendingCaretRef.current = null;
@@ -389,7 +394,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
         ta.scrollTop = ta.scrollHeight;
       }
       mirror.scrollTop = ta.scrollTop;
-    }, [value, caret]);
+    }, [value, caret, composing]);
 
     // 点击外部关闭内联选项
     useEffect(() => {
@@ -413,7 +418,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
       const handler = (e: MouseEvent) => {
         const target = e.target as Node;
         if (containerRef.current && !containerRef.current.contains(target)) {
-          setShowCommands(false);
+          setSlashDismissed(true);
           onMenuOpen(null);
           setWsAddMode(false);
         } else if (textareaRef.current && target === textareaRef.current) {
@@ -426,37 +431,16 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
       return () => document.removeEventListener("mousedown", handler);
     }, [showCommands, plusOpen, wsOpen, onMenuOpen]);
 
-    // 自动补全仅显示 B 类指令（与后端 ready 推送的完整命令列表取交集，无交集则用静态集合）
-    const webCommands = useMemo(() => {
-      return commands.length > 0
-        ? WEB_COMMANDS.filter((c) =>
-            commands.some((cmd) => cmd === c || cmd === c.slice(1)),
-          )
-        : WEB_COMMANDS;
-    }, [commands]);
-
-    const filteredCommands = webCommands.filter((cmd) => {
-      const query = value.toLowerCase();
-      return (
-        cmd.toLowerCase().startsWith(query) ||
-        cmd.toLowerCase().includes(query.slice(1))
-      );
-    });
+    useEffect(() => {
+      setInlineIndex(0);
+    }, [inlineOptions, plusOpen]);
 
     useEffect(() => {
-      // 只在命令行元素（data-command-row）中定位，跳过标题等非行子元素——
-      // children[selectedIndex] 会把标题算进索引导致滚动与选中错位（选中项漂出可视区）；
-      // 索引 0 直接回顶：nearest 会把首行顶到滚动区上缘，标题被推出可视区
-      if (showCommands && listRef.current) {
-        if (selectedIndex === 0) {
-          listRef.current.scrollTop = 0;
-        } else {
-          listRef.current
-            .querySelectorAll("[data-command-row]")
-            [selectedIndex]?.scrollIntoView({ block: "nearest" });
-        }
-      }
-    }, [selectedIndex, showCommands]);
+      if (!showMenu || !listRef.current) return;
+      // 在顶部时保持分节标题可见；否则滚动到选中的候选项本身。
+      if (selectedIndex === 0) listRef.current.scrollTop = 0;
+      else selectedCommandRef.current?.scrollIntoView({ block: 'nearest' });
+    }, [selectedIndex, showMenu, menuCommands]);
 
     // === @ 提及补全（仅插入路径文本，不读内容） ===
     // caret 状态已在组件顶部声明（高度贴底判定依赖），此处仅补全提及索引
@@ -540,23 +524,13 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
       mentionToken !== null &&
       !mentionDismissed &&
       mentionCandidates.length > 0 &&
-      !inlineOptions;
+      focused && !composing && !activeMenu && !inlineOptions;
 
-    // 菜单分区：技能最前、会话居中、文件在后（优先级 Skills > Sessions > Files，
-    // 候选顺序即导航顺序，hook 侧已按 skills → sessions → files 合并）；
-    // 行元素带 data-mention-row 供滚动定位
-    const mentionSessionCount = mentionCandidates.filter(
-      (c) => c.kind === "session",
-    ).length;
-    const mentionSkillCount = mentionCandidates.filter(
-      (c) => c.kind === "skill",
-    ).length;
-    // 各分区起始行号：Sessions 紧随 Skills 之后，Files 在两者之后
-    const sessionsStart = mentionSkillCount;
-    const filesStart = mentionSkillCount + mentionSessionCount;
+    // 会话在文件之前；标题不占键盘导航序号。
+    const filesStart = mentionCandidates.filter(c => c.kind === 'session').length;
 
     useEffect(() => {
-      // 索引 0 直接回顶：nearest 会把首行顶到滚动区上缘，标题（Skills/Files）被推出可视区
+      // 索引 0 直接回顶，以免 Sessions/Files 标题滚出可视区
       if (showMentionMenu && mentionListRef.current) {
         if (mentionIndex === 0) {
           mentionListRef.current.scrollTop = 0;
@@ -617,17 +591,13 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
         const newValue = e.target.value;
         // 用户编辑（含 Backspace 删换行）作废待恢复光标，避免与旧换行位置打架
         pendingCaretRef.current = null;
+        setFocused(true);
         setValue(newValue);
         setCaret(e.target.selectionStart ?? newValue.length);
         onMenuOpen(null);
-        setShowCommands(
-          newValue.startsWith("/") &&
-            newValue.length > 0 &&
-            filteredCommands.length > 0 &&
-            !inlineOptions,
-        );
+        setSlashDismissed(false);
       },
-      [filteredCommands.length, inlineOptions, onMenuOpen],
+      [onMenuOpen],
     );
 
     /**
@@ -639,6 +609,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
      */
     const handlePaste = useCallback(
       (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+        if (composing) return;
         const ta = e.currentTarget;
         const raw = e.clipboardData.getData("text/plain");
         if (!raw) return;
@@ -652,56 +623,56 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
         pendingCaretRef.current = nextCaret;
         setValue(next);
         setCaret(nextCaret);
-        setShowCommands(
-          next.startsWith("/") &&
-            next.length > 0 &&
-            filteredCommands.length > 0 &&
-            !inlineOptions,
-        );
-        // 提交后把光标钉在粘贴末尾；仅在内容溢出时滚到底，避免未溢出时的微跳
-        // 光标由 pendingCaret + layout effect 恢复，这里只处理滚动
-        requestAnimationFrame(() => {
-          ta.focus();
-          if (ta.scrollHeight > ta.clientHeight) {
-            ta.scrollTop = ta.scrollHeight;
-            if (mirrorRef.current) mirrorRef.current.scrollTop = ta.scrollTop;
-          }
-        });
+        onMenuOpen(null);
+        setSlashDismissed(false);
       },
-      [value, filteredCommands.length, inlineOptions],
+      [value, onMenuOpen, composing],
     );
 
     const selectCommand = useCallback(
-      (cmd: string) => {
-        if (noWorkspaceOnWelcome) return; // 欢迎界面未选目录时禁止发送（含指令补全）
-        setValue("");
-        setCaret(0);
-        setShowCommands(false);
+      (cmd: SlashChoice) => {
+        const ta = textareaRef.current;
+        if (!ta || composing || !connected) return;
+        if (cmd.kind === 'builtin') {
+          if (!allowBuiltins || noWorkspaceOnWelcome) return;
+          onSubmit(cmd.name);
+          setValue('');
+          setCaret(0);
+        } else {
+          const range = slashToken ?? { start: ta.selectionStart, end: ta.selectionEnd };
+          const next = insertSlashChoice(value, range, cmd.name, !!slashToken);
+          ta.focus();
+          pendingCaretRef.current = next.caret;
+          setValue(next.value);
+          setCaret(next.caret);
+        }
+        setSlashDismissed(true);
         onMenuOpen(null);
-        onSubmit(cmd);
       },
-      [onSubmit, onMenuOpen, noWorkspaceOnWelcome],
+      [allowBuiltins, composing, connected, noWorkspaceOnWelcome, onMenuOpen, onSubmit, slashToken, value],
     );
 
     const handleKeyDown = useCallback(
       (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        // 输入法转换未提交前，Enter/Tab/方向键/Escape 均归 IME 处理。
+        if (composing || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
         // 内联选项模式
-        if (inlineOptions) {
+        if (inlineOptions && !plusOpen) {
           const opts = inlineOptions.options;
           if (e.key === "ArrowDown") {
             e.preventDefault();
-            setSelectedIndex((i) => Math.min(i + 1, opts.length - 1));
+            setInlineIndex((i) => Math.min(i + 1, opts.length - 1));
             return;
           }
           if (e.key === "ArrowUp") {
             e.preventDefault();
-            setSelectedIndex((i) => Math.max(i - 1, 0));
+            setInlineIndex((i) => Math.max(i - 1, 0));
             return;
           }
           if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
             e.preventDefault();
-            if (opts[selectedIndex] && onInlineSelect) {
-              onInlineSelect(inlineOptions.command, opts[selectedIndex].value);
+            if (opts[inlineIndex] && onInlineSelect) {
+              onInlineSelect(inlineOptions.command, opts[inlineIndex].value);
             }
             return;
           }
@@ -743,18 +714,13 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
           }
         }
 
-        // 自动补全模式
-        if (showCommands) {
-          if (e.key === "ArrowDown") {
+        // 「+」与「/」两种模式都只在下方已渲染的候选数组内导航。
+        if (showMenu) {
+          if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
             e.preventDefault();
-            setSelectedIndex((i) =>
-              Math.min(i + 1, filteredCommands.length - 1),
-            );
-            return;
-          }
-          if (e.key === "ArrowUp") {
-            e.preventDefault();
-            setSelectedIndex((i) => Math.max(i - 1, 0));
+            const delta = e.key === 'ArrowDown' ? 1 : -1;
+            const next = Math.max(0, Math.min(menuCommands.length - 1, selectedIndex + delta));
+            setSelection({ scope: menuScope, id: slashChoiceId(menuCommands[next]!) });
             return;
           }
           if (
@@ -762,14 +728,14 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
             (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey)
           ) {
             e.preventDefault();
-            if (filteredCommands[selectedIndex]) {
-              selectCommand(filteredCommands[selectedIndex]);
-            }
+            const picked = menuCommands[selectedIndex];
+            if (picked) selectCommand(picked);
             return;
           }
           if (e.key === "Escape") {
             e.preventDefault();
-            setShowCommands(false);
+            setSlashDismissed(true);
+            onMenuOpen(null);
             return;
           }
         }
@@ -795,18 +761,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
           if (!connected) return;
           // 忙碌时仅放行"已识别指令"（交由 App 判定：阻塞→toast，非阻塞→放行），
           // 未知斜杠（如 /resume）与普通文本仍禁止，避免向忙碌中的会话注入正文
-          if (busy) {
-            const pending = value.trim();
-            if (
-              !(
-                pending &&
-                webCommands.some(
-                  (c) => pending === c || pending.startsWith(`${c} `),
-                )
-              )
-            )
-              return;
-          }
+          if (busy && !builtinForLine(value, catalog)) return;
           const line = value.trim();
           if (!line) return;
           if (noWorkspaceOnWelcome) return; // 欢迎界面未选目录时禁止发送
@@ -814,7 +769,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
           // 始终清空输入框（包括 B 指令触发 inline popup 的情况）
           setValue("");
           setCaret(0);
-          setShowCommands(false);
+          setSlashDismissed(true);
           onMenuOpen(null);
         }
       },
@@ -823,9 +778,12 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
         busy,
         connected,
         onSubmit,
-        showCommands,
-        filteredCommands,
+        showMenu,
+        plusOpen,
+        menuCommands,
+        menuScope,
         selectedIndex,
+        inlineIndex,
         selectCommand,
         inlineOptions,
         onInlineSelect,
@@ -836,7 +794,8 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
         mentionCandidates,
         mentionIndex,
         applyMention,
-        webCommands,
+        catalog,
+        composing,
       ],
     );
 
@@ -845,14 +804,11 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
       // 未知斜杠（如 /resume）与普通文本/空白按停止处理，避免向忙碌中的会话注入正文
       if (busy) {
         const line = value.trim();
-        if (
-          line &&
-          webCommands.some((c) => line === c || line.startsWith(`${c} `))
-        ) {
+        if (builtinForLine(line, catalog)) {
           onSubmit(line);
           setValue("");
           setCaret(0);
-          setShowCommands(false);
+          setSlashDismissed(true);
           onMenuOpen(null);
           return;
         }
@@ -870,16 +826,11 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
       onSubmit(line);
       setValue("");
       setCaret(0);
-      setShowCommands(false);
+      setSlashDismissed(true);
       onMenuOpen(null);
     };
 
-    const showInline = inlineOptions && inlineOptions.options.length > 0;
-    const showAutocomplete =
-      showCommands && filteredCommands.length > 0 && !showInline;
-    // + 号与斜杠共用同一命令弹窗（+ 展示全部 WEB_COMMANDS，斜杠展示过滤结果）
-    const showMenu = plusOpen || showAutocomplete;
-    const menuCommands = plusOpen ? webCommands : filteredCommands;
+    const showInline = !plusOpen && inlineOptions && inlineOptions.options.length > 0;
     // 发送按钮状态：停止（busy 或后台任务+空输入）｜空输入灰色（不可发送）｜正常发送
     const isStopState = busy || (hasActiveTasks && !value.trim());
     const isIdleEmpty = !value.trim() && !busy && !stopping && !isStopState;
@@ -899,7 +850,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
                   onInlineSelect?.(inlineOptions.command, opt.value)
                 }
                 className={`w-full text-left px-3 py-2 border border-transparent hover:border-border-light text-sm transition-colors cursor-pointer flex flex-col gap-0.5 ${
-                  idx === selectedIndex
+                  idx === inlineIndex
                     ? "glass-option-active text-content-primary glass-option-hover"
                     : opt.active
                       ? "text-primary/70 glass-option-hover"
@@ -918,7 +869,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
         )}
 
         {/* @ 提及补全弹窗（与斜杠命令弹窗同位置同样式；分区标题沿用英文 uppercase 惯例，
-          分区顺序 Skills → Sessions → Files 与候选顺序一致） */}
+          分区顺序 Sessions → Files 与候选顺序一致） */}
         {showMentionMenu && (
           <div
             ref={mentionListRef}
@@ -927,25 +878,17 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
             {mentionCandidates.map((c, idx) => {
               const name = c.path.split("/").pop() || c.path;
               const dir = c.kind === "dir";
-              const skill = c.kind === "skill";
               const session = c.kind === "session";
               return (
                 <Fragment key={`${c.kind}:${c.sessionId ?? c.path}`}>
                   {/* 分区标题与行同级渲染（标题不占 data-mention-row 序号），
                     DOM 序号与候选/选中序号一致，高亮、Enter 采纳与滚动定位才不会错位 */}
-                  {skill && idx === 0 && (
+                  {session && idx === 0 && (
                     <div className="px-3 py-1.5 text-[10px] text-content-disabled font-semibold uppercase tracking-widest text-center border-b border-border-light mb-1">
-                      Skills
-                    </div>
-                  )}
-                  {session && idx === sessionsStart && (
-                    <div
-                      className={`px-3 py-1.5 text-[10px] text-content-disabled font-semibold uppercase tracking-widest text-center border-b border-border-light mb-1 ${mentionSkillCount > 0 ? "border-t border-border-light mt-1" : ""}`}
-                    >
                       Sessions
                     </div>
                   )}
-                  {!skill && !session && idx === filesStart && (
+                  {!session && idx === filesStart && (
                     <div
                       className={`px-3 pt-2 pb-1 text-[10px] text-content-disabled font-semibold uppercase tracking-widest text-center ${filesStart > 0 ? "border-t border-border-light mt-1" : ""} border-b border-border-light mb-1`}
                     >
@@ -963,67 +906,17 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
                         : "text-content-secondary glass-option-hover"
                     }`}
                   >
-                    {dir ? (
-                      <svg
-                        className="w-3.5 h-3.5 shrink-0 text-primary/70"
-                        viewBox="0 0 16 16"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.4"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <path d="M1.5 4.5v7a1.5 1.5 0 001.5 1.5h10a1.5 1.5 0 001.5-1.5V6.5a1.5 1.5 0 00-1.5-1.5H8L6.4 3.1a1.5 1.5 0 00-1.1-.6H3a1.5 1.5 0 00-1.5 1.5v.5z" />
-                      </svg>
-                    ) : session ? (
-                      <svg
-                        className="w-3.5 h-3.5 shrink-0 text-primary/70"
-                        viewBox="0 0 16 16"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.4"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        {/* 会话：对话气泡（与提及渲染的 session 图标同造型） */}
-                        <path d="M14 10a1.3 1.3 0 01-1.3 1.3H4.7L2 13.9V3.3A1.3 1.3 0 013.3 2h9.4A1.3 1.3 0 0114 3.3V10z" />
-                      </svg>
-                    ) : skill ? (
-                      <svg
-                        className="w-3.5 h-3.5 shrink-0 text-primary/70"
-                        viewBox="0 0 16 16"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.4"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        {/* 技能：四点网格（与右栏 Skills 图标同语义） */}
-                        <rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1" />
-                        <rect x="9" y="2.5" width="4.5" height="4.5" rx="1" />
-                        <rect x="2.5" y="9" width="4.5" height="4.5" rx="1" />
-                        <rect x="9" y="9" width="4.5" height="4.5" rx="1" />
-                      </svg>
-                    ) : (
-                      <svg
-                        className="w-3.5 h-3.5 shrink-0 text-primary/70"
-                        viewBox="0 0 16 16"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.4"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <path d="M4 1.5h5L13 5v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2.5a1 1 0 011-1z" />
-                        <path d="M9 1.5V5h4" />
-                      </svg>
-                    )}
+                    <span aria-hidden="true" className="shrink-0">
+                      {session ? <ListChecksIcon className={PICKER_ICON_CLASS} />
+                        : dir ? <FolderClosedIcon className={PICKER_ICON_CLASS} />
+                        : <TreeFileIcon name={name} />}
+                    </span>
                     <span
-                      className={`truncate flex-1 text-left ${dir || skill ? "font-mono" : ""}`}
+                      className={`truncate flex-1 text-left ${dir ? "font-mono" : ""}`}
                     >
                       {c.path}
                     </span>
-                    {session || skill ? (
+                    {session ? (
                       c.description && (
                         <span className="text-xs text-content-disabled shrink-0 max-w-[45%] truncate">
                           {c.description}
@@ -1045,30 +938,41 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
         {showMenu && (
           <div
             ref={listRef}
+            onMouseDown={(e) => e.preventDefault()}
             className="absolute bottom-full left-0 right-0 mb-1 bg-surface-card-alt border border-border-medium rounded-3xl max-h-56 overflow-y-auto p-1 z-20 scrollbar-hidden dropdown-panel"
           >
-            <div className="px-3 py-1.5 text-[10px] text-content-disabled font-semibold uppercase tracking-widest text-center border-b border-border-light mb-1">
-              Commands
-            </div>
-            {menuCommands.map((cmd, idx) => (
-              <button
-                key={cmd}
-                data-command-row
-                onClick={() => selectCommand(cmd)}
-                className={`w-full flex items-center gap-2 px-3 py-2 border border-transparent hover:border-border-light text-sm transition-colors cursor-pointer animate-fade ${
-                  !plusOpen && idx === selectedIndex
-                    ? "glass-option-active text-content-primary glass-option-hover"
-                    : "text-content-secondary glass-option-hover"
-                }`}
-              >
-                <span className="font-mono truncate flex-1 text-left">
-                  {cmd}
-                </span>
-                <span className="text-xs text-content-disabled shrink-0 max-w-[45%] truncate">
-                  {t(lang, `cmd_${cmd.slice(1).replace(/-/g, "_")}`)}
-                </span>
-              </button>
-            ))}
+            {menuCommands.map((cmd, idx) => {
+              const section = slashSection(cmd);
+              const startsSection = idx === 0 || slashSection(menuCommands[idx - 1]!) !== section;
+              const selected = idx === selectedIndex;
+              const ChoiceIcon = cmd.kind === 'skill' ? SparkleIcon : McpIcon;
+              const description = cmd.kind === 'builtin' ? t(lang, cmd.descriptionKey) : cmd.description;
+              return (
+                <Fragment key={cmd.name}>
+                  {startsSection && (
+                    <h3 className={`px-3 py-1.5 text-[10px] text-content-disabled font-semibold uppercase tracking-widest text-center border-b border-border-light mb-1 ${idx > 0 ? 'mt-1 border-t' : ''}`}>
+                      {section}
+                    </h3>
+                  )}
+                  <button
+                    data-command-row
+                    ref={selected ? selectedCommandRef : undefined}
+                    onClick={() => selectCommand(cmd)}
+                    aria-label={description ? `${cmd.name} ${description}` : cmd.name}
+                    title={description}
+                    className={`w-full flex items-center gap-2 px-3 py-2 border border-transparent hover:border-border-light text-sm transition-colors cursor-pointer animate-fade ${
+                      selected
+                        ? "glass-option-active text-content-primary glass-option-hover"
+                        : "text-content-secondary glass-option-hover"
+                    }`}
+                  >
+                    <span aria-hidden="true" className="shrink-0"><ChoiceIcon className={PICKER_ICON_CLASS} /></span>
+                    <span className="font-mono truncate flex-1 text-left">{cmd.name.slice(1)}</span>
+                    {description && <span className="text-xs text-content-disabled shrink-0 max-w-[45%] truncate">{description}</span>}
+                  </button>
+                </Fragment>
+              );
+            })}
           </div>
         )}
 
@@ -1102,8 +1006,24 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
             onChange={handleChange}
             onPaste={handlePaste}
             onKeyDown={handleKeyDown}
+            onCompositionStart={() => setComposing(true)}
+            onCompositionEnd={(e) => {
+              setComposing(false);
+              setCaret(e.currentTarget.selectionStart);
+            }}
+            onFocus={(e) => {
+              setFocused(true);
+              setSlashDismissed(false);
+              setCaret(e.currentTarget.selectionStart);
+            }}
+            onBlur={() => setFocused(false)}
+            onClick={() => { setSlashDismissed(false); setMentionDismissed(false); }}
             // 点击/方向键移动光标时同步 caret 状态，驱动提及 token 重算（移出 token 自动收起菜单）
-            onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
+            onSelect={(e) => {
+              const pos = e.currentTarget.selectionStart;
+              if (pos !== caret) setSlashDismissed(false);
+              setCaret(pos);
+            }}
             // 内容超限内部滚动时镜像层同步偏移，保证高亮与光标对齐
             onScroll={(e) => {
               if (mirrorRef.current)
@@ -1132,12 +1052,14 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
             {/* + 号：打开快捷指令菜单（与斜杠同一弹窗） */}
             <button
               onClick={() => {
+                if (!plusOpen) textareaRef.current?.focus({ preventScroll: true });
                 onMenuOpen(plusOpen ? null : "plus");
-                setShowCommands(false);
+                setSlashDismissed(true);
                 setWsAddMode(false);
               }}
               title="Commands"
               aria-label="Commands"
+              aria-expanded={plusOpen && showMenu}
               className={`pill-badge w-8 h-8 flex items-center justify-center rounded-full transition-colors cursor-pointer select-none ${
                 plusOpen
                   ? "text-primary"
@@ -1154,7 +1076,7 @@ const PromptInput = forwardRef<PromptInputHandle, PromptInputProps>(
                 <button
                   onClick={() => {
                     onMenuOpen(wsOpen ? null : "ws");
-                    setShowCommands(false);
+                    setSlashDismissed(true);
                     setWsAddMode(false);
                   }}
                   disabled={!connected || !onPickWorkspace}

@@ -8,7 +8,9 @@ SKILL.md frontmatter 字段数据模型。
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
+
+SlashReferences = dict[str, Literal["skill", "command"]]
 
 
 @dataclass(frozen=True)
@@ -29,3 +31,12 @@ class SkillDefinition:
     disable_model_invocation: bool | None = None
     effort: str | None = None
     skill_root: str | None = None
+    # 插件安装根目录。插件变量按此路径展开，技能资源变量按 skill_root 展开。
+    plugin_root: str | None = None
+    # 条目类别："skill"（真技能）| "command"（斜杠命令）。
+    kind: str = "skill"
+
+    @property
+    def is_command(self) -> bool:
+        """是否为斜杠命令。"""
+        return self.kind == "command"

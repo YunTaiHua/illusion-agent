@@ -22,6 +22,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from illusion.skills.types import SlashReferences
+
 
 class TextBlock(BaseModel):
     """纯文本内容块
@@ -32,6 +34,13 @@ class TextBlock(BaseModel):
     """
 
     type: Literal["text"] = "text"
+    text: str
+
+
+class SlashResourceBlock(BaseModel):
+    """提交时捕获的资源正文。随该轮持久化，仅在模型请求中作为文本发送。"""
+
+    type: Literal["slash_resource"] = "slash_resource"
     text: str
 
 
@@ -271,7 +280,7 @@ def _strip_media_from_messages(
                 ))
             else:
                 new_blocks.append(block)
-        result.append(ConversationMessage(role=msg.role, content=new_blocks))
+        result.append(msg.model_copy(update={"content": new_blocks}))
     return result
 
 
@@ -307,7 +316,7 @@ def strip_media_if_unsupported(
 
 # 内容块联合类型
 ContentBlock = Annotated[
-    TextBlock | ToolUseBlock | ToolResultBlock | ThinkingBlock | MediaBlock,
+    TextBlock | SlashResourceBlock | ToolUseBlock | ToolResultBlock | ThinkingBlock | MediaBlock,
     Field(discriminator="type"),
 ]
 
@@ -322,9 +331,13 @@ class ConversationMessage(BaseModel):
 
     role: Literal["user", "assistant"]
     content: list[ContentBlock] = Field(default_factory=list[Any])
+    # 显示元数据。None 是历史记录/非用户提交；空字典是已知未激活任何资源。
+    slash_references: SlashReferences | None = None
 
     @classmethod
-    def from_user_text(cls, text: str) -> ConversationMessage:
+    def from_user_text(
+        cls, text: str, *, slash_references: SlashReferences | None = None,
+    ) -> ConversationMessage:
         """从原始文本构造用户消息
         
         Args:
@@ -333,7 +346,7 @@ class ConversationMessage(BaseModel):
         Returns:
             ConversationMessage: 用户消息
         """
-        return cls(role="user", content=[TextBlock(text=text)])
+        return cls(role="user", content=[TextBlock(text=text)], slash_references=slash_references)
 
     @property
     def text(self) -> str:
@@ -345,6 +358,16 @@ class ConversationMessage(BaseModel):
         return "".join(
             block.text for block in self.content if isinstance(block, TextBlock)
         )
+
+    def for_model(self) -> ConversationMessage:
+        """把本地资源快照投影为各提供商都支持的文本块，保留原始历史。"""
+        if not any(isinstance(block, SlashResourceBlock) for block in self.content):
+            return self
+        blocks = [
+            TextBlock(text=block.text) if isinstance(block, SlashResourceBlock) else block
+            for block in self.content
+        ]
+        return self.model_copy(update={"content": blocks})
 
     @property
     def tool_uses(self) -> list[ToolUseBlock]:
@@ -402,7 +425,7 @@ def serialize_content_block(block: ContentBlock, *, provider_type: str = "anthro
     Returns:
         dict[str, Any]: 线格式字典
     """
-    if isinstance(block, TextBlock):
+    if isinstance(block, (TextBlock, SlashResourceBlock)):
         return {"type": "text", "text": block.text}
 
     if isinstance(block, ToolUseBlock):

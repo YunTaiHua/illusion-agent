@@ -52,8 +52,6 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-log = logging.getLogger(__name__)
-
 from illusion.api.auth_status import auth_status
 from illusion.api.client import AnthropicApiClient, SupportsStreamingMessages
 from illusion.api.effort import EffortMapper
@@ -74,13 +72,16 @@ from illusion.hooks.types import AggregatedHookResult
 from illusion.mcp.client import McpClientManager
 from illusion.mcp.config import load_mcp_server_configs
 from illusion.permissions import PermissionChecker
-from illusion.plugins.loader import load_plugins
+from illusion.plugins.loader import load_plugins, native_browser_enabled
 from illusion.plugins.types import LoadedPlugin
 from illusion.prompts import build_runtime_system_prompt
 from illusion.services.session_reference import is_session_reference_snapshot
+from illusion.skills.types import SlashReferences
 from illusion.state import AppState, AppStateStore
 from illusion.tasks.types import TaskRecord, is_task_notification
 from illusion.tools import ToolRegistry, create_default_tool_registry
+
+log = logging.getLogger(__name__)
 
 # 类型别名定义
 PermissionPrompt = Callable[[str, str, bool], Awaitable[bool]]  # 权限确认回调（tool_name, question, high_risk）
@@ -149,7 +150,7 @@ class RuntimeBundle:
 
     def hook_summary(self) -> str:
         """返回当前钩子摘要。"""
-        return load_hook_registry(self.current_settings(), self.current_plugins()).summary()
+        return load_hook_registry(self.current_settings(), self.current_plugins(), self.cwd).summary()
 
     def plugin_summary(self) -> str:
         """返回当前插件摘要。"""
@@ -159,7 +160,7 @@ class RuntimeBundle:
         lines = ["Plugins:"]
         for plugin in plugins:
             state = "enabled" if plugin.enabled else "disabled"
-            lines.append(f"- {plugin.manifest.name} [{state}] {plugin.manifest.description}")
+            lines.append(f"- {plugin.manifest.name} [{state}] [{plugin.scope}] {plugin.manifest.description}".rstrip())
         return "\n".join(lines)
 
     def mcp_summary(self) -> str:
@@ -665,9 +666,7 @@ async def build_runtime(
     # 内置浏览器工具随 browser-use 插件启用注册（插件开关决定浏览器能力
     # 是否进会话）。必须尊重 enabled：禁用后新 bundle/重启不得注册工具、
     # 创建 BrowserManager 或预热 Chromium（与 skills/hooks loader 口径一致）
-    browser_plugin_enabled = any(
-        p.manifest.name == "browser-use" and p.enabled for p in (plugins or [])
-    )
+    browser_plugin_enabled = native_browser_enabled(plugins)
     browser_manager: Any = None
     if browser_plugin_enabled:
         from illusion.browser import BrowserConfig, BrowserManager
@@ -738,7 +737,7 @@ async def build_runtime(
     from illusion.hooks.session_hooks import SessionHookStore
     session_hook_store = SessionHookStore()
     hook_executor = HookExecutor(
-        load_hook_registry(settings, plugins),
+        load_hook_registry(settings, plugins, cwd),
         HookExecutionContext(
             cwd=Path(cwd).resolve(),
             api_client=resolved_api_client,
@@ -1259,6 +1258,9 @@ async def handle_line(
     command_result_emitter: CommandResultEmitter | None = None,
     replace_transcript_items: ReplaceTranscriptItems | None = None,
     rewind_restored_emitter: Callable[[str], Awaitable[None]] | None = None,
+    treat_as_text: bool = False,
+    slash_input_end: int | None = None,
+    user_submission_emitter: Callable[[SlashReferences], Awaitable[None]] | None = None,
 ) -> bool:
     """处理提交的一行输入（用于无头或 TUI 渲染）。
 
@@ -1274,6 +1276,8 @@ async def handle_line(
         command_result_emitter: 指令结果发射回调
         replace_transcript_items: 替换转录项列表的回调（用于 /rewind 等，避免 Ink Static 重复渲染）
         rewind_restored_emitter: rewind 被回退的 user 消息回调（前端回填输入框）
+        treat_as_text: 跳过内置指令执行，仍解析用户显式激活的资源
+        slash_input_end: 可扫描的手写正文末尾，宿主附在其后的上下文仍完整入库
 
     Returns:
         bool: 是否继续会话
@@ -1281,11 +1285,11 @@ async def handle_line(
     # 更新钩子注册表（如果不是外部 API 客户端）
     if not bundle.external_api_client:
         bundle.hook_executor.update_registry(
-            load_hook_registry(bundle.current_settings(), bundle.current_plugins())
+            load_hook_registry(bundle.current_settings(), bundle.current_plugins(), bundle.cwd)
         )
 
     # 解析命令
-    parsed = bundle.commands.lookup(line)
+    parsed = None if treat_as_text else bundle.commands.lookup(line)
     if parsed is not None:
         command, args = parsed
         result = await command.handler(
@@ -1304,6 +1308,9 @@ async def handle_line(
                 interactive=True,
             ),
         )
+        if command.name == "plugin":
+            # 热切换后 bundle 持有当前引擎的管理器，关闭会话时释放正确的实例。
+            bundle.browser_manager = bundle.engine._tool_metadata.get("browser_manager")
         if result.reset_session:
             bundle.session_id = uuid4().hex[:12]
             # 清除共享 session_name：reset 后是全新会话，上一会话的重命名名称
@@ -1388,7 +1395,17 @@ async def handle_line(
         sync_app_state(bundle)
         return not result.should_exit
 
-    # 处理普通用户消息
+    from illusion.commands.slash_skills import prepare_slash_submission
+
+    submission = prepare_slash_submission(
+        line[:slash_input_end], bundle.cwd,
+        reserved_names=(cmd.name for cmd in bundle.commands.list_commands()),
+    )
+    if user_submission_emitter is not None:
+        await user_submission_emitter(submission.references)
+    slash_context = "\n\n".join(match.expanded for match in submission.matches)
+
+    # 用户原文和模型资源保持独立：引用、钩子和会话转录使用原文。
     settings = bundle.current_settings()
     bundle.engine.set_max_turns(settings.max_turns)
     system_prompt = build_runtime_system_prompt(settings, cwd=bundle.cwd, latest_user_prompt=line, channel_hint=bundle.channel_hint)
@@ -1398,7 +1415,9 @@ async def handle_line(
             system_prompt = system_prompt + "\n\n" + _wrap_in_system_reminder(ctx)
     bundle.engine.set_system_prompt(system_prompt)
     try:
-        async for event in bundle.engine.submit_message(line):
+        async for event in bundle.engine.submit_message(
+            line, slash_context=slash_context, slash_references=submission.references,
+        ):
             await render_event(event)
     except MaxTurnsExceeded as exc:
         await print_system(f"Stopped after {exc.max_turns} turns (max_turns).")
@@ -1497,6 +1516,14 @@ async def handle_background_completions(
     return True
 
 
+def user_replay_item(message: ConversationMessage) -> dict[str, Any]:
+    """重放发送时的原文和激活拼写，仅旧记录回退到前端当前目录。"""
+    item: dict[str, Any] = {"role": "user", "text": message.text}
+    if message.slash_references is not None:
+        item["slash_references"] = message.slash_references
+    return item
+
+
 async def _render_command_result(
 	result: CommandResult,
 	print_system: SystemPrinter,
@@ -1550,7 +1577,7 @@ async def _render_command_result(
 					and not is_goal_system_message(msg.text)
 					and not is_session_reference_snapshot(msg.text)
 				):
-					replay_items.append({"role": "user", "text": msg.text})
+					replay_items.append(user_replay_item(msg))
 				for block in msg.content:
 					if isinstance(block, ToolResultBlock):
 						tool_info = tool_uses_by_id.get(block.tool_use_id, {})
@@ -1623,7 +1650,7 @@ async def _render_command_result(
 						and not is_session_reference_snapshot(msg.text)
 					):
 						if replay_transcript_item is not None:
-							await replay_transcript_item({"role": "user", "text": msg.text})
+							await replay_transcript_item(user_replay_item(msg))
 						else:
 							await print_system(f"> {msg.text}")
 					for block in msg.content:

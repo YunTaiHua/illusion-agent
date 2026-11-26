@@ -2,8 +2,7 @@
  * @fileoverview 多问题问答状态管理 Hook
  *
  * 本模块提供对 ask_user_question 工具多问题（1-4 个）状态的集中管理，
- * 设计参考自 Claude Code 的 use-multiple-choice-state，核心思路是用
- * reducer 管理以下状态：
+ * 使用 reducer 管理以下状态：
  * - currentQuestionIndex：当前展示的问题索引（等于问题数时进入复核页）
  * - answers：以问题文本为键的答案映射
  * - questionStates：以问题文本为键的每题局部状态（选中值 + 文本输入值）

@@ -62,8 +62,10 @@ from illusion.services.agent_creator import (
     write_agent_definition,
 )
 from illusion.services.session_reference import is_session_reference_snapshot
+from illusion.skills.types import SlashReferences
 from illusion.tasks import TaskRecord, get_task_manager
 from illusion.tasks.types import is_task_notification
+from illusion.ui.command_catalog import terminal_command_catalog
 from illusion.ui.protocol import (
     BackendEvent,
     FrontendRequest,
@@ -196,6 +198,11 @@ class ReactBackendHost:
         # 必须串行执行，前一个完成释放锁后下一个才能发送 modal_request。
         self._modal_lock: asyncio.Lock = asyncio.Lock()
 
+    def _slash_command_catalog(self) -> tuple[list[str], list[dict[str, Any]]]:
+        """返回行首命令名和带类型的工作区资源候选。"""
+        assert self._bundle is not None
+        return terminal_command_catalog(self._bundle)
+
     async def run(self) -> int:
         """运行后端主机主循环。
 
@@ -286,11 +293,13 @@ class ReactBackendHost:
             self._sigint_remove = install_sigint_handler(loop, self._enqueue_shutdown)
 
             # 7. 发送就绪事件 + 状态快照
+            commands, slash_commands = await asyncio.to_thread(self._slash_command_catalog)
             await self._emit(
                 BackendEvent.ready(
                     self._bundle.app_state.get(),
                     get_task_manager().list_tasks(),
-                    [f"/{command.name}" for command in self._bundle.commands.list_commands()],
+                    commands,
+                    slash_commands=slash_commands,
                 )
             )
             await self._emit(self._status_snapshot())
@@ -1094,16 +1103,19 @@ class ReactBackendHost:
             from illusion.commands.goal import is_goal_create_args
 
             is_command = not is_goal_create_args(parsed_cmd[1])
-        await self._emit(
-            BackendEvent(
-                type="transcript_item",
-                item=TranscriptItem(
-                    role="user",
-                    text=transcript_line or line,
-                    is_command=is_command,
-                ),
+        async def _emit_user(references: SlashReferences) -> None:
+            await self._emit(
+                BackendEvent(
+                    type="transcript_item",
+                    item=TranscriptItem(
+                        role="user", text=transcript_line or line, is_command=is_command,
+                        slash_references=references,
+                    ),
+                )
             )
-        )
+
+        if parsed_cmd is not None:
+            await _emit_user({})
 
         async def _print_system(message: str) -> None:
             """打印系统消息。"""
@@ -1161,11 +1173,15 @@ class ReactBackendHost:
             command_result_emitter=_command_result_emitter,
             replace_transcript_items=_replace_transcript_items,
             rewind_restored_emitter=_rewind_restored,
+            user_submission_emitter=_emit_user,
         )
 
         # 更新会话阶段为空闲
         await self._update_phase("idle")
-        await self._emit(self._status_snapshot())
+        status = self._status_snapshot()
+        if parsed_cmd and parsed_cmd[0].name in {"plugin", "reload-plugins", "init"}:
+            status.commands, status.slash_commands = await asyncio.to_thread(self._slash_command_catalog)
+        await self._emit(status)
         await self._emit(BackendEvent.tasks_snapshot(get_task_manager().list_tasks()))
         await self._emit(BackendEvent(type="line_complete"))
         return should_continue
@@ -1902,7 +1918,9 @@ class ReactBackendHost:
 
             options = []
             for skill in skills:
-                source = f" [{skill.source}]"
+                # 插件斜杠命令标注 [command]，与真技能区分
+                kind_tag = " [command]" if skill.is_command else ""
+                source = f" [{skill.source}]{kind_tag}"
                 first_line = skill.description.split("\n", 1)[0][:60] if skill.description else ("（空）" if zh else "(empty)")
                 options.append({
                     "value": skill.name,
@@ -2657,9 +2675,8 @@ class ReactBackendHost:
     async def _handle_file_mentions(self, req: FrontendRequest) -> None:
         """收集 @ 提及补全候选并推送 web_file_mentions 事件。
 
-        与 web 端 handle_web_request_file_mentions 对称：仅返回工作区内
-        路径、技能名与会话候选（不读内容）。会话候选只查元数据，排除
-        当前会话（自引用无意义）；选中后的会话提及为规范文本
+        仅返回工作区内路径与会话候选。会话候选只查
+        元数据，排除当前会话；选中后的会话提及为规范文本
         ``@[label](illusion-session:<id>)``，由引擎在提交边界解析注入。
         request_id 原样回显供前端丢弃过期响应。
 
@@ -2667,17 +2684,12 @@ class ReactBackendHost:
             req: 前端请求（query 为 @ 后的片段；request_id 回显键）
         """
         from illusion.services.session_reference import session_mention_candidates
-        from illusion.ui.file_mentions import (
-            file_mention_candidates,
-            normalize_mention_query,
-            skill_mention_candidates,
-        )
+        from illusion.ui.file_mentions import file_mention_candidates, normalize_mention_query
 
         assert self._bundle is not None
         cwd = self._bundle.cwd
         query = normalize_mention_query(req.query)
         candidates, truncated = await asyncio.to_thread(file_mention_candidates, cwd, query)
-        skills = await asyncio.to_thread(skill_mention_candidates, cwd, query)
         locale = str(
             self._bundle.app_state.get().ui_language
             or self._bundle.current_settings().ui_language
@@ -2698,7 +2710,6 @@ class ReactBackendHost:
             web_file_mentions={
                 "query": query,
                 "candidates": candidates,
-                "skills": skills,
                 "sessions": sessions,
                 "truncated": truncated,
             },

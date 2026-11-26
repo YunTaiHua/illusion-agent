@@ -3,6 +3,9 @@
 验证 web_* 请求类型与事件类型的协议定义正确。
 """
 
+import pytest
+from pydantic import ValidationError
+
 from illusion.state.app_state import AppState
 from illusion.ui.protocol import BackendEvent, FrontendRequest, _state_payload
 
@@ -26,6 +29,14 @@ class TestWebFrontendRequest:
         req = FrontendRequest(type="web_set_setting", setting_key="effort", setting_value="high")
         assert req.setting_key == "effort"
         assert req.setting_value == "high"
+
+    def test_plugin_scope_is_an_optional_resource_scope(self):
+        payload = {"type": "web_plugin_toggle", "setting_key": "notes", "setting_value": True}
+        assert FrontendRequest.model_validate(payload).plugin_scope is None
+        for scope in ("user", "project"):
+            assert FrontendRequest.model_validate({**payload, "plugin_scope": scope}).plugin_scope == scope
+        with pytest.raises(ValidationError):
+            FrontendRequest.model_validate({**payload, "plugin_scope": "global"})
 
     def test_web_delete_sessions_request(self):
         """测试 web_delete_sessions 请求携带 ids"""

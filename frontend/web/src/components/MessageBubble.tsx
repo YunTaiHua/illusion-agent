@@ -11,7 +11,7 @@
  * @module MessageBubble
  */
 
-import React, { memo, useCallback, useEffect, useRef, useState } from "react";
+import React, { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import {
   parsePromptWebElementContexts,
@@ -20,7 +20,7 @@ import {
 import { GlobeIcon } from "./icons";
 import remarkGfm from "remark-gfm";
 import remarkSuperscript from "../remarkSuperscript";
-import { highlightMentions } from "../utils/mention";
+import { TranscriptMentions } from "../utils/mention";
 import rehypeHighlight from "rehype-highlight";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, {
@@ -45,7 +45,7 @@ import {
 } from "./icons";
 
 /**
- * HTML 消毒 schema（防 XSS，对齐 opencode 的 DOMPurify 处理）
+ * HTML 消毒 schema（防 XSS）
  *
  * 基于 rehype-sanitize 默认白名单：
  * - 过滤 script/style/iframe 及全部 on* 事件属性（如 <img onerror=...>）
@@ -71,7 +71,7 @@ const rehypePlugins: PluggableList = [
   [rehypeSanitize, sanitizeSchema],
 ];
 
-/** 行内代码内容为纯 URL 时渲染为可点击链接（对齐 opencode markCodeLinks） */
+/** 行内代码内容为纯 URL 时渲染为可点击链接 */
 const URL_PATTERN = /^https?:\/\/[^\s<>()`"']+$/;
 
 /** 提取 code 文本中的有效 URL（去除尾部标点），无效返回 undefined */
@@ -145,7 +145,7 @@ const urlTransform = (url: string, key: string): string => {
   return defaultUrlTransform(url);
 };
 
-/** 复制按钮 — opencode 风格 SVG */
+/** 复制按钮的 SVG 图标 */
 function CodeCopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   const handleCopy = () => {
@@ -194,7 +194,7 @@ const IMAGE_URL_RE = /\.(png|jpe?g|gif|webp|bmp|svg|avif|ico)(\?.*)?(#.*)?$/i;
  * - img：点击在应用内打开图片预览（不跳转外部浏览器，避免桌面端被困）
  * - a：图片链接在应用内预览；外部链接新标签打开并强制 rel="noopener noreferrer"
  *   防 tabnabbing（反向劫持），web 端不离开应用、桌面端由 setWindowOpenHandler 接管
- * - code：行内代码内容为纯 URL 时渲染为可点击链接（对齐 opencode markCodeLinks）
+ * - code：行内代码内容为纯 URL 时渲染为可点击链接
  */
 const mdComponents = {
   // GFM 表格：固有最小宽度可能超过窄容器（文件预览挤占聊天区后），
@@ -497,7 +497,7 @@ function MessageBubble({
               最长串撑到超宽后才换行 */}
           {visibleContent && (
             <div className="bg-surface-card-alt border border-border-light rounded-lg px-3 py-2 text-sm text-content-primary whitespace-pre-wrap [overflow-wrap:anywhere] select-text">
-              {highlightMentions(visibleContent)}
+              <TranscriptMentions text={visibleContent} references={item.slash_references} />
             </div>
           )}
           {webElementContexts.length > 0 && (
@@ -665,7 +665,7 @@ function DiffLines({ text }: { text: string }) {
  * @param props.isError - 是否为错误结果
  * @param props.toolInput - 工具输入参数
  */
-const ToolResultBubble = memo(function ToolResultBubble({
+export const ToolResultBubble = memo(function ToolResultBubble({
   name,
   text,
   isError,
@@ -711,9 +711,11 @@ const ToolResultBubble = memo(function ToolResultBubble({
         className={`flex items-start text-base transition-colors cursor-pointer text-left ${hasContent ? "text-content-secondary hover:text-content-primary" : ""}`}
       >
         {/* 圆点右移 3px 使其对称轴（7px）与大脑图标重合；文本缩进不变
-            （3px + 8px + 9px = 14px + 6px = 20px）；mt-2 垂直居中 */}
+            （3px + 8px + 9px = 14px + 6px = 20px）；mt-2 垂直居中。
+            dot-settle 落定动画：动态阶段脉冲缩放可能停在半程相位，完成瞬间
+            由本静态圆点接管并平滑放大回原尺寸，缩放动作完整收尾不突兀 */}
         <span
-          className={`inline-block w-2 h-2 rounded-full shrink-0 mt-2 ml-[3px] mr-[9px] ${isError ? "bg-danger" : "bg-primary"}`}
+          className={`inline-block w-2 h-2 rounded-full shrink-0 mt-2 ml-[3px] mr-[9px] animate-dot-settle ${isError ? "bg-danger" : "bg-primary"}`}
         />
         <span className="flex-1 min-w-0 break-all">
           <span className={isError ? "text-danger" : "text-content-primary"}>
@@ -924,9 +926,11 @@ export const ThinkingBlock = memo(function ThinkingBlock({
           <path d="M4.5 2.5L8 6L4.5 9.5" />
         </svg>
       </button>
-      {/* 展开/折叠微动画（简洁 fade：纯透明度 150ms） */}
+      {/* 展开/折叠微动画（简洁 fade：纯透明度 150ms）；ml-5 使内容块与标题
+          文字（"思"）对齐：大脑图标 w-3.5(14px) + gap-1.5(6px) = 20px，
+          不再顶格对齐图标列 */}
       {open && (
-        <div className="animate-fade">
+        <div className="animate-fade ml-5">
           <div onContextMenu={handleContentContextMenu} className="relative">
             <div className="text-sm text-content-secondary leading-relaxed select-text mt-1 opacity-80">
               <div className="prose prose-sm max-w-full [overflow-wrap:anywhere]">
@@ -952,9 +956,8 @@ export const ThinkingBlock = memo(function ThinkingBlock({
  *
  * 显示正在执行的工具调用，带有脉冲动画效果。
  *
- * 默认折叠只显示工具名与摘要（对齐 opencode：工具默认折叠为标题行）；
- * 用户可点击标题行展开查看全部进度消息（web 端不受 terminal 行数限制）。
- * 工具完成（completed）后由 ToolResultBubble（同样默认折叠）替代。
+ * 默认折叠只显示工具名与摘要；用户可点击标题行展开查看全部进度消息；
+ * 工具完成后由 ToolResultBubble（同样默认折叠）替代。
  *
  * memo 化：call 引用仅在进度更新时变化（流式进度消息累积），
  * 无更新的工具调用不会因其他消息的 token 刷新而重渲染。
@@ -1013,11 +1016,13 @@ export const PendingToolBubble = memo(function PendingToolBubble({
     <div data-tool-row className="py-1">
       <button
         onClick={() => progressMessages.length > 0 && setOpen(!open)}
-        className={`flex items-start text-base transition-colors cursor-pointer text-left ${progressMessages.length > 0 ? "text-content-secondary hover:text-content-primary" : ""}`}
+        className={`flex items-start text-base transition-colors cursor-pointer text-left ${progressMessages.length > 0 || summary ? "text-content-secondary hover:text-content-primary" : ""}`}
       >
         {/* 圆点右移 3px 使其对称轴（7px）与大脑图标重合；文本缩进不变；mt-2 垂直居中 */}
         <span className="inline-block w-2 h-2 rounded-full bg-primary animate-pulse-scale shrink-0 mt-2 ml-[3px] mr-[9px]" />
-        <span className="flex-1 min-w-0">
+        {/* break-all 与 ToolResultBubble 保持一致：超长摘要（长路径/长命令）
+            正常换行，不超出界面 */}
+        <span className="flex-1 min-w-0 break-all">
           <span className="text-content-primary">{displayName}</span>
           {summary && (
             <span className="text-sm text-content-disabled">（{summary}）</span>
@@ -1215,61 +1220,63 @@ function usePrefersReducedMotion(): boolean {
   return reduced;
 }
 
+/** 流式思考逐帧揭示，思考块沿用自身的展开和自动折叠行为。 */
+export function StreamingReasoning({
+  text,
+  lang,
+  streaming,
+  autoCollapsed,
+}: {
+  text: string;
+  lang: UiLanguage;
+  streaming?: boolean;
+  autoCollapsed?: boolean;
+}) {
+  const reducedMotion = usePrefersReducedMotion();
+  const revealed = useSmoothReveal(text, { enabled: !reducedMotion });
+  return (
+    <ThinkingBlock
+      text={revealed}
+      lang={lang}
+      streaming={streaming}
+      defaultOpen={!autoCollapsed}
+      autoCollapsed={autoCollapsed}
+    />
+  );
+}
+
 /**
- * 流式缓冲区组件
+ * 流式正文缓冲区组件
  *
- * 显示正在流式接收的助手回复，包括思考过程和正文。
- *
- * 渲染策略：正文/思考分别经 useSmoothReveal 按揭示节奏展示，
- * 避免整段 Markdown 在分块到达时反复全量重排（对齐 dsh-smooth-stream
- * 揭示引擎，且不引入半透明淡入 / 合成层 transform 以规避残影模糊）。
- *
- * 自动折叠模型（对齐 opencode 的 part 级独立折叠）：
- * - 思考过程流式时默认展开，用户可随时折叠/展开
- * - text 推入时自动折叠其上方思考过程（text 保留可见），
- *   用户手动展开过的思考过程不被自动折叠覆盖
+ * 显示正在流式接收的助手回复正文（经 useSmoothReveal 按揭示节奏展示，
+ * 避免整段 Markdown 在分块到达时反复全量重排）。
+ * 正文在所属轮次的任务过程中揭示，整轮结束后由最终回复接替。
  *
  * @param props - 组件属性
  * @param props.text - 正文文本
- * @param props.reasoning - 思考过程文本（可选）
- * @param props.lang - UI 语言
+ * @param props.onTextVisibleChange - 正文实际揭示或移除时通知思考块
  */
 export function StreamingBuffer({
   text,
-  reasoning,
-  reasoningStreaming,
-  lang,
+  onTextVisibleChange,
 }: {
   text: string;
-  reasoning?: string;
-  reasoningStreaming?: boolean;
-  lang: UiLanguage;
+  onTextVisibleChange: (visible: boolean) => void;
 }) {
   const reducedMotion = usePrefersReducedMotion();
-  // 分别平滑揭示：思考与正文各自有独立节奏，互不阻塞
   const smoothText = useSmoothReveal(text, { enabled: !reducedMotion });
-  const smoothReasoning = useSmoothReveal(reasoning ?? "", {
-    enabled: !reducedMotion,
-  });
-  const hasReasoning = !!smoothReasoning && !!smoothReasoning.trim();
-  const hasText = !!smoothText && !!smoothText.trim();
-
+  const hasText = !!smoothText.trim();
+  useLayoutEffect(() => {
+    if (!hasText) return;
+    onTextVisibleChange(true);
+    return () => onTextVisibleChange(false);
+  }, [hasText, onTextVisibleChange]);
+  if (!hasText) return null;
   return (
     <div className="py-1">
-      {hasReasoning && (
-        <ThinkingBlock
-          text={smoothReasoning}
-          lang={lang}
-          streaming={reasoningStreaming ?? false}
-          defaultOpen={!hasText}
-          autoCollapsed={hasText}
-        />
-      )}
-      {hasText && (
-        <div className="text-content-primary text-sm prose max-w-full select-text [overflow-wrap:anywhere]">
-          <StreamMarkdownBody text={smoothText} />
-        </div>
-      )}
+      <div className="text-content-primary text-sm prose max-w-full select-text [overflow-wrap:anywhere]">
+        <StreamMarkdownBody text={smoothText} />
+      </div>
     </div>
   );
 }

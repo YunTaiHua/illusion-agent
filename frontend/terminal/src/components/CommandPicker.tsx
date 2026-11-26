@@ -13,6 +13,7 @@ import React from 'react';
 import {Box, Text} from 'ink';
 
 import {useTheme} from '../theme/ThemeContext.js';
+import {slashCategory, type CommandHint} from '../utils/slashCommands.js';
 
 /**
  * 最大可见行数
@@ -32,11 +33,9 @@ type CommandPickerMode = 'hints' | 'result';
  */
 type CommandPickerProps = {
 	/** 命令提示列表 */
-	hints?: string[];
+	hints?: CommandHint[];
 	/** 当前选中的索引 */
 	selectedIndex?: number;
-	/** 总命令数 */
-	totalCommands?: number;
 	/** 结果模式：显示指令执行结果 */
 	mode?: CommandPickerMode;
 	/** 结果文本内容 */
@@ -105,31 +104,18 @@ export function CommandPicker({
 	return (
 		<Box flexDirection="column" marginTop={1}>
 			{visible.map((hint, vi) => {
-				const actualIndex = startIndex + vi;
-				const isSelected = actualIndex === safeSelectedIndex;
+				const isSelected = startIndex + vi === safeSelectedIndex;
 				return (
-					<Box key={hint}>
-						<Text color={isSelected ? theme.colors.suggestion : theme.colors.muted}>
-							{isSelected ? `${theme.icons.pointer} ` : '  '}
+					<Box key={hint.name}>
+						<Text wrap="truncate-end" color={isSelected ? theme.colors.suggestion : undefined} bold={isSelected} dimColor={!isSelected}>
+							{isSelected ? `${theme.icons.pointer} ` : '  '}{hint.name}
 						</Text>
-						<Text color={isSelected ? theme.colors.suggestion : undefined} bold={isSelected} dimColor={!isSelected}>
-							{hint}
-						</Text>
-						{isSelected ? <Text dimColor>{' [enter]'}</Text> : null}
+						<Box flexShrink={0}>
+							<Text dimColor> [{slashCategory(hint)}]</Text>
+						</Box>
 					</Box>
 				);
 			})}
-			<Box marginTop={0}>
-				<Text dimColor>
-					<Text color={theme.colors.muted}>↑↓</Text> navigate
-					<Text> {theme.icons.middleDot} </Text>
-					<Text color={theme.colors.muted}>↵</Text> select
-					<Text> {theme.icons.middleDot} </Text>
-					<Text color={theme.colors.muted}>tab</Text> complete
-					<Text> {theme.icons.middleDot} </Text>
-					<Text color={theme.colors.muted}>esc</Text> dismiss
-				</Text>
-			</Box>
 		</Box>
 	);
 }

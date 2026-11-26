@@ -109,7 +109,7 @@ interface RightPanelProps {
   /** 提交网址：新开 tab 直达（浏览器未运行则自动启动） */
   onOpenAndNavigate?: (url: string) => void;
   /** 插件启用/禁用开关回调 */
-  onPluginToggle?: (name: string, enabled: boolean) => void;
+  onPluginToggle?: (plugin: PluginSnapshot, enabled: boolean) => void;
 }
 
 /**
@@ -261,10 +261,10 @@ export default function RightPanel({
         topBorder={false}
       />
 
-      {/* 技能 */}
+      {/* 技能（插件斜杠命令单独分区，不混入技能计数） */}
       <CollapsibleSection
         title={t(lang, 'skills_title')}
-        count={skills.length}
+        count={skills.filter((s) => s.kind !== 'command').length}
         defaultCollapsed={true}
         onExpand={onRefreshResources}
         onRefresh={onRefreshResources}
@@ -274,9 +274,9 @@ export default function RightPanel({
           <SparkleIcon className="w-3.5 h-3.5" />
         }
       >
-        {skills.length === 0 ? (
+        {skills.filter((s) => s.kind !== 'command').length === 0 ? (
           <div className="px-2 py-1 text-xs text-content-disabled">{t(lang, 'no_skills')}</div>
-        ) : skills.map((s) => (
+        ) : skills.filter((s) => s.kind !== 'command').map((s) => (
           <ItemRow key={s.name} name={s.name} description={s.description} tag={s.source === 'project' ? 'P' : undefined} />
         ))}
       </CollapsibleSection>
@@ -573,7 +573,7 @@ function ItemRow({ name, description, tag }: { name: string; description: string
 function PluginRow({ plugin, lang, onToggle }: {
   plugin: PluginSnapshot;
   lang: UiLanguage;
-  onToggle?: (name: string, enabled: boolean) => void;
+  onToggle?: (plugin: PluginSnapshot, enabled: boolean) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [pending, setPending] = useState(false);
@@ -582,7 +582,7 @@ function PluginRow({ plugin, lang, onToggle }: {
   const handleToggle = (v: boolean) => {
     if (!onToggle) return;
     setPending(true);
-    onToggle(plugin.name, v);
+    onToggle(plugin, v);
     // 乐观更新：资源快照回推后由父层刷新 enabled；此处仅短暂禁用防连点
     setTimeout(() => setPending(false), 600);
   };
@@ -607,9 +607,12 @@ function PluginRow({ plugin, lang, onToggle }: {
         <ToggleSwitch
           checked={plugin.enabled}
           onChange={handleToggle}
-          disabled={pending}
+          disabled={!onToggle || pending}
           label={plugin.name}
-          title={`${plugin.name}: ${plugin.enabled ? t(lang, 'plugin_disable_hint') : t(lang, 'plugin_enable_hint')}`}
+          title={[
+            plugin.enabled ? t(lang, 'plugin_disable_hint') : t(lang, 'plugin_enable_hint'),
+            plugin.scope && (plugin.scope === 'project' ? '.illusion/permissions.json' : 'settings.json'),
+          ].filter(Boolean).join(' · ')}
         />
       </div>
       {expanded && hasDesc && (

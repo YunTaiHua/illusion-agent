@@ -6,7 +6,7 @@
  * - 权限确认模态框
  * - MCP 认证模态框
  *
- * 问答模态框的交互设计参考自 Claude Code 的 AskUserQuestionPermissionRequest：
+ * 问答模态框的交互行为：
  * 多问题通过顶部导航条切换，单选选中即生效，多选 Space/数字键切换，
  * 无单独"确认"按钮，底部辅助行全部 i18n。
  *

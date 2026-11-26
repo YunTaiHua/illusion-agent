@@ -26,6 +26,7 @@ import type {
 	McpServerSnapshot,
 	PendingToolCall,
 	SelectRequestPayload,
+	SlashCommand,
 	SwarmNotificationSnapshot,
 	SwarmTeammateSnapshot,
 	TaskSnapshot,
@@ -119,10 +120,9 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 	const [tasks, setTasks] = useState<TaskSnapshot[]>([]);
 	/** 可用命令列表 */
 	const [commands, setCommands] = useState<string[]>([]);
+	const [slashCommands, setSlashCommands] = useState<SlashCommand[]>();
 	/**
-	 * @ 提及补全最近一次结果
-	 * requestId 不匹配的过期响应由 App 层丢弃；null = 尚无结果。
-	 * skills 排在文件前（kind='skill'），与 web 端候选顺序一致。
+	 * @ 提及补全最近一次结果。过期响应由 App 层丢弃。
 	 */
 	const [fileMentions, setFileMentions] = useState<{
 		requestId: string;
@@ -439,6 +439,11 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 	 * @param event - 后端事件对象
 	 */
 	const handleEvent = (event: BackendEvent): void => {
+		if (event.type === 'ready' || event.type === 'state_snapshot') {
+			// 仅状态的更新省略目录；显式 [] 表示清空该集合。
+			if (event.commands != null || event.type === 'ready') setCommands(event.commands ?? []);
+			if (event.slash_commands != null || event.type === 'ready') setSlashCommands(event.slash_commands ?? undefined);
+		}
 		if (event.type === 'ready') {
 			setReady(true);
 			updateStatus(event.state ?? {});
@@ -447,7 +452,6 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 				setShowThinking(showThinkingFromState);
 			}
 			setTasks(event.tasks ?? []);
-			setCommands(event.commands ?? []);
 			setMcpServers(event.mcp_servers ?? []);
 			if (config.initial_prompt && !sentInitialPrompt.current) {
 				sentInitialPrompt.current = true;
@@ -720,23 +724,20 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 			return;
 		}
 		if (event.type === 'web_file_mentions') {
-			// @ 提及补全候选：requestId 不匹配的迟到响应由 App 层丢弃；
-			// 分区顺序 skills → sessions → files（优先级 Skills > Sessions > Files，
-			// 与 web 端一致），kind 供菜单分区渲染
+			// 旧后端可能仍发送其他候选；@ 菜单只接收文件/目录和会话。
 			const payload = event.web_file_mentions;
 			if (payload) {
 				setFileMentions({
 					requestId: event.request_id ?? '',
 					query: payload.query,
 					candidates: [
-						...(payload.skills ?? []).map((s) => ({path: s.name, kind: 'skill' as const, description: s.description})),
 						...(payload.sessions ?? []).map((s) => ({
 							path: s.path,
 							kind: 'session' as const,
 							description: s.description,
 							sessionId: s.sessionId,
 						})),
-						...(payload.candidates ?? []),
+						...(payload.candidates ?? []).filter(c => c.kind === 'file' || c.kind === 'dir' || c.kind === 'session'),
 					],
 				});
 			}
@@ -830,6 +831,7 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 			status,
 			tasks,
 			commands,
+			slashCommands,
 			fileMentions,
 			mcpServers,
 			modal,
@@ -866,7 +868,7 @@ export function useBackendSession(config: FrontendConfig, onExit: (code?: number
 		[
 			agentGenerated, agentWizardModels, agentWizardResult, agentWizardTools,
 			agentGenerateError, agentGenerateLoading,
-			assistantBuffer, busy, clearCount, commandResult, commands,
+			assistantBuffer, busy, clearCount, commandResult, commands, slashCommands,
 			fileMentions,
 			exited, mcpServers, modal, pendingToolCalls, ready, selectRequest,
 			showThinking, staticItems, status, swarmNotifications, swarmTeammates,

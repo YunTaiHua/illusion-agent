@@ -12,10 +12,12 @@
  * @module MultilineTextInput
  */
 
-import React, {useState, useEffect, useCallback, useRef} from 'react';
-import {Box, Text, useInput} from 'ink';
+import React, {useState, useEffect, useLayoutEffect, useCallback, useRef} from 'react';
+import {Text, useInput, type Key} from 'ink';
 import chalk from 'chalk';
 import {Cursor} from '../utils/Cursor.js';
+import {paintReferences, type TextRange} from '../utils/slashCommands.js';
+import {useTheme} from '../theme/ThemeContext.js';
 
 /** 粘贴超时（ms） */
 const PASTE_TIMEOUT_MS = 100;
@@ -40,8 +42,9 @@ export default function MultilineTextInput({
 	onChange,
 	onSubmit,
 	onCursorChange,
-	suppressNavigation = false,
+	onPickerKey,
 	initialCursorOffset,
+	referenceRanges,
 }: {
 	value: string;
 	placeholder?: string;
@@ -53,11 +56,13 @@ export default function MultilineTextInput({
 	onSubmit?: (value: string) => void;
 	/** 光标位置变化回调（@ 提及 token 检测依赖光标位置） */
 	onCursorChange?: (offset: number) => void;
-	/** 为 true 时忽略 ↑↓/Enter/Tab（补全菜单打开时按键交由菜单导航） */
-	suppressNavigation?: boolean;
+	/** 选择器已消费该按键（含 Enter）时为真。 */
+	onPickerKey?: (key: Key) => boolean;
 	/** 挂载时光标初始位置（缺省为文本末尾；@ 提及插入后定位到插入点之后） */
 	initialCursorOffset?: number;
+	referenceRanges?: TextRange[];
 }): React.JSX.Element {
+	const theme = useTheme();
 	// === 状态 ===
 	const [cursorOffset, setCursorOffset] = useState(initialCursorOffset ?? (originalValue || '').length);
 	const [preservedColumn, setPreservedColumn] = useState<number | null>(null);
@@ -81,7 +86,7 @@ export default function MultilineTextInput({
 	}, [originalValue, focus, showCursor]);
 
 	// 光标位置变化上报（App 层据此检测 @ 提及 token）
-	useEffect(() => {
+	useLayoutEffect(() => {
 		onCursorChange?.(cursorOffset);
 	}, [cursorOffset, onCursorChange]);
 
@@ -168,20 +173,7 @@ export default function MultilineTextInput({
 
 	// === 键盘处理 ===
 
-	const handleKeyDown = useCallback((input: string, key: {
-		upArrow?: boolean;
-		downArrow?: boolean;
-		leftArrow?: boolean;
-		rightArrow?: boolean;
-		return?: boolean;
-		backspace?: boolean;
-		delete?: boolean;
-		escape?: boolean;
-		tab?: boolean;
-		ctrl?: boolean;
-		meta?: boolean;
-		shift?: boolean;
-	}) => {
+	const handleKeyDown = useCallback((input: string, key: Key) => {
 		// 粘贴检测：优先处理
 		if (isPasteInput(input, key)) {
 			addToPasteBuffer(input);
@@ -232,13 +224,8 @@ export default function MultilineTextInput({
 			return;
 		}
 
-		// Tab 不处理（留给命令选择器）
-		if (key.tab) return;
-
-		// 补全菜单打开时导航键交由菜单处理（↑↓/Enter/Tab/Esc 由 App 层消费）
-		if (suppressNavigation && (key.upArrow || key.downArrow || key.return || key.escape)) {
-			return;
-		}
+		// 聚焦的编辑器拥有导航与 Enter；选择器选中即消费该按键。
+		if (onPickerKey?.(key) || key.tab) return;
 
 		// \n (Ctrl+J) 插入换行
 		if (input === '\n') {
@@ -317,11 +304,16 @@ export default function MultilineTextInput({
 			clearPreservedColumn();
 		}
 	}, [originalValue, cursorOffset, columns, showCursor, isPasting,
-		preservedColumn, onChange, onSubmit, applyCursor, suppressNavigation,
+		preservedColumn, onChange, onSubmit, applyCursor, onPickerKey,
 		isPasteInput, addToPasteBuffer, resetCtrlUCount,
 		clearPreservedColumn]);
 
-	useInput(handleKeyDown, {isActive: focus});
+	// Ink 在 passive effect 中订阅。只保留一个监听器并向其提供最后一次
+	// 提交的草稿/光标，包括粘贴后的第一个按键。
+	const latestKeyDown = useRef(handleKeyDown);
+	useLayoutEffect(() => { latestKeyDown.current = handleKeyDown; }, [handleKeyDown]);
+	const dispatchKey = useCallback((chunk: string, key: Key) => latestKeyDown.current(chunk, key), []);
+	useInput(dispatchKey, {isActive: focus});
 
 	// === 渲染 ===
 	// 空 placeholder 处理
@@ -340,7 +332,10 @@ export default function MultilineTextInput({
 	// 构建 Cursor 并渲染带视口的文本
 	const cursor = Cursor.fromText(originalValue, columns, cursorOffset);
 	const startLine = cursor.getViewportStartLine(maxVisibleLines);
-	const renderedText = cursor.render(' ', startLine, maxVisibleLines);
+	const color = chalk.hex(theme.colors.suggestion);
+	const renderedText = cursor.render(' ', startLine, maxVisibleLines, referenceRanges?.length
+		? (part, offset) => paintReferences(part, offset, referenceRanges, color)
+		: undefined);
 
 	return <Text>{renderedText}</Text>;
 }

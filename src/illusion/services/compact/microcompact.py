@@ -55,7 +55,7 @@ def strip_images_from_messages(
                     new_blocks.append(block)
             else:
                 new_blocks.append(block)
-        result.append(ConversationMessage(role=msg.role, content=new_blocks))
+        result.append(msg.model_copy(update={"content": new_blocks}))
     return result
 
 

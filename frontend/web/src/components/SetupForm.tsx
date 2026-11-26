@@ -192,7 +192,7 @@ interface SetupFormProps {
   /** 插件快照（web_resources） */
   plugins?: PluginSnapshot[];
   /** 切换插件启用状态（WS web_plugin_toggle） */
-  onPluginToggle?: (name: string, enabled: boolean) => void;
+  onPluginToggle?: (plugin: PluginSnapshot, enabled: boolean) => void;
   /** 全局设置写入（WS web_set_setting；浏览器配置等） */
   sendSetting?: (key: string, value: string | number | boolean) => void;
   /** Goal 开关切换回调（App 同步其本地 goalEnabled，供 /goal 命令前置判断） */
@@ -206,6 +206,7 @@ interface SetupFormProps {
  * @returns 表单 JSX
  */
 export function SetupForm({ lang, initialTab, workspaces, onAddWorkspace, onRemoveWorkspace, onRequestWorkspaces, onSetDefaultWorkspace, onSetUiLanguage, agentsApi, defaultWorkspace, onRequestStatusRefresh, onClose, plugins, onPluginToggle, sendSetting, onGoalToggle }: SetupFormProps) {
+  const browserUse = plugins?.find((plugin) => plugin.is_builtin_browser);
   /** 当前 Tab */
   const [tab, setTab] = useState<'settings' | 'agents' | 'workspaces' | 'channels' | 'cron' | 'sandbox' | 'extensions'>(initialTab ?? 'settings');
   /** 加载状态 */
@@ -718,8 +719,8 @@ export function SetupForm({ lang, initialTab, workspaces, onAddWorkspace, onRemo
               <GoalCard lang={lang} enabled={goalEnabled} onToggle={handleGoalToggle} />
               <BrowserTab
                 lang={lang}
-                browserUse={(plugins ?? []).find((p) => p.name === 'browser-use')}
-                onToggle={(enabled) => onPluginToggle?.('browser-use', enabled)}
+                browserUse={browserUse}
+                onToggle={(enabled) => { if (browserUse) onPluginToggle?.(browserUse, enabled); }}
                 sendSetting={(key, value) => sendSetting?.(key, value)}
                 isDesktop={Boolean(window.illusionDesktop)}
               />

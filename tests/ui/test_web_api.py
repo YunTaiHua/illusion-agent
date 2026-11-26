@@ -3,10 +3,18 @@
 验证 Web 专属请求分发器能正确路由 web_* 请求。
 """
 
+import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from illusion.browser.base import TabInfo
+from illusion.config.paths import get_config_dir, get_config_file_path
+from illusion.config.settings import load_settings
+from illusion.ui.protocol import FrontendRequest
+from illusion.ui.runtime import build_runtime
+from illusion.ui.web.ws_host import WebBackendHost, WebHostConfig, _cwd_key, _WorkspaceState
 from illusion.ui.web.ws_web_api import WebApiDispatcher
 
 
@@ -63,6 +71,19 @@ class TestWebApiDispatcherRouting:
         calls = host._emit.call_args_list
         types = [c.args[0].type for c in calls]
         assert "error" in types
+
+    @pytest.mark.asyncio
+    async def test_failed_query_completes_only_the_originating_request(self, dispatcher, monkeypatch):
+        monkeypatch.setattr(dispatcher, "handle_web_query", AsyncMock(side_effect=RuntimeError("failed")))
+        await dispatcher.handle(FrontendRequest(
+            type="web_query", command="compact", session_id="s1", request_id="q1",
+        ))
+        dispatcher._host._emit.assert_awaited_once()
+        call = dispatcher._host._emit.await_args
+        event = call.args[0]
+        assert call.kwargs["session_id"] == "s1"
+        assert (event.type, event.web_request_id, event.is_error) == ("web_query_result", "q1", True)
+        assert "failed" in event.web_query_payload
 
 
 class TestWebHostDispatch:
@@ -718,10 +739,6 @@ class TestWebQuery:
         assert result_evts[0].web_query_payload == "结果文本"
 
 
-from illusion.browser.base import TabInfo
-from illusion.ui.protocol import FrontendRequest
-
-
 class TestBrowserPickAndTabsHandlers:
     """浏览器拾取/tab 处理器：自开兜底、payload 透传、错误不炸分发循环。"""
 
@@ -857,75 +874,363 @@ class TestBrowserPickAndTabsHandlers:
         assert any(e.type == "browser_state" for e in evts)
 
 
-class TestPluginToggleReachesSessionEngines:
-    """热切换必须覆盖会话引擎的元数据快照（build_session_engine 对
-    tool_metadata 做创建时拷贝——只更新 bundle 原引擎会让正在对话的
-    会话拿到旧元数据，browser_manager 缺失 → 工具调用报"插件未启用"）。"""
+def _install_web_test_plugin(root: Path, name: str = "notes", **manifest) -> None:
+    root.mkdir(parents=True)
+    (root / "plugin.json").write_text(json.dumps({"name": name, **manifest}), encoding="utf-8")
 
-    def test_toggle_on_sets_session_engine_metadata(self, monkeypatch, tmp_path):
-        from unittest.mock import AsyncMock, MagicMock
-        from illusion.ui.web.ws_web_api import WebApiDispatcher
-        from illusion.ui.protocol import FrontendRequest
 
-        host = MagicMock()
-        host._emit = AsyncMock()
-        host._bundle = MagicMock()
-        host._bundle.cwd = str(tmp_path)
-        session = MagicMock()
-        session.engine._tool_metadata = {}
-        session.bundle = host._bundle
-        host._sessions = {"s1": session}
-        host._workspace_bundles = MagicMock(return_value=[host._bundle])
+@pytest.fixture
+async def plugin_host(monkeypatch):
+    from illusion.mcp.client import McpClientManager
+    from illusion.tasks.manager import get_task_manager
 
-        # 热切换路径里的浏览器组件打桩（管理器/工具集均为 mock）
-        import illusion.ui.web.ws_web_api as mod
-        manager = MagicMock()
-        monkeypatch.setattr(
-            mod, "_load_settings",
-            lambda: MagicMock(enabled_plugins={}, browser=MagicMock(
-                kernel="auto", headless=True,
-                viewport_width=1280, viewport_height=720, proxy="auto")),
-        )
-        monkeypatch.setattr(mod, "_save_settings", lambda s: None)
-        import illusion.browser as browser_pkg
-        monkeypatch.setattr(browser_pkg, "BrowserManager", MagicMock(return_value=manager))
-        import illusion.tools.browser_tools as bt
-        monkeypatch.setattr(bt, "create_browser_tools", lambda: [])
+    # 使用真实 resolver、运行时和会话引擎，仅隔离外部连接和 WS 输出。
+    monkeypatch.setattr(McpClientManager, "connect_all", AsyncMock())
+    monkeypatch.setattr(get_task_manager(), "on_task_complete", None)
+    monkeypatch.setenv("ILLUSION_BROWSER_PREWARM", "0")
+    host = WebBackendHost(WebHostConfig(), MagicMock())
+    host._emit = AsyncMock()
+    yield host
+    await host._close_workspace_bundles()
 
-        dispatcher = WebApiDispatcher(host)
+
+@pytest.fixture
+async def peer_host(plugin_host, monkeypatch):
+    peer = WebBackendHost(WebHostConfig(), MagicMock())
+    peer._emit = AsyncMock()
+    monkeypatch.setattr("illusion.ui.web.ws_host._active_hosts", {plugin_host, peer})
+    yield peer
+    await peer._close_workspace_bundles()
+
+
+async def _web_test_workspace(host, path):
+    path.mkdir(parents=True, exist_ok=True)
+    bundle = await build_runtime(cwd=str(path), api_client=MagicMock())
+    host._workspaces[_cwd_key(bundle.cwd)] = _WorkspaceState(cwd=bundle.cwd, bundle=bundle)
+    if host._bundle is None:
+        host._bundle = bundle
+    return bundle
+
+
+async def _web_plugin_toggle(host, name, enabled, **target):
+    host._emit.reset_mock()
+    await host._web_api.handle(FrontendRequest(
+        type="web_plugin_toggle", setting_key=name, setting_value=enabled, **target,
+    ))
+    return [call.args[0] for call in host._emit.await_args_list]
+
+
+def _notes_hook(label):
+    return {"PreToolUse": [{"hooks": [{"type": "prompt", "prompt": label}]}]}
+
+
+class TestScopedPluginToggle:
+    async def test_project_toggle_refreshes_only_its_workspace_and_live_sessions(self, plugin_host, tmp_path):
+        host = plugin_host
+        a, b = tmp_path / "a", tmp_path / "b"
+        _install_web_test_plugin(get_config_dir() / "plugins/user-copy", hooks=_notes_hook("user hook"))
+        for path in (a, b):
+            _install_web_test_plugin(
+                path / ".illusion/plugins/project-copy", hooks=_notes_hook("project hook"),
+                mcpServers={"worker": {"type": "stdio", "command": "unused-in-test"}},
+            )
+        first = await _web_test_workspace(host, a)
+        other = await _web_test_workspace(host, b)
+        sessions = [await host._create_session(first.cwd) for _ in range(2)]
+        sessions[0].busy = True
+        active = await host._create_session(other.cwd)
+        host._set_active_session(active.session_id)
+        # 模拟另一个等价拼法的会话与请求；宿主仍以真实 workspace.cwd 写入。
+        sessions[1].bundle.cwd += "/."
+        hooks = first.hook_executor
+        other_registry = other.hook_executor._registry
+        mcp = first.mcp_manager
+        assert "project hook" in hooks._registry.summary()
+
+        events = await _web_plugin_toggle(host, "notes", False, cwd=first.cwd + "/.", plugin_scope="project")
+
+        assert [event.type for event in events] == ["web_resources", "web_setting_changed"]
+        assert events[0].cwd == first.cwd
+        snapshot = {p["name"]: p for p in events[0].web_resources["plugins"]}
+        assert snapshot["notes"]["scope"] == "project" and snapshot["notes"]["enabled"] is False
+        assert snapshot["browser-use"]["scope"] == "user"
+        assert snapshot["browser-use"]["enabled"] is False and snapshot["browser-use"]["is_builtin_browser"]
+        assert snapshot["notes"]["is_builtin_browser"] is False
+        assert json.loads((a / ".illusion/permissions.json").read_text())["enabled_plugins"] == {"notes": False}
+        assert not (b / ".illusion/permissions.json").exists()
+        assert "notes" not in load_settings().enabled_plugins
+        assert first.engine._hook_executor is hooks and "project hook" not in hooks._registry.summary()
+        for session in sessions:
+            assert session.engine._hook_executor is hooks
+            assert session.bundle.mcp_manager is mcp
+        assert active.engine._hook_executor._registry is other_registry
+        assert "project hook" in other_registry.summary()
+        assert sessions[0].busy
+        # 已构建的 MCP 连接随运行时生命周期保留。新运行时按最新开关发现服务。
+        assert [s.name for s in mcp.list_statuses()] == ["notes:worker"]
+        from illusion.ui.runtime import close_runtime
+        rebuilt = await build_runtime(cwd=first.cwd, api_client=MagicMock())
+        try:
+            assert not rebuilt.mcp_manager.list_statuses()
+        finally:
+            await close_runtime(rebuilt)
+
+    async def test_project_toggle_updates_matching_peer_sessions_and_visible_panel(self, plugin_host, peer_host, tmp_path, monkeypatch):
+        from illusion.plugins import loader
+
+        a, b = tmp_path / "a", tmp_path / "b"
+        for root in (a, b):
+            _install_web_test_plugin(root / ".illusion/plugins/notes", hooks=_notes_hook("local hook"))
+        origin = await _web_test_workspace(plugin_host, a)
+        peer_a, peer_b = [await _web_test_workspace(peer_host, path) for path in (a, b)]
+        sa, sb = [await peer_host._create_session(root.cwd) for root in (peer_a, peer_b)]
+        sa.busy = True
+        b_hooks = sb.engine._hook_executor._registry
+        peer_host._set_active_session(sb.session_id)
+        setter = MagicMock(wraps=loader.set_plugin_enabled)
+        monkeypatch.setattr(loader, "set_plugin_enabled", setter)
+        await _web_plugin_toggle(plugin_host, "notes", False, cwd=origin.cwd, plugin_scope="project")
+        assert "local hook" not in sa.engine._hook_executor._registry.summary()
+        assert sa.engine._hook_executor._registry is origin.hook_executor._registry
+        assert sb.engine._hook_executor._registry is b_hooks and "local hook" in b_hooks.summary()
+        peer_host._emit.assert_not_awaited()
+        peer_host._set_active_session(sa.session_id)
+        await _web_plugin_toggle(plugin_host, "notes", True, cwd=origin.cwd, plugin_scope="project")
+        assert setter.call_count == 2
+        assert "local hook" in sa.engine._hook_executor._registry.summary() and sa.busy
+        snapshot, = [c.args[0] for c in peer_host._emit.await_args_list]
+        assert snapshot.type == "web_resources" and snapshot.cwd == origin.cwd
+        note, = [p for p in snapshot.web_resources["plugins"] if p["name"] == "notes"]
+        assert note["enabled"] and note["scope"] == "project"
+        assert not (b / ".illusion/permissions.json").exists()
+
+    async def test_user_toggle_respects_project_shadow_and_denial(self, plugin_host, tmp_path):
+        host = plugin_host
+        _install_web_test_plugin(get_config_dir() / "plugins/user", hooks=_notes_hook("user hook"))
+        _install_web_test_plugin(tmp_path / "shadow/.illusion/plugins/local", hooks=_notes_hook("project hook"))
+        policy = tmp_path / "denied/.illusion/permissions.json"
+        policy.parent.mkdir(parents=True)
+        policy.write_text('{"denied_plugins":["notes"]}', encoding="utf-8")
+        plain, shadow, denied = [await _web_test_workspace(host, tmp_path / key)
+                                 for key in ("plain", "shadow", "denied")]
+        s1 = await host._create_session(plain.cwd)
+        s2 = await host._create_session(shadow.cwd)
+        host._set_active_session(s2.session_id)
+        events = await _web_plugin_toggle(host, "notes", False, session_id=s1.session_id, plugin_scope="user")
+        assert events[-1].type == "web_setting_changed"
+        assert load_settings().enabled_plugins["notes"] is False
+        assert "user hook" not in s1.engine._hook_executor._registry.summary()
+        assert "project hook" in s2.engine._hook_executor._registry.summary()
+        assert all(p.name != "notes" for p in denied.current_plugins())
+        assert not (Path(shadow.cwd) / ".illusion/permissions.json").exists()
+        snapshots = {e.cwd: e.web_resources for e in events if e.type == "web_resources"}
+        for cwd, scope, enabled in [(plain.cwd, "user", False), (shadow.cwd, "project", True)]:
+            row, = [p for p in snapshots[cwd]["plugins"] if p["name"] == "notes"]
+            assert (row["scope"], row["enabled"]) == (scope, enabled)
+
+    async def test_browser_global_toggle_uses_own_manager_for_each_permitted_workspace(self, plugin_host, peer_host, tmp_path):
+        host = plugin_host
+        policy = tmp_path / "denied/.illusion/permissions.json"
+        policy.parent.mkdir(parents=True)
+        policy.write_text('{"denied_plugins":["*"]}', encoding="utf-8")
+        roots = [await _web_test_workspace(host, tmp_path / key) for key in ("a", "b", "denied")]
+        sessions = [await host._create_session(root.cwd) for root in roots]
+        sessions[1].busy = True
+        peer_root = await _web_test_workspace(peer_host, tmp_path / "a")
+        peer_denied = await _web_test_workspace(peer_host, tmp_path / "denied")
+        peer_session = await peer_host._create_session(peer_root.cwd)
+        peer_session.busy = True
+        peer_host._set_active_session(peer_session.session_id)
+        events = await _web_plugin_toggle(host, "browser-use", True)
+        assert events[-1].type == "web_setting_changed"
+        peer_manager = peer_root.browser_manager
+        assert peer_manager is not None and peer_manager is not roots[0].browser_manager
+        assert peer_manager.on_frame == peer_host._emit_browser_frame
+        assert peer_session.engine.tool_metadata["browser_manager"] is peer_manager
+        assert peer_denied.browser_manager is None
+        snapshot = peer_host._emit.await_args.args[0]
+        assert snapshot.type == "web_resources" and snapshot.cwd == peer_root.cwd
+        assert any(p["is_builtin_browser"] and p["enabled"] for p in snapshot.web_resources["plugins"])
+        peer_manager.aclose = AsyncMock(wraps=peer_manager.aclose)
+        assert load_settings().enabled_plugins["browser-use"] is True
+        assert roots[0].browser_manager is not roots[1].browser_manager
+        for root, session in zip(roots[:2], sessions[:2]):
+            manager = root.browser_manager
+            assert manager is not None and manager.on_state_change == host._emit_browser_state
+            assert manager.on_frame == host._emit_browser_frame
+            assert session.bundle.browser_manager is root.engine.tool_metadata["browser_manager"] is manager
+            assert session.engine.tool_metadata["browser_manager"] is manager
+            assert session.engine.tool_registry.get("browser_navigate") is not None
+            manager.aclose = AsyncMock(wraps=manager.aclose)
+        assert roots[2].browser_manager is sessions[2].bundle.browser_manager is None
+        assert sessions[2].engine.tool_metadata.get("browser_manager") is None
+        assert sessions[2].engine.tool_registry.get("browser_navigate") is None
+        assert host._web_api._browser_manager(FrontendRequest(
+            type="web_browser_open", cwd=roots[2].cwd, session_id=sessions[0].session_id,
+        )) is None
+        managers = [root.browser_manager for root in roots[:2]]
+        first_close = managers[0].aclose
+        created_during_purge = []
+
+        async def close_first(*, purge):
+            created_during_purge.append(await host._create_session(roots[1].cwd))
+            await first_close(purge=purge)
+
+        managers[0].aclose = AsyncMock(side_effect=close_first)
+        events = await _web_plugin_toggle(host, "browser-use", False, session_id=sessions[1].session_id,
+                                          cwd=roots[1].cwd + "/.", plugin_scope="user")
+        assert events[-1].type == "web_setting_changed"
+        assert load_settings().enabled_plugins["browser-use"] is False
+        peer_manager.aclose.assert_awaited_once_with(purge=True)
+        assert "browser_manager" not in peer_session.engine.tool_metadata and peer_root.browser_manager is None
+        assert peer_session.engine.tool_registry.get("browser_navigate") is None and peer_session.busy
+        for manager in managers:
+            manager.aclose.assert_awaited_once_with(purge=True)
+        late, = created_during_purge
+        assert late.bundle.browser_manager is None and "browser_manager" not in late.engine.tool_metadata
+        for root, session in zip(roots, sessions):
+            assert session.bundle.browser_manager is root.browser_manager is None
+            assert "browser_manager" not in session.engine.tool_metadata
+            assert session.engine.tool_registry.get("browser_navigate") is None
+        assert sessions[1].busy
+
+    async def test_peer_enable_waits_for_previous_browser_purge(self, plugin_host, peer_host, tmp_path):
         import asyncio
-        asyncio.run(dispatcher.handle(FrontendRequest(
-            type="web_plugin_toggle", setting_key="browser-use", setting_value=True)))
 
-        # 会话引擎元数据必须拿到 bundle 的 browser_manager（回归核心断言：
-        # 热切换前会话引擎的元数据快照里没有它）
-        assert session.engine._tool_metadata["browser_manager"]             is host._bundle.browser_manager
+        root, peer_root = [await _web_test_workspace(host, tmp_path / "shared") for host in (plugin_host, peer_host)]
+        await _web_plugin_toggle(plugin_host, "browser-use", True, cwd=root.cwd)
+        purging, release = asyncio.Event(), asyncio.Event()
+        original_close = root.browser_manager.aclose
 
-    def test_toggle_off_clears_session_engine_metadata(self, monkeypatch, tmp_path):
-        from unittest.mock import AsyncMock, MagicMock
-        from illusion.ui.web.ws_web_api import WebApiDispatcher
-        from illusion.ui.protocol import FrontendRequest
+        async def pause_purge(*, purge):
+            purging.set()
+            await release.wait()
+            await original_close(purge=purge)
 
-        host = MagicMock()
-        host._emit = AsyncMock()
-        host._bundle = MagicMock()
-        host._bundle.cwd = str(tmp_path)
-        session = MagicMock()
-        session.engine._tool_metadata = {"browser_manager": MagicMock()}
-        session.bundle = host._bundle
-        host._sessions = {"s1": session}
-        host._workspace_bundles = MagicMock(return_value=[])
+        root.browser_manager.aclose = pause_purge
+        disabling = asyncio.create_task(_web_plugin_toggle(plugin_host, "browser-use", False, cwd=root.cwd))
+        await asyncio.wait_for(purging.wait(), timeout=5)
+        enabling = asyncio.create_task(_web_plugin_toggle(peer_host, "browser-use", True, cwd=peer_root.cwd))
+        try:
+            await asyncio.sleep(0)  # 第二个宿主的请求已进入分发器，等待第一次 purge 结束
+            assert not enabling.done() and load_settings().enabled_plugins["browser-use"] is False
+        finally:
+            release.set()
+            await asyncio.gather(disabling, enabling)
+        assert root.browser_manager is not None and peer_root.browser_manager is not None
+        assert load_settings().enabled_plugins["browser-use"] is True
 
-        import illusion.ui.web.ws_web_api as mod
-        monkeypatch.setattr(mod, "_load_settings",
-                            lambda: MagicMock(enabled_plugins={}))
-        monkeypatch.setattr(mod, "_save_settings", lambda s: None)
-        import illusion.tools.browser_tools as bt
-        monkeypatch.setattr(bt, "create_browser_tools", lambda: [])
+    @pytest.mark.parametrize("scope", ["user", "project"])
+    async def test_lookalike_browser_plugin_cannot_enable_native_tools(self, plugin_host, tmp_path, monkeypatch, scope):
+        host = plugin_host
+        path = tmp_path / "workspace"
+        monkeypatch.setattr("illusion.browser.seeding.seed_builtin_browser_plugin", lambda: None)
+        parent = get_config_dir() if scope == "user" else path / ".illusion"
+        _install_web_test_plugin(parent / "plugins/lookalike", "browser-use", enabled_by_default=False)
+        workspace = await _web_test_workspace(host, path)
+        session = await host._create_session(workspace.cwd)
+        events = await _web_plugin_toggle(host, "browser-use", True, cwd=workspace.cwd, plugin_scope=scope)
+        assert events[-1].type == "web_setting_changed"
+        plugin, = workspace.current_plugins()
+        assert plugin.enabled and plugin.scope == scope
+        row, = events[0].web_resources["plugins"]
+        assert row["is_builtin_browser"] is False and row["enabled"] is True
+        assert workspace.browser_manager is session.bundle.browser_manager is None
+        assert session.engine.tool_registry.get("browser_navigate") is None
 
-        dispatcher = WebApiDispatcher(host)
-        import asyncio
-        asyncio.run(dispatcher.handle(FrontendRequest(
-            type="web_plugin_toggle", setting_key="browser-use", setting_value=False)))
+    async def test_stale_targets_invalid_values_and_failed_setter_have_no_runtime_effect(
+        self, plugin_host, tmp_path, monkeypatch,
+    ):
+        host = plugin_host
+        a, b, outside = [tmp_path / key for key in ("a", "b", "unregistered")]
+        for path in (a, b, outside):
+            _install_web_test_plugin(path / ".illusion/plugins/notes", hooks=_notes_hook("keep"))
+        first, other = [await _web_test_workspace(host, path) for path in (a, b)]
+        active = await host._create_session(first.cwd)
+        host._set_active_session(active.session_id)
+        original = active.engine._hook_executor._registry
+        # 即使一个选择器有效，另一个过期或不一致的选择器也必须使整个写操作失败。
+        for target in [
+            {"cwd": str(outside)}, {"cwd": ""}, {"session_id": "missing"}, {"session_id": ""},
+            {"cwd": first.cwd, "session_id": "missing"}, {"cwd": str(outside), "session_id": active.session_id},
+            {"cwd": other.cwd, "session_id": active.session_id}, {"cwd": first.cwd, "plugin_scope": "user"},
+        ]:
+            events = await _web_plugin_toggle(host, "notes", False, **target)
+            assert [e.type for e in events] == ["web_plugin_toggle_error"], target
+        for value in (None, "false", "true", 0, 1, [], {}):
+            events = await _web_plugin_toggle(host, "notes", value, cwd=first.cwd)
+            assert [e.type for e in events] == ["web_plugin_toggle_error"], value
+        for name in ("", "   ", "not-installed"):
+            events = await _web_plugin_toggle(host, name, True, cwd=first.cwd)
+            assert [e.type for e in events] == ["web_plugin_toggle_error"], name
+        assert all(not (p / ".illusion/permissions.json").exists() for p in (a, b, outside))
+        policy = a / ".illusion/permissions.json"
+        for invalid in ('{"denied_plugins":["browser-use"]}', '{'):
+            policy.write_text(invalid, encoding="utf-8")
+            events = await _web_plugin_toggle(host, "browser-use", True, cwd=first.cwd)
+            assert [e.type for e in events] == ["web_plugin_toggle_error"]
+            assert policy.read_text(encoding="utf-8") == invalid
+        policy.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr("illusion.permissions.loader.atomic_write_text", MagicMock(side_effect=OSError("write failed")))
+        events = await _web_plugin_toggle(host, "notes", False, cwd=first.cwd)
+        assert [e.type for e in events] == ["web_plugin_toggle_error"] and "write failed" in events[0].message
+        assert policy.read_text(encoding="utf-8") == "{}"
+        assert not get_config_file_path().exists()
+        assert active.engine._hook_executor._registry is original
+        assert all(root.browser_manager is None for root in (first, other, active.bundle))
 
-        assert "browser_manager" not in session.engine._tool_metadata
+    async def test_legacy_command_writes_do_not_use_the_terminal_handler(self, plugin_host, tmp_path):
+        host = plugin_host
+        _install_web_test_plugin(tmp_path / "workspace/.illusion/plugins/notes")
+        root = await _web_test_workspace(host, tmp_path / "workspace")
+        session = await host._create_session(root.cwd)
+        host._set_active_session(session.session_id)
+        session.busy = True
+        for request in [
+            FrontendRequest(type="web_query", command="plugin", args="disable notes", cwd=root.cwd),
+            FrontendRequest(type="web_query", command="plugin enable", args="notes", cwd=root.cwd),
+            FrontendRequest(type="submit_line", line=" /plugin   disable notes ", session_id="stale", cwd=root.cwd),
+        ]:
+            host._emit.reset_mock()
+            await host._dispatch_request(request)
+            event, = [call.args[0] for call in host._emit.await_args_list]
+            assert event.type == "web_plugin_toggle_error" and event.cwd == root.cwd
+            assert "插件面板" in event.message and session.busy
+        assert not (Path(root.cwd) / ".illusion/permissions.json").exists()
+        await host._dispatch_request(FrontendRequest(type="web_query", command="plugin", args="list"))
+        assert host._emit.await_args.args[0].type == "web_query_result"
+
+    async def test_invalid_wire_scope_and_partial_refresh_report_only_plugin_error(self, plugin_host, tmp_path, monkeypatch):
+        from starlette.websockets import WebSocketDisconnect
+
+        host = plugin_host
+        _install_web_test_plugin(tmp_path / "workspace/.illusion/plugins/notes")
+        root = await _web_test_workspace(host, tmp_path / "workspace")
+        monkeypatch.setattr(root.hook_executor, "update_registry", MagicMock(side_effect=RuntimeError("refresh failed")))
+        events = await _web_plugin_toggle(host, "notes", False, cwd=root.cwd)
+        assert [e.type for e in events] == ["web_resources", "web_plugin_toggle_error"]
+        assert "已保存" in events[-1].message and events[-1].cwd == root.cwd
+        assert json.loads((Path(root.cwd) / ".illusion/permissions.json").read_text())["enabled_plugins"] == {"notes": False}
+        host._emit.reset_mock()
+        host._shutdown = AsyncMock()
+        host._websocket.receive_text = AsyncMock(side_effect=[
+            json.dumps({"type": "web_plugin_toggle", "plugin_scope": "unknown", "cwd": root.cwd}), WebSocketDisconnect(),
+        ])
+        await host._read_requests()
+        error, = [call.args[0] for call in host._emit.await_args_list]
+        assert error.type == "web_plugin_toggle_error" and error.cwd == root.cwd and error.message
+
+    async def test_legacy_target_uses_active_then_default_workspace(self, plugin_host, tmp_path):
+        host = plugin_host
+        for key in ("a", "b"):
+            _install_web_test_plugin(tmp_path / key / ".illusion/plugins/notes")
+        first, other = [await _web_test_workspace(host, tmp_path / key) for key in ("a", "b")]
+        session = await host._create_session(other.cwd)
+        host._set_active_session(session.session_id)
+        events = await _web_plugin_toggle(host, "notes", False)
+        assert events[0].type == "web_resources" and events[0].cwd == other.cwd
+        assert not (Path(first.cwd) / ".illusion/permissions.json").exists()
+        host._active_session_id = None
+        events = await _web_plugin_toggle(host, "notes", False)
+        assert events[0].type == "web_resources" and events[0].cwd == first.cwd
+        assert "notes" not in load_settings().enabled_plugins

@@ -55,6 +55,16 @@ class TestUnitAuth:
         create_web_auth(path)
         assert path.read_text(encoding="utf-8").find('"secret"') != -1
 
+    def test_default_secret_creates_missing_config_root(self, tmp_path, monkeypatch) -> None:
+        config_root = tmp_path / "missing" / "user-config"
+        monkeypatch.setenv("ILLUSION_CONFIG_DIR", str(config_root))
+
+        create_web_auth()
+
+        secret_path = config_root / "web_auth_secret.json"
+        assert secret_path.exists()
+        assert '"secret"' in secret_path.read_text(encoding="utf-8")
+
     def test_invalid_secret_file_fails_loudly(self, tmp_path) -> None:
         path = tmp_path / "secret.json"
         path.write_text('{"version": 1, "secret": "!!not-base64url!!"}', encoding="utf-8")

@@ -250,7 +250,11 @@ export function useSmoothReveal(
     }
 
     const prevTarget = targetRef.current;
-    if (content === prevTarget) return;
+    if (content === prevTarget) {
+      // StrictMode 重跑 effect 时，清理已取消 rAF，但待揭示文本仍在队列中。
+      if (displayedCountRef.current < targetCountRef.current) startLoop();
+      return;
+    }
 
     const now = performance.now();
     // 非追加（回退/清空/新会话）：立即对齐，避免错位
@@ -290,6 +294,11 @@ export function useSmoothReveal(
     return () => stopLoop();
   }, [stopLoop]);
 
+  // 相邻模型步可能在同一批更新中直接换段；在 effect 同步前也只绘制本段的文字。
+  const previousTarget = targetRef.current;
+  if (!enabled || (content !== previousTarget && !content.startsWith(previousTarget))) {
+    return content;
+  }
   return displayed;
 }
 

@@ -2,7 +2,7 @@
  * Goal 状态行组件
  *
  * 当会话存在未完成 goal 时替代底部 Shimmer（Spinner），两行结构：
- *   第一行：spinner 帧 + 相位标签（dsh ui-goal locales 同文）+ SESSION ID
+ *   第一行：spinner 帧 + 相位标签 + SESSION ID
  *   （沿用 Spinner 的自然追加位置）
  *   第二行：目标文本单行截断
  * 轮次进度（round N/M）由 StatusBar 的 GoalIndicator 呈现，本组件不重复显示。

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from illusion.commands.slash_skills import format_prompt_entry
 from illusion.config.settings import Settings
 from illusion.memory import find_relevant_memories, load_memory_prompt
 from illusion.prompts.claudemd import load_claude_md_prompt
@@ -71,32 +72,22 @@ def _build_rules_section(cwd: str | Path) -> str | None:
 
 
 def _build_skills_section(cwd: str | Path) -> str | None:
-    """构建技能章节
-
-    生成列出可用技能的系统提示词章节。
-
-    Args:
-        cwd: 工作目录
-
-    Returns:
-        str | None: 技能章节字符串，如果没有技能则返回 None
-    """
+    """构建只包含可由模型加载的真技能章节。"""
     registry = load_skill_registry(cwd)
-    skills = registry.list_skills()
+    skills = [skill for skill in registry.list_skills() if not skill.disable_model_invocation]
     if not skills:
         return None
+
     lines = [
         "# Available Skills",
         "",
         (
-            "The following skills are available via the `skill` tool. "
-            'When a user\'s request matches a skill, invoke it with `skill(name="<skill_name>")` '
-            "to load detailed instructions before proceeding."
+            "If a loaded skill's pre-run check cannot find a bundled file, verify the skill's "
+            "installation scope (user, project, or plugin) before reporting it missing."
         ),
         "",
     ]
-    for skill in skills:
-        lines.append(f"- **{skill.name}**: {skill.description}")
+    lines.extend(format_prompt_entry(skill) for skill in skills)
     return "\n".join(lines)
 
 

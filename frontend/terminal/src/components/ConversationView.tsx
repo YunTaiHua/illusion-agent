@@ -15,6 +15,8 @@
 
 import React, {useMemo} from 'react';
 import {Box, Static, Text} from 'ink';
+import chalk from 'chalk';
+import {referenceRanges, paintReferences, type CommandCatalog} from '../utils/slashCommands.js';
 
 import {useTerminalSize} from '../hooks/useTerminalSize.js';
 import type {UiLanguage} from '../i18n.js';
@@ -65,6 +67,7 @@ export function ConversationView({
 	showThinking,
 	language,
 	pendingToolCalls,
+	catalog,
 }: {
 	staticItems: TranscriptItem[];
 	clearCount: number;
@@ -73,7 +76,7 @@ export function ConversationView({
 	showThinking: boolean;
 	language: UiLanguage;
 	pendingToolCalls?: PendingToolCall[];
-	commandPickerOpen?: boolean;
+	catalog: CommandCatalog;
 }): React.JSX.Element {
 	const theme = useTheme();
 	const {columns: terminalWidth} = useTerminalSize();
@@ -119,7 +122,7 @@ export function ConversationView({
 					if (entry.type === 'tool_group') {
 						return <ToolGroupRow key={key} toolItem={entry.toolItem} resultItem={entry.resultItem} theme={theme} prevRole={prevRole} terminalWidth={terminalWidth} />;
 					}
-					return <MessageRow key={key} item={entry.item} theme={theme} language={language} prevRole={prevRole} showThinking={showThinking} terminalWidth={terminalWidth} />;
+					return <MessageRow key={key} item={entry.item} catalog={catalog} theme={theme} language={language} prevRole={prevRole} showThinking={showThinking} terminalWidth={terminalWidth} />;
 				}}
 			</Static>
 
@@ -518,6 +521,7 @@ function ToolResultBlock({
 
 function MessageRow({
 	item,
+	catalog,
 	theme,
 	language,
 	prevRole,
@@ -525,6 +529,7 @@ function MessageRow({
 	terminalWidth,
 }: {
 	item: TranscriptItem;
+	catalog: CommandCatalog;
 	theme: ThemeConfig;
 	language: UiLanguage;
 	prevRole?: string;
@@ -536,7 +541,9 @@ function MessageRow({
 			const needsDivider = prevRole !== 'user';
 			const prefix = `${theme.icons.pointer} `;
 			const continuationPrefix = ' '.repeat(stringWidth(prefix));
-			const wrapped = wrapForPrefix(item.text, terminalWidth, prefix);
+			const ranges = referenceRanges(item.text, catalog, {snapshot: item.slash_references});
+			const colored = paintReferences(item.text, 0, ranges, chalk.hex(theme.colors.suggestion));
+			const wrapped = wrapForPrefix(colored, terminalWidth, prefix);
 			return (
 				<Box flexDirection="column" marginTop={needsDivider ? 1 : 0}>
 					{needsDivider ? (

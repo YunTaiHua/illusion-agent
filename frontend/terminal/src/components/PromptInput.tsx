@@ -11,7 +11,7 @@
  */
 
 import React from 'react';
-import {Box} from 'ink';
+import {Box, type Key} from 'ink';
 
 import type {UiLanguage} from '../i18n.js';
 import {t} from '../i18n.js';
@@ -20,6 +20,7 @@ import {useTerminalSize} from '../hooks/useTerminalSize.js';
 import {Spinner} from './Spinner.js';
 import MultilineTextInput from './MultilineTextInput.js';
 import type {TodoItemSnapshot} from '../types.js';
+import type {TextRange} from '../utils/slashCommands.js';
 
 /** 空操作函数，用于禁用提交 */
 function noop(): void {}
@@ -56,8 +57,9 @@ export function PromptInput({
 	language,
 	todoItems,
 	onCursorChange,
-	suppressNavigation,
+	onPickerKey,
 	initialCursorOffset,
+	referenceRanges,
 }: {
 	busy: boolean;
 	stopping?: boolean;
@@ -72,10 +74,11 @@ export function PromptInput({
 	todoItems?: TodoItemSnapshot[];
 	/** 光标位置变化回调（@ 提及 token 检测依赖光标位置） */
 	onCursorChange?: (offset: number) => void;
-	/** 为 true 时忽略 ↑↓/Enter/Tab（补全菜单打开时按键交由菜单导航） */
-	suppressNavigation?: boolean;
+	/** 允许选择器先于编辑器消费导航或选中按键。 */
+	onPickerKey?: (key: Key) => boolean;
 	/** 重挂载时光标初始位置（@ 提及插入后定位到插入点之后） */
 	initialCursorOffset?: number;
+	referenceRanges?: TextRange[];
 }): React.JSX.Element {
 	const theme = useTheme();
 	const {columns} = useTerminalSize();
@@ -105,8 +108,9 @@ export function PromptInput({
 				focus={!busy && inputFocus}
 				columns={inputColumns}
 				onCursorChange={onCursorChange}
-				suppressNavigation={suppressNavigation}
+				onPickerKey={onPickerKey}
 				initialCursorOffset={initialCursorOffset}
+				referenceRanges={referenceRanges}
 			/>
 		</Box>
 		</Box>

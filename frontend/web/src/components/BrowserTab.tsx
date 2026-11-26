@@ -104,6 +104,7 @@ export function BrowserTab({ lang, browserUse, onToggle, sendSetting, isDesktop 
           </div>
           <ToggleSwitch
             checked={enabled}
+            disabled={!browserUse}
             onChange={onToggle}
             label="browser-use"
             title={enabled ? t(lang, 'plugin_disable_hint') : t(lang, 'plugin_enable_hint')}

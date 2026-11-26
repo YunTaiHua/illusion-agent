@@ -2,7 +2,6 @@
  * @fileoverview 工具渲染接口定义
  *
  * 定义每个工具类型需要实现的渲染方法，取代通用的 summarizeInput + ToolResultBlock。
- * 参考 Claude Code 的 Tool.ts 接口设计。
  *
  * @module tools/ToolInterface
  */

@@ -32,7 +32,7 @@ interface GoalBarProps {
   goal: GoalStatus | null | undefined;
   /** 当前 UI 语言 */
   lang: UiLanguage;
-  /** goal_action 最近一次失败（行内显示；dsh actionError 的事件化对应物） */
+  /** goal_action 最近一次失败（行内显示；由事件通知触发） */
   actionError: { code: string; message: string } | null;
   /** 编辑目标（CAS ref 由调用方调用时读取） */
   onEdit: (objective: string) => void;
@@ -148,7 +148,7 @@ export function GoalBar({ goal, lang, actionError, onEdit, onPause, onResume, on
   }, [goal, onBlocked]);
 
   // 新 goal 身份（清除/完成/外部替换）使本地编辑态失效：
-  // 不重置的话残留草稿的 Enter 会写覆盖新 goal（dsh 同款防护）
+  // 不重置的话残留草稿的 Enter 会写覆盖新 goal
   const goalId = goal?.id;
   useEffect(() => {
     setEditing(false);

@@ -28,6 +28,8 @@ export interface TranscriptItem {
   role: 'system' | 'user' | 'assistant' | 'tool' | 'tool_result' | 'log' | 'plan';
   /** 消息文本内容 */
   text: string;
+  /** 该条 user 消息实际调用的原文 token。空表表示无命中，老会话可以没有此字段。 */
+  slash_references?: Record<string, 'skill' | 'command'>;
   /** 工具名称（仅在 role 为 'tool' 或 'tool_result' 时存在） */
   tool_name?: string;
   /** 工具输入参数（仅在 role 为 'tool' 时存在） */
@@ -192,6 +194,8 @@ export interface SkillSnapshot {
   description: string;
   /** 技能来源：'project'（项目级）、'user'（用户级）、'builtin'（内置） */
   source: string;
+  /** 条目类别：'skill'（真技能）| 'command'（插件斜杠命令）；缺省视为技能 */
+  kind?: string;
 }
 
 /**
@@ -200,6 +204,10 @@ export interface SkillSnapshot {
  * 表示一个已安装的插件。
  */
 export interface PluginSnapshot {
+  /** 安装来源，内置插件安装在用户配置根。 */
+  scope?: 'user' | 'project';
+  /** 此安装提供宿主的内置浏览器，关闭时也保留该标记。 */
+  is_builtin_browser?: boolean;
   /** 插件名称 */
   name: string;
   /** 插件描述 */
@@ -212,6 +220,8 @@ export interface PluginSnapshot {
   mcp_count: number;
   /** 命令数量 */
   command_count: number;
+  /** 代理定义数量 */
+  agent_count?: number;
 }
 
 /**
@@ -281,17 +291,25 @@ export interface FileTreeNode {
   size?: number;
 }
 
+/** 当前工作区的可调用资源。名称（含插件命名空间）和类型来自资源注册表。 */
+export interface SlashCommandEntry {
+  name: string;
+  kind: 'skill' | 'command';
+  description: string;
+  source?: string;
+  accepts_short_name?: boolean;
+}
+
 /**
  * @ 提及补全候选接口
  *
  * web_file_mentions 推送的单个候选（仅名称/路径文本，不读内容）。
  */
 export interface FileMentionCandidate {
-  /** 工作区内相对路径（/ 分隔）；skill 类型为技能名；session 类型为会话标题 */
+  /** 工作区内相对路径（/ 分隔），或会话标题 */
   path: string;
-  /** 条目类型：'dir' | 'file' | 'skill' | 'session'（目录选中后继续下钻，其余选中后闭合提及） */
-  kind: 'dir' | 'file' | 'skill' | 'session';
-  /** 技能描述（仅 skill 类型）或会话描述「轮次 · 时间」（仅 session 类型），菜单副标题展示 */
+  kind: 'dir' | 'file' | 'session';
+  /** 会话描述「轮次 · 时间」 */
   description?: string;
   /** 源会话 ID（仅 session 类型，插入提及文本用） */
   sessionId?: string;
@@ -502,7 +520,7 @@ export type FrontendRequest =
   | { type: 'web_browser_resize'; width: number; height: number }
   | { type: 'web_browser_interact'; browser_action: 'move' | 'click' | 'dblclick' | 'scroll' | 'key' | 'input'; x?: number; y?: number; dx?: number; dy?: number; /** key 交互的键名（Playwright 语法，复用 value 字段） */ value?: string; /** input 交互的追加文本（复用 query 字段） */ query?: string }
   // === 插件启用/禁用开关（右栏插件列表 + 设置页插件 Tab）===
-  | { type: 'web_plugin_toggle'; setting_key: string; setting_value: boolean };
+  | { type: 'web_plugin_toggle'; setting_key: string; setting_value: boolean; plugin_scope?: PluginSnapshot['scope']; cwd?: string; session_id?: string };
 
 // ---- 内置浏览器载荷 ----
 
@@ -665,6 +683,8 @@ export interface BackendEvent {
   /** web_resources 推送的资源快照（可选） */
   web_resources?: {
     skills: SkillSnapshot[];
+    /** 当前工作区可由 Web 输入框调用的动态斜杠候选。 */
+    slash_commands?: SlashCommandEntry[];
     agents: AgentSnapshot[];
     plugins: PluginSnapshot[];
     rules: RuleSnapshot[];
@@ -677,7 +697,6 @@ export interface BackendEvent {
   web_file_mentions?: {
     query: string;
     candidates: FileMentionCandidate[];
-    skills?: { name: string; description: string }[];
     sessions?: { sessionId: string; path: string; description?: string; cwd?: string }[];
     truncated?: boolean;
   };

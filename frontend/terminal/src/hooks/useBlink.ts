@@ -2,7 +2,7 @@
  * @fileoverview 同步闪烁 Hook
  *
  * 从全局动画时钟派生闪烁状态，所有使用 useBlink 的组件自动同步。
- * 闪烁间隔 600ms，与 Claude Code 一致。
+ * 闪烁间隔 600ms，保持终端动画节奏稳定。
  *
  * @module hooks/useBlink
  */

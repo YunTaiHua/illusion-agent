@@ -34,17 +34,12 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
 
-if TYPE_CHECKING:
-    from illusion.services.checkpoint_store import CheckpointStore, RestoreResult
-
-logger = logging.getLogger(__name__)
-
 from illusion.api.client import SupportsStreamingMessages
 from illusion.api.effort import EffortLevel
 from illusion.api.usage import UsageSnapshot
 from illusion.config.capabilities import ModelCapabilities
 from illusion.engine.cost_tracker import CostTracker
-from illusion.engine.messages import ConversationMessage, ToolResultBlock
+from illusion.engine.messages import ConversationMessage, SlashResourceBlock, ToolResultBlock
 from illusion.engine.query import (
     AskUserPrompt,
     BackgroundAgentTracker,
@@ -69,8 +64,14 @@ from illusion.services.file_history import (
 from illusion.services.file_history import (
     load as _file_history_load,
 )
+from illusion.skills.types import SlashReferences
 from illusion.tools.base import ToolRegistry
 from illusion.utils.file_state_cache import FileStateCache
+
+if TYPE_CHECKING:
+    from illusion.services.checkpoint_store import CheckpointStore, RestoreResult
+
+logger = logging.getLogger(__name__)
 
 
 def _collect_task_context(
@@ -336,9 +337,8 @@ class QueryEngine:
     def current_context_tokens(self) -> int:
         """当前上下文估算 = 最后一次 API 调用的真实 context_size + 新增消息估算。
 
-        与 Claude Code 的 tokenCountWithEstimation() 同思路：真实 usage 为
-        基准，新增消息用本地估算补齐，防止低估（低估会导致自动压缩触发
-        过晚，API 调用失败）。
+        以最后一次 API 调用的真实 usage 为基准，新增消息用本地估算补齐，防止低估
+        （低估会导致自动压缩触发过晚，API 调用失败）。
 
         Returns:
             int: 当前上下文占用 token 估算
@@ -702,11 +702,14 @@ class QueryEngine:
             return bool(msg.tool_uses)
         return False
 
-    async def submit_message(self, prompt: str) -> AsyncIterator[StreamEvent]:
+    async def submit_message(
+        self, prompt: str, *, slash_context: str = "", slash_references: SlashReferences | None = None,
+    ) -> AsyncIterator[StreamEvent]:
         """追加用户消息并执行查询循环。
 
         Args:
-            prompt: 用户输入的提示词
+            prompt: 用户输入原文（供引用解析、钩子和转录使用）
+            slash_context: 本次显式激活的资源正文与位置
 
         Yields:
             StreamEvent: 流式事件
@@ -745,14 +748,17 @@ class QueryEngine:
         except Exception:
             logger.exception("解析会话提及失败")
 
-        # 将用户文本转换为消息并添加到历史记录
-        self._messages.append(ConversationMessage.from_user_text(prompt))
-        # 持久化 user message
+        # 一条真实用户消息、一个 checkpoint。资源和原文分块，恢复后继续使用
+        # 提交时捕获的正文；重放、回填和 @ 引用读取的仍是普通文本块。
+        user_message = ConversationMessage.from_user_text(prompt, slash_references=slash_references)
+        if slash_context:
+            user_message.content.append(SlashResourceBlock(text="\n\n" + slash_context))
+        self._messages.append(user_message)
         if self._checkpoint_store is not None:
-            await self._checkpoint_store.append_message(self._messages[-1])
+            await self._checkpoint_store.append_message(user_message)
 
         # 注入会话引用快照（紧随直接消息的第二条 user 消息，
-        # deepseek-harness recall 语义：一次性捕获，此后不可变）
+        # 一次性捕获，此后不可变）
         if snapshot_text is not None:
             self._messages.append(ConversationMessage.from_user_text(snapshot_text))
             if self._checkpoint_store is not None:
@@ -895,9 +901,9 @@ class QueryEngine:
                 last_message_count=len(self._messages),
             )
 
-    async def _append_injected_user_message(self, text: str) -> None:
+    async def _append_injected_user_message(self, text: str, *, slash_references: SlashReferences | None = None) -> None:
         """追加一条 harness 注入的 user 消息并持久化（goal round / wrap-up）。"""
-        message = ConversationMessage.from_user_text(text)
+        message = ConversationMessage.from_user_text(text, slash_references=slash_references)
         self._messages.append(message)
         if self._checkpoint_store is not None:
             await self._checkpoint_store.append_message(message)
@@ -921,7 +927,7 @@ class QueryEngine:
         """
         if self._checkpoint_store is not None:
             await self._checkpoint_store.append_checkpoint()
-        await self._append_injected_user_message(text)
+        await self._append_injected_user_message(text, slash_references={})
 
     async def _flush_goal_state(self, *, force: bool = False) -> None:
         """将 goal 状态以 last-wins 行写入 checkpoint。

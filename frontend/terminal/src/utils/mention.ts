@@ -11,6 +11,8 @@
  * @module mention
  */
 
+import type {FileMentionCandidate} from '../types.js';
+
 /**
  * @ 提及 token（光标处正在输入的提及片段）
  */
@@ -25,17 +27,7 @@ export type MentionToken = {
 	quoted: boolean;
 };
 
-/**
- * 提及候选的最小形状（文件/目录/技能/会话共用）
- *
- * 与 types.ts 的 FileMentionCandidate 结构一致，这里用宽松类型
- * 便于纯函数单测。
- */
-export type MentionCandidateLike = {
-	path: string;
-	kind: 'dir' | 'file' | 'skill' | 'session';
-	sessionId?: string;
-};
+export type MentionCandidateLike = Pick<FileMentionCandidate, 'path' | 'kind' | 'sessionId'>;
 
 /**
  * 检测光标处是否处于 @ 提及输入中。
@@ -43,7 +35,7 @@ export type MentionCandidateLike = {
  * 规则：'@' 必须位于输入开头或空白字符之后（邮箱等文本不触发）；
  * 未加引号时 token 内不允许空格；@" 开启的引号形式允许空格，
  * 出现闭合引号即视为提及结束。会话引用规范文法（'[' 开头）由引擎
- * 在提交边界解析，不触发文件/技能补全菜单。
+ * 在提交边界解析，不触发文件补全菜单。
  *
  * @param text - 输入框全文
  * @param pos - 光标位置
@@ -87,7 +79,7 @@ export function normalizeMentionQuery(query: string): string {
  * 会话引用为规范形式 @[label](illusion-session:id)（label 转义 \ 与 ]，
  * 与后端 session_reference 文法一致——转义规则修改需同步后端与 web 端）；
  * 名称含空格或引号时用 @"..." 形式；目录保留尾部 / 继续下钻，
- * 文件与技能追加空格闭合 token。
+ * 文件追加空格闭合 token。
  *
  * @param candidate - 选中的候选
  * @returns 插入到输入框的完整文本
