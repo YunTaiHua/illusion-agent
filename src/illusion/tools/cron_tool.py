@@ -168,7 +168,6 @@ class CronToolInput(BaseModel):
 class CronTool(BaseTool[CronToolInput]):
     """Manage scheduled cron jobs (status/list/add/update/remove/run).
 
-    Aligned with openclaw's cron tool design.
     Jobs execute in isolated sessions via `illusion -p`, not blocking the current session.
     Uses standard 5-field cron expressions in the user's local timezone.
     """
