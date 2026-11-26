@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from illusion.memory.paths import get_memory_dir_for_cwd
+from illusion.memory.paths import get_memory_dir_for_cwd_no_create
 
 ENTRYPOINT_NAME = "MEMORY.md"
 MAX_ENTRYPOINT_LINES = 200
@@ -286,7 +286,7 @@ def load_memory_prompt(
     max_entrypoint_lines: int = MAX_ENTRYPOINT_LINES,
     max_entrypoint_bytes: int = MAX_ENTRYPOINT_BYTES,
 ) -> str | None:
-    """构建当前项目的记忆提示词段落（对齐 Claude Code 结构）。
+    """构建当前项目的记忆提示词段落。
 
     Args:
         cwd: 当前工作目录
@@ -296,7 +296,7 @@ def load_memory_prompt(
     Returns:
         str | None: 格式化后的记忆提示词，如果失败返回 None
     """
-    memory_dir = get_memory_dir_for_cwd(cwd)
+    memory_dir = get_memory_dir_for_cwd_no_create(cwd)
     entrypoint = memory_dir / "MEMORY.md"
     lines = build_memory_lines(memory_dir)
 

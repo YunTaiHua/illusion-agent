@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from illusion.prompts.environment import EnvironmentInfo
 from illusion.prompts.system_prompt import build_system_prompt
 
@@ -34,6 +37,27 @@ def test_build_system_prompt_contains_environment():
     assert "2026-04-01" in prompt
     assert "3.10.17" in prompt
     assert "branch: main" in prompt
+
+
+def test_prompt_tracks_os_home_and_optional_user_config_directory(tmp_path: Path, monkeypatch):
+    profile = tmp_path / "user profile"
+    monkeypatch.setenv("USERPROFILE" if os.name == "nt" else "HOME", str(profile))
+    monkeypatch.delenv("ILLUSION_CONFIG_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+
+    home_line = f" - Home directory: {profile}"
+    lines = build_system_prompt(cwd=str(workspace)).splitlines()
+    assert home_line in lines
+    assert not any("Illusion user config directory:" in line for line in lines)
+
+    monkeypatch.setenv("ILLUSION_CONFIG_DIR", "custom config")
+    lines = build_system_prompt(cwd=str(workspace)).splitlines()
+    config_root = tmp_path / "custom config"
+    assert home_line in lines
+    assert f" - Illusion user config directory: {config_root}" in lines
+    assert not config_root.exists()
 
 
 def test_build_system_prompt_no_git():

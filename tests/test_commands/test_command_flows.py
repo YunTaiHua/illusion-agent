@@ -121,6 +121,33 @@ async def test_plugin_command_lifecycle_flow(tmp_path: Path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_plugin_command_uses_manifest_name_and_context_workspace(tmp_path: Path, monkeypatch):
+    a, b = tmp_path / "a", tmp_path / "b"
+    for cwd in (a, b):
+        path = cwd / ".illusion" / "plugins" / "folder" / "plugin.json"
+        path.parent.mkdir(parents=True)
+        path.write_text('{"name":"Team Review","enabled_by_default":false}', encoding="utf-8")
+    monkeypatch.chdir(b)
+    context = _build_context(a)
+    registry = create_default_command_registry()
+
+    async def run(line):
+        command, args = registry.lookup(line)
+        return (await command.handler(args, context)).message
+
+    assert "Enabled plugin 'Team Review' (project)" in await run("/plugin enable Team Review")
+    path = a / ".illusion" / "permissions.json"
+    assert json.loads(path.read_text(encoding="utf-8")) == {"enabled_plugins": {"Team Review": True}}
+    assert "not found" in await run("/plugin enable folder")
+    assert not (b / ".illusion" / "permissions.json").exists()
+    assert load_settings().enabled_plugins == {}
+    policy = '{"denied_plugins":["Team Review"],"enabled_plugins":{"Team Review":true}}'
+    path.write_text(policy, encoding="utf-8")
+    assert "denied by project policy" in await run("/plugin enable Team Review")
+    assert path.read_text(encoding="utf-8") == policy
+
+
+@pytest.mark.asyncio
 async def test_resume_followed_by_session_tag_uses_restored_session_id(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("ILLUSION_CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.setenv("ILLUSION_DATA_DIR", str(tmp_path / "data"))
@@ -128,6 +155,7 @@ async def test_resume_followed_by_session_tag_uses_restored_session_id(tmp_path:
     context = _build_context(tmp_path)
 
     import time
+
     from illusion.services.checkpoint_store import CheckpointStore
     from illusion.services.session_storage import (
         get_project_session_dir,

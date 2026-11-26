@@ -171,22 +171,22 @@ class AgentTool(BaseTool[AgentToolInput]):
             run_agent_subprocess,
         )
 
+        # 确定工作目录：代理定义的项目/插件发现也必须基于目标 cwd
+        cwd = arguments.cwd or str(context.cwd)
+
         # 解析代理定义
         agent_def = None
         if arguments.subagent_type:
-            agent_def = get_agent_definition(arguments.subagent_type)
+            agent_def = get_agent_definition(arguments.subagent_type, cwd=cwd)
             if agent_def is None:
-                available = [a.name for a in get_all_agent_definitions()]
+                available = [a.name for a in get_all_agent_definitions(cwd=cwd)]
                 return ToolResult(
                     output=f"Agent type '{arguments.subagent_type}' not found. Available agents: {', '.join(available)}",
                     is_error=True,
                 )
         else:
             # subagent_type 省略时，默认使用 general-purpose 代理定义
-            agent_def = get_agent_definition("general-purpose")
-
-        # 确定工作目录
-        cwd = arguments.cwd or str(context.cwd)
+            agent_def = get_agent_definition("general-purpose", cwd=cwd)
 
         # ------------------------------------------------------------------
         # 处理 worktree 隔离
