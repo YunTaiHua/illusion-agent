@@ -38,8 +38,8 @@ You will use the `ask_user_question` tool to understand what the user wants to a
 - If you think the skill will require arguments, suggest arguments based on what you observed. Make sure you understand what someone would need to provide.
 - If it's not clear, ask if this skill should run inline (in the current conversation) or forked (as a sub-agent with its own context). Forked is better for self-contained tasks that don't need mid-process user input; inline is better when the user wants to steer mid-process.
 - Ask where the skill should be saved. Suggest a default based on context:
-  - **This repo** (`.illusion/skills/<name>/<name>.md`) — for workflows specific to this project
-  - **Personal** (`~/.illusion/skills/<name>.md`) — follows you across all repos
+  - **This repo** (`<project>/.illusion/skills/<name>/SKILL.md`) — for workflows specific to this project
+  - **Personal** (`<user-config>/skills/<name>/SKILL.md`) — follows you across all repos; `<user-config>` comes from `ILLUSION_CONFIG_DIR` and defaults to `~/.illusion`
 
 **Round 3: Breaking down each step**
 For each major step, if it's not glaringly obvious, ask:

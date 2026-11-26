@@ -144,7 +144,11 @@ Important details:
 
 ### Interface Notes
 
-The terminal (`illusion`) and Web UI (`illusion web`) are two independent, first-class interfaces. They share the same backend runtime, settings, and session storage — use whichever fits your workflow.
+The terminal (`illusion`) and Web UI (`illusion web`) share the backend runtime, settings, and session storage, but their slash-command surfaces differ. The terminal exposes the complete built-in command registry plus discovered skills and commands. The Web command picker exposes the built-in `/compact`, `/export`, `/init`, `/rename`, and `/goal` commands when registered, plus discovered skills and commands. Web settings and panels provide configuration and resource management that are not Web slash commands.
+
+### Configuration Roots
+
+User-level resources are resolved from the directory selected by `ILLUSION_CONFIG_DIR`, defaulting to `~/.illusion`. Project-level resources live under `<project>/.illusion`. Resource discovery reads existing files and directories without creating missing resource directories. The standard project MCP files are `<project>/.illusion/mcp.json` (preferred) or `<project>/.illusion/.mcp.json` when the preferred file is absent. The user file is `<user-config>/mcp.json`, where `<user-config>` is the `ILLUSION_CONFIG_DIR` directory.
 
 ---
 
@@ -163,7 +167,7 @@ The terminal (`illusion`) and Web UI (`illusion web`) are two independent, first
 | Web UI Security | [docs/en/security.md](docs/en/security.md) | [docs/zh-CN/security.md](docs/zh-CN/security.md) |
 | Token Metering & Compaction | [docs/en/token-metering.md](docs/en/token-metering.md) | [docs/zh-CN/token-metering.md](docs/zh-CN/token-metering.md) |
 | Messaging Channels | [docs/en/channels.md](docs/en/channels.md) | [docs/zh-CN/channels.md](docs/zh-CN/channels.md) |
-| @ Mentions (Skills / Sessions / Files) | [docs/en/mentions.md](docs/en/mentions.md) | [docs/zh-CN/mentions.md](docs/zh-CN/mentions.md) |
+| @ mentions (sessions and files), / skills and commands | [docs/en/mentions.md](docs/en/mentions.md) | [docs/zh-CN/mentions.md](docs/zh-CN/mentions.md) |
 | Desktop Edition | [docs/en/desktop.md](docs/en/desktop.md) | [docs/zh-CN/desktop.md](docs/zh-CN/desktop.md) |
 | Built-in Browser (browser-use) | [docs/en/browser.md](docs/en/browser.md) | [docs/zh-CN/browser.md](docs/zh-CN/browser.md) |
 

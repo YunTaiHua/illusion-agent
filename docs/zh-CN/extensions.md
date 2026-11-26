@@ -13,11 +13,13 @@
 
 ## 概述
 
-IllusionAgent 提供分层扩展系统。扩展可在三个层级配置（优先级从高到低）：
+IllusionAgent 会从用户配置根目录、当前项目、内置内容和已启用插件解析资源。
 
-1. **插件级** — 随插件捆绑，自动加载
-2. **项目级** — 在 `{cwd}/.illusion/` 目录中
-3. **全局级** — 在 `~/.illusion/` 或 `settings.json` 中
+- `<user-config>` 由 `ILLUSION_CONFIG_DIR` 决定，默认是 `~/.illusion`。
+- 项目级资源位于 `<project>/.illusion`。
+- 资源发现只读取已有文件和目录。缺失的资源目录和文件会被跳过，不会被创建。明确的写入、安装或初始化命令会在需要时创建目标。
+
+不同资源类型使用不同的加载顺序。项目技能会覆盖同名用户技能，命令使用首次发现优先，因此用户命令优先于项目命令和插件命令。插件资源仅从已启用插件加载。
 
 ---
 
@@ -31,9 +33,9 @@ IllusionAgent 提供分层扩展系统。扩展可在三个层级配置（优先
 | `http` | url, headers, enabled | HTTP 协议（Streamable HTTP，兼容 `streamable-http`/`streamableHttp`/`streamable_http`/`streamablehttp` 别名） |
 | `sse` | url, headers, enabled | Server-Sent Events 协议 |
 
-所有类型支持 `enabled` 字段（默认 `true`）。设为 `false` 可禁用而不删除配置。
+所有类型支持 `enabled` 字段，默认值为 `true`。设置为 `false` 可禁用服务器而不删除配置。
 
-`type` 字段为可选。省略时默认按 `stdio` 类型处理：
+`type` 字段可省略。省略时按 `stdio` 处理：
 
 ```json
 {
@@ -42,19 +44,23 @@ IllusionAgent 提供分层扩展系统。扩展可在三个层级配置（优先
 }
 ```
 
-仅在使用 `http`/`sse` 等非 stdio 类型时才需显式填写 `type`。
+### 标准文件位置
 
-### 三个配置来源（优先级从高到低）
+| 来源 | 标准位置 | 说明 |
+|------|----------|------|
+| 用户级 MCP | `<user-config>/mcp.json` | `<user-config>` 由 `ILLUSION_CONFIG_DIR` 决定，默认 `~/.illusion` |
+| 项目级 MCP | `<project>/.illusion/mcp.json`（优先）或 `<project>/.illusion/.mcp.json` | 仅在首选文件不存在时读取点文件 |
+| 设置中的 MCP | `<user-config>/settings.json` → `mcp_servers` | 结构化 settings 来源 |
+| 插件 MCP | 插件根目录 `.mcp.json`、清单 `mcp_file` 值、插件根目录 `mcp.json` | 插件服务器注册为 `{plugin_name}:{server_name}` |
 
-#### 1. 插件 MCP
+两个作用域的独立配置文件都叫 `mcp.json`。旧的 `<user-config>/mcp/` 和 `<project>/.illusion/mcp/` 目录不再扫描。手动迁移 `mcp/filesystem.json` 时，将原服务器对象放入同一作用域 `mcp.json` 的 `mcpServers.filesystem` 下。如果旧文件本身已包含命名映射，将各项按原名合并到 `mcpServers` 即可。应用会保留磁盘上的旧文件，发现资源时会跳过缺失路径。
 
-来自 `{plugin_dir}/mcp.json` 或 `{plugin_dir}/.mcp.json`。注册格式为 `{插件名}:{服务器名}`。
+插件清单可以通过 `mcpServers` / `mcp_servers` 增加 MCP 文件路径或内联定义。清单路径必须相对于插件根目录，不能越出插件根目录。
 
-#### 2. 项目级 MCP（`{cwd}/.illusion/mcp/*.json`）
+### 文件格式
 
-扫描目录下所有 `*.json` 文件。支持两种格式：
+标准 MCP 文件可以直接包含一个服务器对象：
 
-**单服务器**（文件名 = 服务器名）：
 ```json
 {
   "command": "python",
@@ -63,9 +69,8 @@ IllusionAgent 提供分层扩展系统。扩展可在三个层级配置（优先
 }
 ```
 
-省略 `type` 字段时默认按 `stdio` 处理。
+也可以在 `mcpServers` 或 `mcp_servers` 下包含命名服务器映射：
 
-**多服务器**（使用 `mcpServers` 键）：
 ```json
 {
   "mcpServers": {
@@ -82,29 +87,14 @@ IllusionAgent 提供分层扩展系统。扩展可在三个层级配置（优先
 }
 ```
 
-上例中 `filesystem` 省略了 `type`，默认按 `stdio` 处理；`remote-api` 显式声明为 `http` 类型。
+也支持 `{ "filesystem": { ... } }` 这样的无包装映射，以及嵌套的 `mcp.servers`、`mcp.mcpServers` 和 `mcp.mcp_servers` 形式。
 
-`mcpServers` 和 `mcp_servers` 两种键名均支持。
+### 合并顺序
 
-#### 3. 全局 MCP（`settings.json`）
-
-在 `~/.illusion/settings.json` 的 `mcp_servers` 字段中配置：
-
-```json
-{
-  "mcp_servers": {
-    "my-server": {
-      "command": "python",
-      "args": ["server.py"],
-      "enabled": true
-    }
-  }
-}
-```
-
-省略 `type` 字段时默认按 `stdio` 处理。
+实际优先级为项目文件、用户文件、`settings.json`、插件服务器。项目条目覆盖同名用户条目，用户条目覆盖同名 settings 条目。插件服务器使用 `{plugin_name}:{server_name}` 命名空间，不替换已有的非插件条目。
 
 CLI 管理：
+
 ```bash
 illusion mcp list
 illusion mcp add <name> <config>
@@ -114,6 +104,7 @@ illusion mcp remove <name>
 ### 源码参考
 
 - 配置加载：`src/illusion/mcp/config.py`
+- 路径解析：`src/illusion/config/paths.py`
 - 类型定义：`src/illusion/mcp/types.py`
 
 ---
@@ -126,7 +117,8 @@ illusion mcp remove <name>
 
 规则从以下位置发现：
 1. `{cwd}/.claude/rules/*.md` — 按文件名排序
-2. AI 指令文件（`CLAUDE.md`、`ILLUSION.md`、`AGENTS.md`）在项目根目录和 `.claude/`/`.illusion/` 目录中
+2. `{cwd}/.illusion/rules/*.md` — 按文件名排序
+3. AI 指令文件（`CLAUDE.md`、`ILLUSION.md`、`AGENTS.md`）在项目根目录、`.claude/` 和 `.illusion/` 目录中
 
 ### 规则文件格式
 
@@ -157,14 +149,26 @@ illusion mcp remove <name>
 
 ### 插件目录
 
-1. **用户级**：`~/.illusion/plugins/`
-2. **项目级**：`{cwd}/.illusion/plugins/`
+1. **用户级**：`<user-config>/plugins/`
+2. **项目级**：`<project>/.illusion/plugins/`
+
+`<user-config>` 由 `ILLUSION_CONFIG_DIR` 决定，默认 `~/.illusion`。只有目录已经存在时才会扫描，插件目录缺失时不会创建。
 
 ### 插件发现
 
-每个子目录必须包含 `plugin.json` 或 `.claude-plugin/plugin.json`。
+插件根目录下的可见直接子目录，只有包含以下清单候选之一时才会被考虑，候选顺序如下：
 
-### 插件清单 (plugin.json)
+1. `.illusion-plugin/plugin.json`
+2. `.claude-plugin/plugin.json`
+3. `.codex-plugin/plugin.json`
+4. `.zcode-plugin/plugin.json`
+5. `plugin.json`
+
+第一个已存在的候选决定插件清单格式。如果第一个候选存在但格式无效，该插件会被跳过，不会回退到后续候选。根目录扫描不会发现隐藏插件目录。
+
+### 插件清单
+
+清单为 JSON 文件。清单声明的资源路径必须相对于插件根目录，越出插件根目录的路径会被拒绝。
 
 ```json
 {
@@ -174,7 +178,12 @@ illusion mcp remove <name>
   "enabled_by_default": true,
   "skills_dir": "skills",
   "hooks_file": "hooks.json",
-  "mcp_file": "mcp.json"
+  "mcp_file": "mcp.json",
+  "commands": "commands",
+  "agents": "agents",
+  "skills": "skills",
+  "hooks": "hooks/hooks.json",
+  "mcpServers": ".mcp.json"
 }
 ```
 
@@ -183,48 +192,69 @@ illusion mcp remove <name>
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `name` | string | 必填 | 插件名称 |
-| `version` | string | "0.0.0" | 插件版本 |
-| `description` | string | "" | 插件描述 |
-| `enabled_by_default` | bool | true | 首次发现时启用 |
-| `skills_dir` | string | "skills" | 技能子目录名 |
-| `hooks_file` | string | "hooks.json" | 钩子配置文件名 |
-| `mcp_file` | string | "mcp.json" | MCP 配置文件名 |
-| `commands` | string\|list\|dict | null | 命令定义 |
-| `agents` | string\|list | null | 代理定义 |
-| `hooks` | string\|dict\|list | null | 钩子定义 |
+| `version` | string | `"0.0.0"` | 插件版本 |
+| `description` | string | `""` | 插件描述 |
+| `enabled_by_default` | bool | true | 初始启用状态 |
+| `skills_dir` | string | `"skills"` | 默认技能入口 |
+| `hooks_file` | string | `"hooks.json"` | 默认钩子文件候选 |
+| `mcp_file` | string | `"mcp.json"` | 默认 MCP 文件候选 |
+| `commands` | string \| list \| dict | null | 命令目录、路径或内联映射 |
+| `agents` | string \| list \| dict | null | 代理目录、路径或内联映射 |
+| `skills` | string \| list | null | 技能目录或路径，省略时使用 `skills_dir` |
+| `hooks` | string \| dict \| list | null | 钩子路径或内联定义 |
+| `mcpServers` / `mcp_servers` | string \| list \| dict | null | MCP 路径或内联定义 |
 | `settings` | dict | null | 插件默认设置 |
+| `user_config` / `userConfig` | dict | null | 插件用户配置元数据 |
+
+### 插件资源默认位置
+
+清单没有用显式入口替换时，加载器会检查：
+
+- `skills/` 作为技能入口
+- `commands/` 作为命令入口
+- `agents/` 作为代理入口
+- `hooks/hooks.json`、`hooks_file` 值和 `hooks.json` 作为钩子入口
+- `.mcp.json`、`mcp_file` 值和 `mcp.json` 作为 MCP 入口
+
+所有缺失资源路径都会被跳过，不会创建目录。
 
 ### 插件目录结构
 
-```
+```text
 my-plugin/
-├── plugin.json              # 或 .claude-plugin/plugin.json
+├── .illusion-plugin/plugin.json  # 或上面列出的其他清单候选
 ├── skills/
 │   ├── my-skill/
 │   │   └── SKILL.md
 │   └── another-skill.md
-├── commands/                # 斜杠命令（.md 文件）
-├── agents/                  # 代理定义（.md 文件）
+├── commands/                     # 斜杠命令（.md 文件）
+├── agents/                       # 代理定义（.md 文件）
 ├── hooks/
-│   └── hooks.json           # 钩子定义
-├── mcp.json                 # MCP 服务器配置
-└── settings.json            # 插件默认设置
+│   └── hooks.json                # 钩子定义
+├── .mcp.json                     # MCP 服务器配置
+└── settings.json                 # 插件默认设置
 ```
 
 ### 插件启用/禁用
 
-由 `settings.enabled_plugins` 控制：
+Web 插件开关和终端的 `/plugin enable <名称>`、`/plugin disable <名称>` 都以清单的 `name` 为键保存开关。写入位置由插件的安装来源决定。
+
+| 插件安装位置 | 保存 `enabled_plugins` 的文件 |
+|---|---|
+| `<user-config>/plugins/` 下的用户级或内置插件 | `<user-config>/settings.json` |
+| `<project>/.illusion/plugins/` 下的项目插件 | `<project>/.illusion/permissions.json` |
+
+例如，要在当前项目启用项目内安装的 `academic-research-skills`，可以把以下配置合并到该项目的 `permissions.json`：
 
 ```json
 {
-  "enabled_plugins": {
-    "my-plugin": true,
-    "disabled-plugin": false
-  }
+  "enabled_plugins": { "academic-research-skills": true }
 }
 ```
 
-未配置时使用 `manifest.enabled_by_default`。
+未配置开关时使用清单的 `enabled_by_default`。项目安装只读取所属项目的开关，即使全局已有同名键。项目 `denied_plugins` 命中名称或 `"*"` 时，对所有来源的插件都优先禁用。普通启停操作会保留这条权限规则。
+
+插件提供的命令、技能和钩子可随开关刷新。插件提供的 MCP 服务在下次构建工作区运行时按新配置连接。重启对应的 Web 服务或终端进程即可应用。
 
 ### 插件技能命名
 
@@ -240,9 +270,9 @@ my-plugin/
 illusion plugin list
 illusion plugin install <source>
 illusion plugin uninstall <name>
-illusion plugin enable <name>
-illusion plugin disable <name>
 ```
+
+在终端会话内使用 `/plugin enable <名称>` 和 `/plugin disable <名称>` 启停插件。
 
 ### 源码参考
 
@@ -257,13 +287,32 @@ illusion plugin disable <name>
 ### 技能来源（优先级顺序）
 
 1. **内置技能**：`src/illusion/skills/bundled/content/*.md`
-2. **用户技能**：`~/.illusion/skills/*.md`（或 `.yaml`/`.yml`）
-3. **项目技能**：`{cwd}/.illusion/skills/` — 支持两种格式：
-   - 目录格式：`{skills_dir}/{skill_name}/SKILL.md`（优先）
-   - 文件格式：`{skills_dir}/{skill_name}.md`
-4. **插件技能**：从所有已启用插件的技能目录加载
+2. **用户技能**：`<user-config>/skills/`，支持 `<name>/SKILL.md`、`<name>.md` 和 YAML 技能文件
+3. **项目技能**：`<project>/.illusion/skills/`，支持 `<name>/SKILL.md`、`<name>.md` 和 YAML 技能文件
+4. **插件技能**：从已启用插件的技能入口加载
 
-后注册的同名技能覆盖先注册的。
+`<user-config>` 由 `ILLUSION_CONFIG_DIR` 决定，默认 `~/.illusion`。缺失技能目录会被跳过，不会创建。技能按此顺序注册，因此项目技能和插件技能可以替换前面来源中的同名技能。
+
+### 命令来源
+
+斜杠命令与技能分开管理，来源如下：
+
+1. 用户命令：`<user-config>/commands/**/*.md`
+2. 项目命令：`<project>/.illusion/commands/**/*.md`
+3. 已启用插件的命令入口，包括默认 `commands/` 目录和清单映射
+
+相对路径中的子目录会组成冒号分隔的命令名。命令按首次发现注册，因此同名时用户命令优先于项目命令和插件命令。缺失命令目录会被跳过，不会创建。
+
+### 代理来源
+
+代理定义来源如下：
+
+1. 内置代理定义
+2. 用户 Markdown 文件：`<user-config>/agents/*.md`
+3. 项目 Markdown 文件：`<project>/.illusion/agents/*.md`
+4. 已启用插件的代理入口，包括默认 `agents/` 目录和清单映射
+
+后面的来源会替换前面来源中的同名代理定义。缺失代理目录会被跳过，不会创建。
 
 ### SKILL.md 格式
 
@@ -434,8 +483,14 @@ hooks:
 
 ### 钩子注册来源
 
-1. **全局**：`settings.json` → `hooks` 字段
-2. **插件钩子**：从每个已启用插件的 `hooks.json` 或 `hooks/hooks.json`
+钩子从以下位置加载：
+
+1. `settings.json` → `hooks`
+2. 用户级本地 JSON 文件：`<user-config>/hooks.json`、`<user-config>/hooks/hooks.json` 以及其他 `<user-config>/hooks/*.json`
+3. 项目级本地 JSON 文件：`<project>/.illusion/hooks.json`、`<project>/.illusion/hooks/hooks.json` 以及其他 `<project>/.illusion/hooks/*.json`
+4. 已启用插件的钩子入口，包括默认 `hooks/hooks.json`、清单 `hooks_file` 值、`hooks.json`、显式路径和内联定义
+
+`<user-config>` 由 `ILLUSION_CONFIG_DIR` 决定，默认 `~/.illusion`。钩子发现只读取已有文件，不会创建配置根目录或 `hooks` 目录。
 
 ### 钩子结果聚合
 
@@ -452,33 +507,7 @@ hooks:
 
 ## 插件配置
 
-### 全局启用/禁用
-
-在 `~/.illusion/settings.json` 的 `enabled_plugins` 字段中控制：
-
-```json
-{
-  "enabled_plugins": {
-    "plugin-name": true,   // 启用
-    "plugin-name": false   // 禁用
-  }
-}
-```
-
-### 项目级禁用
-
-在 `<project>/.illusion/permissions.json` 的 `denied_plugins` 字段中控制：
-
-```json
-{
-  "denied_plugins": ["plugin-name"]  // 禁用特定插件
-  "denied_plugins": ["*"]            // 禁用所有插件
-}
-```
-
-### 优先级
-
-项目级 `denied_plugins` > 全局 `enabled_plugins` > 默认值
+项目插件的普通开关与项目禁用策略都存放在 `<project>/.illusion/permissions.json`。`enabled_plugins` 保存本项目安装的插件的开关，`denied_plugins` 可按名称或 `"*"` 拒绝任意来源的插件。用户级和内置插件的开关位于用户的 `settings.json`。详见[插件启用/禁用](#插件启用禁用)。
 
 ### 源码参考
 
@@ -531,7 +560,7 @@ hooks:
 
 ### 全局启用/禁用
 
-在 `~/.illusion/settings.json` 的 `memory.enabled` 字段中控制：
+在 `<user-config>/settings.json` 的 `memory.enabled` 字段中控制：
 
 ```json
 {
@@ -567,7 +596,7 @@ hooks:
 
 Skills 可以从以下位置加载：
 - 内置 skills（`src/illusion/skills/bundled/`）
-- 用户 skills（`~/.illusion/skills/`）
+- 用户 skills（`<user-config>/skills/`，`<user-config>` 由 `ILLUSION_CONFIG_DIR` 决定，默认 `~/.illusion`）
 - 项目级 skills（`<project>/.illusion/skills/`）
 - 插件 skills（插件的 `skills/` 目录）
 
@@ -594,7 +623,11 @@ Skills 可以从以下位置加载：
 
 Hooks 可以从以下位置加载：
 - 全局 `settings.json` 的 `hooks` 字段
-- 插件的 `hooks.json` 文件
+- 用户级 `<user-config>/hooks.json`、`<user-config>/hooks/hooks.json` 和 `<user-config>/hooks/*.json`
+- 项目级 `<project>/.illusion/hooks.json`、`<project>/.illusion/hooks/hooks.json` 和 `<project>/.illusion/hooks/*.json`
+- 已启用插件的默认入口、清单路径和内联定义
+
+资源发现只读取已有文件，不会创建配置根目录或 hooks 目录。
 
 ### 项目级禁用
 
@@ -619,13 +652,15 @@ Hooks 可以从以下位置加载：
 
 IllusionAgent 的斜杠命令分为两类：
 
-1. **内置命令**：如 `/help`、`/model`、`/skills` 等，硬编码注册，不可禁用
-2. **插件命令**：通过插件的 `commands/` 或 `skills/` 目录提供，遵循插件的启用/禁用规则
+1. **内置命令**：由运行时命令注册表提供
+2. **动态命令**：来自用户 `<user-config>/commands/**/*.md`、项目 `<project>/.illusion/commands/**/*.md`、以及已启用插件的 `commands/` 或清单映射
+
+用户命令先注册，同名时优先于项目命令和插件命令。技能可以通过斜杠输入激活，但技能与命令在注册表中分开保存。缺失目录会被跳过，不会创建。
 
 ### 插件命令的启用/禁用
 
-- 通过 `enabled_plugins` 控制插件整体启用/禁用
-- 通过 `denied_plugins` 项目级禁用插件
+- 项目安装的插件在项目 `permissions.json` 的 `enabled_plugins` 中切换，其他安装在用户 `settings.json` 中切换。
+- 项目 `denied_plugins` 对所有安装来源优先生效。
 - 插件禁用后，其提供的所有命令都会被禁用
 
 ### 源码参考

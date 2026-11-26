@@ -1,16 +1,23 @@
-# @ Mentions
+# Mentions and slash resources
 
-The input box supports three `@` mention types, listed in the completion menu in priority order **Skills → Sessions → Files**. Type `@` (at the start of the input or after a whitespace) to open the menu, keep typing to filter, then pick a candidate with `Enter`/`Tab` or a click; `Esc` dismisses.
+Type `@` at the start of the input or after whitespace to find a session, file, or directory. To find a skill or command, type `/`. Both menus work while composing a message. Enter or Tab accepts a suggestion and Esc closes the menu.
 
 ## Mention Types
 
 | Section | Inserted text | How content reaches the model |
 | --- | --- | --- |
-| Skills | `@skill-name` | Plain prompt text; the model invokes the skill via its tool |
 | Sessions | `@[Session title](illusion-session:<id>)` | The engine resolves the mention at submission time and injects a read-only snapshot of the source session as context |
 | Files | `@src/main.py` (directories keep a trailing `/` for drilling down) | Plain prompt text; the model reads the file with its `read` tool |
 
 Names containing spaces use the quoted form `@"name with spaces"`. Mentions render in the accent color inside the input box and in sent user bubbles — plain text, no visual decoration beyond the color.
+
+## Skills and commands with `/`
+
+In either interface, type `/` where you want to use a resource, for example `Review @src/main.py with /`. Selecting a resource inserts its full name at the cursor so you can keep writing. The input and the sent user message highlight recognized references such as `/my-plugin:review`.
+
+The terminal shows one `/name [type]` per row, such as `/my-plugin:review [plugin skill]`. Use ↑ and ↓ to move between rows. The Web menu groups entries under headings such as `SKILLS` and `PLUGIN COMMANDS` and shows descriptions when available.
+
+At the start of a message, `/my-plugin:review release-1` passes `release-1` as the argument. Within a sentence, `Please use /my-plugin:review to check @src/main.py` loads the resource and keeps the whole sentence as your request. Use backticks to quote a name literally. Built-in interface actions such as `/exit` in the terminal use their usual command position at the start.
 
 ## Session References
 

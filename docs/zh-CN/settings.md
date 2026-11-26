@@ -20,24 +20,27 @@
 
 ## 配置概览
 
+`<user-config>` 表示由 `ILLUSION_CONFIG_DIR` 选定的用户级配置目录，默认是 `~/.illusion`。用户级文件都相对于该目录。
+
 | 文件 | 位置 | 作用域 | 用途 |
 |------|------|--------|------|
-| `settings.json` | `~/.illusion/settings.json` | 全局 | 主设置：API 配置、权限、钩子等 |
-| `credentials.json` | `~/.illusion/credentials.json` | 全局 | 安全凭据存储（API 密钥） |
+| `settings.json` | `<user-config>/settings.json` | 全局 | 主设置：API 配置、权限、钩子等 |
+| `credentials.json` | `<user-config>/credentials.json` | 全局 | 安全凭据存储（API 密钥） |
+| `mcp.json` | `<user-config>/mcp.json` 或 `<project>/.illusion/mcp.json` | 用户或项目 | 命名的 MCP 服务器。文件格式和迁移方法见 [MCP 配置](extensions.md#标准文件位置)。 |
 
-环境变量覆盖：`ILLUSION_CONFIG_DIR` 替换 `~/.illusion/`，`ILLUSION_DATA_DIR` 替换 `~/.illusion/data/`，`ILLUSION_LOGS_DIR` 替换 `~/.illusion/logs/`。
+`ILLUSION_DATA_DIR` 覆盖数据目录（默认 `<user-config>/data/`），`ILLUSION_LOGS_DIR` 覆盖日志目录（默认 `<user-config>/logs/`）。
 
 ### 配置优先级
 
 1. **CLI 参数** — 最高优先级
-2. **配置文件** — `~/.illusion/settings.json`
+2. **配置文件** — `<user-config>/settings.json`
 3. **默认值** — 内置默认配置
 
 ---
 
 ## 凭据文件 (credentials.json)
 
-位于 `~/.illusion/credentials.json`，由 `illusion auth login` 管理。凭据按 `env_N` 分组存储。
+位于 `<user-config>/credentials.json`，由 `illusion auth login` 管理。凭据按 `env_N` 分组存储。
 
 ```json
 {
@@ -205,6 +208,8 @@
 ### 目录空间（Web 多工作区）
 
 `working_directory` 在 Web 端作为**默认工作区**。Web 端支持在多个目录空间并发运行，每个目录拥有独立的会话历史与项目级配置（`<目录>/.illusion/` 的权限、skills、rules、MCP、插件、hooks），模型与 API 环境全局共享。
+
+用户 `settings.json` 里的 `enabled_plugins` 管理用户级和内置插件。项目内安装的插件使用 `<项目>/.illusion/permissions.json` 里的 `enabled_plugins`。该文件中的 `denied_plugins` 对所有来源的插件优先生效。详见[插件启用/禁用](extensions.md#插件启用禁用)。
 
 - 注册表存储于 `~/.illusion/workspaces.json`（默认工作区不重复入库，动态注入）
 - Web 设置 →「目录空间」页可添加/移除/设默认目录；**移除目录会连带删除该目录的全部会话**（目录存在运行中的会话时禁止移除）
@@ -707,7 +712,7 @@ LongCat 使用 `Authorization: Bearer` 认证方式，需要通过 `auth_token` 
 | 来源 | 存储位置 | 作用域 | 可配置项 |
 |------|----------|--------|----------|
 | 内置（builtin） | `settings.json` 的 `agent_models` | 全局 | 仅模型 |
-| 用户创建（user） | `~/.illusion/agents/<name>.md` | 全局 | 全部配置（直接改 .md） |
+| 用户创建（user） | `<user-config>/agents/<name>.md` | 全局 | 全部配置（直接改 .md） |
 | 项目级（project） | `<项目>/.illusion/agents/<name>.md` | 该项目 | 全部配置（直接改 .md） |
 
 > **模型值格式**：子智能体的模型一律使用 `env_N.model_M` 引用或 `inherit`。裸模型名（如 `step-3.7-flash`）不被接受——创建/更新阶段会直接拒绝，运行时遇到也无法解析并回退当前模型（不做旧格式兼容）。

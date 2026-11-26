@@ -1,5 +1,9 @@
 # Project Instruction & Memory Files
 
+## Project plugin permissions
+
+`<project>/.illusion/permissions.json` stores the `enabled_plugins` map for plugins installed in that project. Its `denied_plugins` list blocks named plugins from any source within the workspace, and `["*"]` blocks all plugins. A deny takes precedence over a `true` switch. The Web switch and terminal `/plugin enable` or `/plugin disable` commands choose the settings file by installation scope. See [Plugin Enable/Disable](extensions.md#plugin-enabledisable).
+
 ## AI Instruction Files (CLAUDE.md / ILLUSION.md / AGENTS.md)
 
 `CLAUDE.md`, `ILLUSION.md`, and `AGENTS.md` are **equivalent** AI instruction files. IllusionAgent recognizes all three names interchangeably.

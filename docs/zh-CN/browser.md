@@ -90,7 +90,7 @@ IllusionAgent 内置浏览器让你（和 agent）直接打开、浏览、操作
 
 ## 配置
 
-浏览器配置位于 `~/.illusion/settings.json` 的 `browser` 节，
+浏览器配置位于 `<user-config>/settings.json` 的 `browser` 节。`<user-config>` 取 `ILLUSION_CONFIG_DIR` 指定的目录，默认是 `~/.illusion`。配置
 也可在 **设置 → 扩展能力** 中图形化修改（按运行端分支显示：
 Web/终端端展示下列托管配置，桌面端展示浏览器数据管理）：
 
@@ -120,7 +120,7 @@ Web/终端端展示下列托管配置，桌面端展示浏览器数据管理）�
 - 斜杠命令：`/plugin enable browser-use`、`/plugin disable browser-use`。
 
 启用后 agent 获得 12 个 `browser_*` 工具与两个浏览器技能；禁用后工具与技能
-立即注销，重新启用即时恢复。插件 seed 于 `~/.illusion/plugins/browser-use/`，
+立即注销，重新启用即时恢复。内置插件安装到 `<user-config>/plugins/browser-use/`，
 随版本自动更新。
 
 ## 浏览器数据管理

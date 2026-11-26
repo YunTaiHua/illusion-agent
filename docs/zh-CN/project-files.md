@@ -185,7 +185,8 @@ type: user|feedback|project|reference
 | `denied_tools` | list | `[]` | 始终拒绝的工具列表 |
 | `denied_skills` | list | `[]` | 禁用的 skill 名称列表，`["*"]` 表示全部禁用 |
 | `denied_hooks` | list | `[]` | 禁用的 hook 事件列表，`["*"]` 表示全部禁用 |
-| `denied_plugins` | list | `[]` | 禁用的插件名称列表，`["*"]` 表示全部禁用 |
+| `enabled_plugins` | object | `{}` | 项目安装的插件开关，按清单名称映射到 `true` 或 `false`，未设置时采用插件默认值 |
+| `denied_plugins` | list | `[]` | 本项目禁止加载的插件名称，适用于所有来源，优先于启用开关；`["*"]` 表示全部禁用 |
 | `denied_mcp_servers` | list | `[]` | 禁用的 MCP 服务器名称列表，`["*"]` 表示全部禁用 |
 | `denied_memory` | bool | `false` | 是否禁用 memory 功能 |
 | `denied_rules` | list | `[]` | 禁用的规则名称列表，`["*"]` 表示全部禁用 |

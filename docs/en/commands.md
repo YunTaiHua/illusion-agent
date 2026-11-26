@@ -151,7 +151,7 @@ illusion update --deps           # Also update project dependencies
 
 ## Interactive Slash Commands
 
-In interactive sessions, you can use the following commands:
+In the terminal, start a message with one of the built-in commands below. In either the terminal or the Web UI, you can also type `/` while composing a sentence to select a skill or a plugin command. See [mentions and slash resources](mentions.md) for examples.
 
 | Category | Command Examples | Description |
 |----------|------------------|-------------|

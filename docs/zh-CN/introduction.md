@@ -34,7 +34,7 @@ IllusionAgent 是一款开源的 AI 智能体平台。它将多模型语言模�
 - 🌐 **Web UI 界面** - 通过 `illusion web` 启动浏览器聊天界面，暖色设计、会话管理、实时流式响应（终端界面的补充方案）
 - 🌍 **中英双语支持** - 所有 CLI 输出根据 `ui_language` 设置自动切换中英文
 - 📝 **全面 Markdown 渲染** - 直角边框表格、圆角卡片代码块、多色富文本、链接等
-- 📂 **项目级配置友好** - 自动生成 skills、rules、mcp、plugins 目录，项目同名 skill 优先覆盖全局
+- 📂 **项目级配置** - 通过 `.illusion/` 共享技能、规则、插件和 MCP 配置。资源发现会跳过缺失的路径。
 - 🔌 **灵活扩展系统** - 插件、钩子、技能、MCP 服务器
 - 🔐 **完善权限控制** - 四种模式（default / plan / full_auto / yolo）+ 细粒度规则 + 会话级 / 单次允许
 - 💾 **记忆与上下文** - 项目知识持久化与动态检索
@@ -81,6 +81,6 @@ IllusionAgent 是一款开源的 AI 智能体平台。它将多模型语言模�
 
 **全面 Markdown 渲染**：终端内完整渲染直角边框表格、圆角卡片式代码块、多色富文本（加粗、斜体、行内代码、链接等），AI 回复可读性大幅提升。
 
-**项目级配置自动化**：自动生成 `<project>/.illusion/rules/` 和 `<project>/.illusion/skills/` 目录，项目级配置优先于全局配置，便于团队协作。
+**项目级配置**：IllusionAgent 从 `<project>/.illusion/rules/` 和 `<project>/.illusion/skills/` 读取已有的规则和技能。新项目可以直接启动，无需预建 `.illusion`。使用 `/init` 等命令写入文件时才会创建所需目录。
 
 **Web UI 界面**：基于 React + Vite + Tailwind CSS 前端和 FastAPI + WebSocket 后端的浏览器聊天界面。暖色设计风格，支持会话管理、侧边栏导航、实时流式响应、右侧面板显示上下文使用量，以及完整的国际化支持。通过 `illusion web` 启动。注意：终端界面为推荐的首选模式，功能更完整、性能更优；Web UI 仅作为终端不可用时的补充方案。

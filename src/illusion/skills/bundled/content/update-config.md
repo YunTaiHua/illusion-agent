@@ -5,7 +5,7 @@ description: Configure IllusionAgent via settings.json, permissions.json, projec
 
 # Update Config Skill
 
-Modify IllusionAgent configuration across three layers: global `settings.json`, project-level `.illusion/` directory, and AI instruction files.
+Modify IllusionAgent configuration across three layers: the user configuration root selected by `ILLUSION_CONFIG_DIR`, project-level `.illusion/` directory, and AI instruction files.
 
 ## CRITICAL: Read Before Write
 
@@ -22,19 +22,23 @@ When the user's request is ambiguous, use `ask_user_question` to clarify:
 
 | Layer | File / Directory | Scope | Purpose |
 |-------|------------------|-------|---------|
-| **Global config** | `~/.illusion/settings.json` | All projects | API config, permissions, hooks, memory, sandbox, MCP, plugins |
-| **Global credentials** | `~/.illusion/credentials.json` | All projects | API keys (managed by `illusion auth login`) |
+| **User config root** | `ILLUSION_CONFIG_DIR` or `~/.illusion/` | All projects | User-level settings and resources |
+| **Global config** | `<user-config>/settings.json` | All projects | API config, permissions, hooks, memory, sandbox, MCP, plugins |
+| **Global credentials** | `<user-config>/credentials.json` | All projects | API keys (managed by `illusion auth login`) |
 | **Project permissions** | `<project>/.illusion/permissions.json` | Current project | Deny-list for skills/hooks/plugins/MCP/memory/rules/tools |
-| **Project MCP** | `<project>/.illusion/mcp/*.json` | Current project | Project-specific MCP servers |
+| **Project MCP** | `<project>/.illusion/mcp.json` | Current project | Project-specific MCP servers |
 | **Project skills** | `<project>/.illusion/skills/` | Current project | Project-specific skills (override global) |
+| **Project commands** | `<project>/.illusion/commands/` | Current project | Project-specific slash commands |
 | **Project plugins** | `<project>/.illusion/plugins/` | Current project | Project-specific plugins |
-| **Project rules** | `<project>/.illusion/rules/*.md` | Current project | Project-specific AI rules |
+| **Project rules** | `<project>/.illusion/rules/` | Current project | Project-specific AI rules |
 | **Instruction files** | `<project>/CLAUDE.md` / `ILLUSION.md` / `AGENTS.md` | Current project | AI instructions (merged into system prompt) |
 | **Instruction files** | `<project>/.claude/CLAUDE.md` | Current project | AI instructions (alternate location) |
 | **Instruction files** | `<project>/.illusion/CLAUDE.md` / `ILLUSION.md` / `AGENTS.md` | Current project | AI instructions (alternate location) |
 | **Rules files** | `<project>/.claude/rules/*.md` | Current project | Additional AI rules (sorted by filename) |
 
-Environment variable overrides: `ILLUSION_CONFIG_DIR` replaces `~/.illusion/`, `ILLUSION_DATA_DIR` replaces `~/.illusion/data/`, `ILLUSION_LOGS_DIR` replaces `~/.illusion/logs/`.
+Environment variable overrides: `ILLUSION_CONFIG_DIR` selects `<user-config>` (default `~/.illusion`). `ILLUSION_DATA_DIR` and `ILLUSION_LOGS_DIR` select runtime data and logs independently.
+
+Resource discovery reads existing files and directories without creating missing resource directories. Explicit writes, installation, and initialization create their destinations.
 
 Configuration priority: CLI arguments > project-level > global settings.json > built-in defaults.
 
@@ -44,7 +48,8 @@ Configuration priority: CLI arguments > project-level > global settings.json > b
 |---------|-------|
 | "Allow npm commands globally" | Global `settings.json` → `permission.allowed_tools` |
 | "Disable a skill for this project" | Project `.illusion/permissions.json` → `denied_skills` |
-| "Add an MCP server for this project" | Project `.illusion/mcp/<name>.json` |
+| "Add an MCP server for this project" | Project `.illusion/mcp.json` |
+| "Add a project-specific command" | Project `.illusion/commands/<name>.md` |
 | "Add project-specific instructions" | `<project>/CLAUDE.md` |
 | "Add a rule for Python style" | `<project>/.illusion/rules/python-style.md` |
 | "Add a project-specific skill" | `<project>/.illusion/skills/<name>/SKILL.md` |
@@ -70,7 +75,7 @@ If the user wants something to happen automatically in response to an EVENT, the
 
 ## Layer 1: Global Configuration (settings.json)
 
-Located at `~/.illusion/settings.json`. Loaded by `load_settings()`.
+Located at `<user-config>/settings.json`, where `<user-config>` is selected by `ILLUSION_CONFIG_DIR` and defaults to `~/.illusion`. Loaded by `load_settings()`.
 
 ### Complete Configuration Structure
 
@@ -159,12 +164,12 @@ Located at `~/.illusion/settings.json`. Loaded by `load_settings()`.
 | `show_thinking` | bool | true | Show thinking process |
 | `effort` | string | "medium" | Reasoning effort: low/medium/high/xhigh/max |
 | `working_directory` | string\|null | null | Fixed working directory (auto-switch on startup, auto-create if missing) |
-| `enabled_plugins` | object | {} | Plugin enable/disable map |
+| `enabled_plugins` | object | {} | Overrides for user-installed and built-in plugins |
 | `mcp_servers` | object | {} | MCP server configurations |
 
 ### Memory Configuration (`memory`)
 
-File-based memory system (aligned with Claude Code Auto Memory), stored at `~/.illusion/memory/<project-name>-<hash>/`.
+The default memory directory is `<user-config>/memory/<project-name>-<hash>/`. Use `memory.directory` when configured.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -475,7 +480,9 @@ The sandbox provides OS-level isolation for shell commands. Supports Linux (bubb
 
 MCP server types: `stdio` (command, args, env, cwd), `http` (url, headers). All support `enabled` field (default `true`).
 
-### Plugins (Global enable/disable)
+### User-installed and built-in plugins
+
+Set `enabled_plugins` in `<user-config>/settings.json` for plugins installed under `<user-config>/plugins/`. For a project installation, set the same key in the project's `permissions.json` instead.
 
 ```json
 {
@@ -501,6 +508,7 @@ Controls deny-lists for the current project. **Highest priority** — overrides 
   "denied_tools": ["bash"],
   "denied_skills": ["dangerous-skill"],
   "denied_hooks": ["pre_tool_use"],
+  "enabled_plugins": {"project-reports": true},
   "denied_plugins": ["unwanted-plugin"],
   "denied_mcp_servers": ["external-server"],
   "denied_memory": false,
@@ -513,40 +521,26 @@ Controls deny-lists for the current project. **Highest priority** — overrides 
 | `denied_tools` | list | `[]` | Tools always denied |
 | `denied_skills` | list | `[]` | Disabled skill names, `["*"]` = all |
 | `denied_hooks` | list | `[]` | Disabled hook events, `["*"]` = all |
-| `denied_plugins` | list | `[]` | Disabled plugin names, `["*"]` = all |
+| `enabled_plugins` | object | `{}` | Enable/disable overrides for plugins installed in this project; absence uses the manifest default |
+| `denied_plugins` | list | `[]` | Plugins blocked in this workspace across all installation scopes; `["*"]` blocks all and takes precedence over enablement |
 | `denied_mcp_servers` | list | `[]` | Disabled MCP server names, `["*"]` = all |
 | `denied_memory` | bool | false | Disable memory function |
 | `denied_rules` | list | `[]` | Disabled rule names, `["*"]` = all |
 
 **Priority:** Project `permissions.json` > Global `settings.json` > Defaults
 
-### Project MCP Servers (`.illusion/mcp/*.json`)
+### Project MCP Server (`.illusion/mcp.json`)
 
-Scan all `*.json` files in `.illusion/mcp/`. Two formats supported:
+Read the primary file `<project>/.illusion/mcp.json`. If it is absent, read `<project>/.illusion/.mcp.json`. The user-level counterpart is `<user-config>/mcp.json`, where `<user-config>` is selected by `ILLUSION_CONFIG_DIR`. The loader does not scan or create `mcp/` directories.
 
-**Single server** (filename = server name, e.g. `filesystem.json`):
-```json
-{
-  "type": "stdio",
-  "command": "python",
-  "args": ["server.py"],
-  "enabled": true
-}
-```
+The file may contain a single server object, a `mcpServers`/`mcp_servers` map, or an unwrapped server map. A single server may omit `type`, which defaults to `stdio`.
 
-**Multiple servers** (any filename, use `mcpServers` key):
 ```json
 {
   "mcpServers": {
     "filesystem": {
-      "type": "stdio",
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "./data"]
-    },
-    "remote-api": {
-      "type": "http",
-      "url": "https://api.example.com/mcp",
-      "headers": {"Authorization": "Bearer token"}
     }
   }
 }
@@ -568,7 +562,7 @@ Each `.md` file is an independent rule, sorted by filename. Also scanned: `.clau
 
 ### Project Plugins (`.illusion/plugins/`)
 
-Each subdirectory must contain `plugin.json` or `.claude-plugin/plugin.json`.
+Each visible plugin directory must contain the first existing manifest from this order: `.illusion-plugin/plugin.json`, `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, `.zcode-plugin/plugin.json`, then the legacy root `plugin.json`. Discovery does not create missing plugin directories.
 
 ### Memory (user-level, no project-level)
 
@@ -707,13 +701,16 @@ Save to `<project>/.illusion/permissions.json`.
 Save to `<project>/.illusion/permissions.json`.
 
 ### Add a project-specific MCP server
-Save to `<project>/.illusion/mcp/my-server.json`:
+Save to `<project>/.illusion/mcp.json`:
 ```json
 {
-  "type": "stdio",
-  "command": "python",
-  "args": ["server.py"],
-  "enabled": true
+  "mcpServers": {
+    "my-server": {
+      "command": "python",
+      "args": ["server.py"],
+      "enabled": true
+    }
+  }
 }
 ```
 
@@ -779,7 +776,7 @@ If permissions aren't working:
 
 If a skill/plugin/MCP isn't loading:
 1. Check project `.illusion/permissions.json` hasn't denied it
-2. For MCP: check `.illusion/mcp/*.json` file format
+2. For MCP: check `<project>/.illusion/mcp.json` or `<user-config>/mcp.json` format
 3. For skills: check `.illusion/skills/<name>/SKILL.md` or `.illusion/skills/<name>.md`
 4. For plugins: check `.illusion/plugins/<name>/plugin.json`
 

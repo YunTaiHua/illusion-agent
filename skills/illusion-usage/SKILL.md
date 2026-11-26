@@ -7,6 +7,15 @@ description: Dual-purpose guide for agents. Scenario A — agent autonomously dr
 
 This skill serves two scenarios. **Detect your role first**, then follow the matching track.
 
+## Resource and Interface Notes
+
+- User-level resources use the directory from `ILLUSION_CONFIG_DIR`. The default is `~/.illusion`. Project resources use `<project>/.illusion`.
+- User and project MCP configuration uses `<user-config>/mcp.json` and `<project>/.illusion/mcp.json` (or `.illusion/.mcp.json` when the primary project file is absent). The loader does not scan or create `mcp/` directories during discovery.
+- Skills and commands can be user-level (`<user-config>/skills/`, `<user-config>/commands/`), project-level (`<project>/.illusion/skills/`, `<project>/.illusion/commands/`), or supplied by an enabled plugin.
+- The Web plugin switch and terminal `/plugin enable` and `/plugin disable` commands use the installation location. User and built-in switches go in `<user-config>/settings.json`, and project switches go in `<project>/.illusion/permissions.json`. Both use `enabled_plugins`. Project `denied_plugins` takes precedence for every source.
+- Agent and Hook discovery follows the same user/project roots. Resource discovery reads existing paths only. Create a destination explicitly before writing a new resource.
+- The terminal exposes the complete built-in command set. The Web command picker keeps its GUI-specific built-ins and adds current-workspace dynamic skills and commands. `/exit` is a terminal command and is not a Web command.
+
 > **Live documentation**: ALWAYS fetch the latest docs from GitHub before acting — do not rely on hardcoded commands in this skill. Repo: `https://github.com/YunTaiHua/illusion-agent`. Docs: `https://github.com/YunTaiHua/illusion-agent/tree/main/docs`. Use `WebFetch`, `web_fetch`, or an equivalent tool to read the URLs in [Reference URLs](#reference-urls) below.
 
 ## Role Detection
@@ -69,7 +78,7 @@ Common providers (verify against fetched Settings doc):
 - **GitHub Copilot** — OAuth device flow
 - **OpenAI Codex** — OAuth device flow
 
-Credentials stored in `~/.illusion/credentials.json`, grouped by `env_N`. Models are referenced as `env_N.model_N` (e.g., `env_1.model_2`).
+Credentials are stored in `<user-config>/credentials.json`, where `<user-config>` is selected by `ILLUSION_CONFIG_DIR` and defaults to `~/.illusion`. Models are referenced as `env_N.model_N` (e.g., `env_1.model_2`).
 
 ## A.3 Verify Environment
 
@@ -186,7 +195,7 @@ If your agent passes args as a list (not shell string), no escaping needed.
 | `-c` / `--continue` | Continue most recent session in cwd |
 | `-r <ID>` / `--resume <ID>` | Resume specific session by ID |
 
-Both require `-p`. Use `-c` for linear flows; `-r <ID>` for parallel sessions. Session files under `~/.illusion/sessions/` (verify path in docs).
+Both require `-p`. Use `-c` for linear flows and `-r <ID>` for parallel sessions. Session files live under `<user-config>/data/sessions/` by default. Set `ILLUSION_DATA_DIR` to relocate the data root.
 
 ## A.8 Persistent Parameters
 
@@ -357,7 +366,7 @@ Fetch the Commands doc to give them an accurate list of slash commands and keybo
 
 ## B.5 Guide Configuration (Optional, Advanced)
 
-If your master wants to customize, point them to `~/.illusion/settings.json`:
+If your master wants to customize, point them to `<user-config>/settings.json` (default `~/.illusion/settings.json`, or the path selected by `ILLUSION_CONFIG_DIR`).
 
 - **Model**: `-m env_1.model_2` or `/model` in session
 - **Effort**: `-e high` or `/thinking` in session

@@ -33,7 +33,7 @@ a cron scheduler for unattended automation — spanning Feishu, WeChat, and QQ.
 - 🌐 **Web UI Interface** - Browser-based chat interface with `illusion web`, featuring warm color design, session management, and real-time streaming (supplementary to the recommended terminal interface)
 - 🌍 **Bilingual Interface** - All CLI output automatically switches between Chinese and English based on `ui_language` setting
 - 📝 **Comprehensive Markdown Rendering** - Box-drawing tables, rounded card-style code blocks, multi-color rich text, links and more
-- 📂 **Project-Level Config Friendly** - Auto-generate skills, rules, mcp, plugins directories, project-level skills override global ones
+- 📂 **Project configuration** - Share skills, rules, plugins, and MCP settings through `.illusion/`. Resource discovery skips missing paths.
 - 🔌 **Flexible Extension System** - Plugins, hooks, skills, MCP servers
 - 🔐 **Comprehensive Permission Control** - Four modes (default / plan / full_auto / yolo) + fine-grained rules + session-level / one-time approval
 - 💾 **Memory & Context** - Project knowledge persistence and dynamic retrieval
@@ -80,6 +80,6 @@ a cron scheduler for unattended automation — spanning Feishu, WeChat, and QQ.
 
 **Comprehensive Markdown Rendering**: Full rendering of box-drawing tables, rounded card-style code blocks, multi-color rich text (bold, italic, inline code, links), significantly improving AI response readability.
 
-**Project-Level Config Automation**: Auto-generate `<project>/.illusion/rules/` and `<project>/.illusion/skills/` directories, project-level configuration takes precedence over global configuration, facilitating team collaboration.
+**Project configuration**: IllusionAgent reads existing rules and skills from `<project>/.illusion/rules/` and `<project>/.illusion/skills/`. A new project can start with no `.illusion` directory. Commands such as `/init` create the directories they need when writing files.
 
 **Web UI Interface**: Browser-based chat interface powered by React + Vite + Tailwind CSS frontend and FastAPI + WebSocket backend. Features warm color design, session management, sidebar navigation, real-time streaming responses, right panel with context usage display, and full i18n support. Launch with `illusion web`. Note: The terminal interface is recommended as the primary mode for full feature support and better performance; the Web UI is intended as a supplementary option for scenarios where a terminal is unavailable.

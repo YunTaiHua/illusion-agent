@@ -99,7 +99,7 @@ Notes:
 ## Configuration
 
 Browser settings live in the `browser` section of
-`~/.illusion/settings.json`, editable in **Settings → Extensions** (branched
+`<user-config>/settings.json`. `<user-config>` is the directory selected by `ILLUSION_CONFIG_DIR` and defaults to `~/.illusion`. The settings are editable in **Settings → Extensions** (branched
 by runtime: web/terminal shows the managed options below, desktop shows
 browser data management):
 
@@ -133,7 +133,7 @@ The browser capability is carried by the built-in **browser-use** plugin
 Once enabled, the agent gets the 12 `browser_*` tools and both browser
 skills; disabling immediately unregisters them, and re-enabling restores
 them instantly. The plugin is seeded to
-`~/.illusion/plugins/browser-use/` and updated with package versions.
+`<user-config>/plugins/browser-use/` and updated with package versions.
 
 ## Browser data management
 

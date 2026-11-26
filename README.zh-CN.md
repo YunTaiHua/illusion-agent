@@ -139,7 +139,11 @@ illusion -m env_1.model_2 -e high -p "重构此模块"
 
 ### 界面说明
 
-终端（`illusion`）与 Web UI（`illusion web`）是两个相互独立、同等重要的界面。它们共享同一个后端运行时、设置和会话存储，按你的工作流选择即可。
+终端（`illusion`）与 Web UI（`illusion web`）共享后端运行时、设置和会话存储，但斜杠命令面不同。终端提供完整的内置命令注册表，以及已发现的技能和命令。Web 命令选择器提供已注册的 `/compact`、`/export`、`/init`、`/rename`、`/goal`，以及已发现的技能和命令。Web 设置和面板提供配置与资源管理功能，这些功能不作为 Web 斜杠命令提供。
+
+### 配置根目录
+
+用户级资源路径由 `ILLUSION_CONFIG_DIR` 决定，默认 `~/.illusion`。项目级资源位于 `<project>/.illusion`。资源发现只读取已有文件和目录，不会创建缺失的资源目录。标准项目 MCP 文件为 `<project>/.illusion/mcp.json`（优先），当该文件不存在时也支持 `<project>/.illusion/.mcp.json`。用户级文件为 `<user-config>/mcp.json`，其中 `<user-config>` 由 `ILLUSION_CONFIG_DIR` 指定。
 
 ---
 
@@ -158,7 +162,7 @@ illusion -m env_1.model_2 -e high -p "重构此模块"
 | Web UI 安全 | [docs/en/security.md](docs/en/security.md) | [docs/zh-CN/security.md](docs/zh-CN/security.md) |
 | Token 计量与压缩 | [docs/en/token-metering.md](docs/en/token-metering.md) | [docs/zh-CN/token-metering.md](docs/zh-CN/token-metering.md) |
 | 消息渠道 | [docs/en/channels.md](docs/en/channels.md) | [docs/zh-CN/channels.md](docs/zh-CN/channels.md) |
-| @ 提及（技能 / 会话 / 文件） | [docs/en/mentions.md](docs/en/mentions.md) | [docs/zh-CN/mentions.md](docs/zh-CN/mentions.md) |
+| @ 提及会话和文件、/ 调用技能和命令 | [docs/en/mentions.md](docs/en/mentions.md) | [docs/zh-CN/mentions.md](docs/zh-CN/mentions.md) |
 | 桌面版 | [docs/en/desktop.md](docs/en/desktop.md) | [docs/zh-CN/desktop.md](docs/zh-CN/desktop.md) |
 | 内置浏览器（browser-use） | [docs/en/browser.md](docs/en/browser.md) | [docs/zh-CN/browser.md](docs/zh-CN/browser.md) |
 

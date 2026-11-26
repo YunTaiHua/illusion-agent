@@ -20,24 +20,27 @@
 
 ## Configuration Overview
 
+`<user-config>` denotes the user-level configuration directory selected by `ILLUSION_CONFIG_DIR`. It defaults to `~/.illusion`. User-level files below use this root.
+
 | File | Location | Scope | Purpose |
 |------|----------|-------|---------|
-| `settings.json` | `~/.illusion/settings.json` | Global | Main settings: API config, permissions, hooks, etc. |
-| `credentials.json` | `~/.illusion/credentials.json` | Global | Secure credential storage (API keys) |
+| `settings.json` | `<user-config>/settings.json` | Global | Main settings: API config, permissions, hooks, etc. |
+| `credentials.json` | `<user-config>/credentials.json` | Global | Secure credential storage (API keys) |
+| `mcp.json` | `<user-config>/mcp.json` or `<project>/.illusion/mcp.json` | User or project | Named MCP servers. See [MCP configuration](extensions.md#standard-file-locations) for the file format and migration instructions. |
 
-Environment variable overrides: `ILLUSION_CONFIG_DIR` replaces `~/.illusion/`, `ILLUSION_DATA_DIR` replaces `~/.illusion/data/`, `ILLUSION_LOGS_DIR` replaces `~/.illusion/logs/`.
+`ILLUSION_CONFIG_DIR` replaces the default user configuration root. `ILLUSION_DATA_DIR` replaces the data directory, defaulting to `<user-config>/data/`, and `ILLUSION_LOGS_DIR` replaces the logs directory, defaulting to `<user-config>/logs/`.
 
 ### Configuration Priority
 
 1. **CLI Arguments** — highest priority
-2. **Configuration Files** — `~/.illusion/settings.json`
+2. **Configuration Files** — `<user-config>/settings.json`
 3. **Default Values** — built-in defaults
 
 ---
 
 ## Credentials File (credentials.json)
 
-Located at `~/.illusion/credentials.json`, managed by `illusion auth login`. Credentials are stored by `env_N` groups.
+Located at `<user-config>/credentials.json`, managed by `illusion auth login`. Credentials are stored by `env_N` groups.
 
 ```json
 {
@@ -204,6 +207,8 @@ Fixed working directory. If set, illusion-agent will automatically switch to thi
 ### Workspaces (Web Multi-Directory)
 
 `working_directory` serves as the **default workspace** on the Web UI. The Web UI can run concurrently across multiple directory workspaces; each directory keeps its own session history and project-level config (`<dir>/.illusion/` permissions, skills, rules, MCP, plugins, hooks), while models and API environments are shared globally.
+
+The `enabled_plugins` map in user `settings.json` controls user-installed and built-in plugins. Project installations use `enabled_plugins` in `<project>/.illusion/permissions.json`. That file's `denied_plugins` policy takes precedence for plugins from any source. See [Plugin Enable/Disable](extensions.md#plugin-enabledisable).
 
 - The registry is stored at `~/.illusion/workspaces.json` (the default workspace is not duplicated into the file; it is injected dynamically)
 - Web Settings → "Workspaces" tab can add / remove / set-default directories; **removing a directory deletes all of its sessions** (removal is blocked while any session in that directory is running)
@@ -706,7 +711,7 @@ The `sandbox` config and the built-in risk levels (LOW/MEDIUM/HIGH) are **two in
 | Source | Storage | Scope | Editable |
 |--------|---------|-------|----------|
 | Built-in | `agent_models` in `settings.json` | Global | Model only |
-| User-created | `~/.illusion/agents/<name>.md` | Global | Everything (edits the .md) |
+| User-created | `<user-config>/agents/<name>.md` | Global | Everything (edits the .md) |
 | Project-level | `<project>/.illusion/agents/<name>.md` | That project | Everything (edits the .md) |
 
 > **Model value format**: subagent models must be an `env_N.model_M` ref or `inherit`. Bare model names (e.g. `step-3.7-flash`) are not accepted — they are rejected at creation/update time, and at runtime an unresolvable value falls back to the current model with a warning (no legacy-format compatibility).
